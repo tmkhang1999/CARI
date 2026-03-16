@@ -30,6 +30,9 @@ class IntrinsicDecompositionV1(nn.Module):
         freeze_stages = config.get('freeze_stages', [1, 2])
         model_name = config.get('backbone', config.get('model_name', 'convnextv2_base'))
         pretrained = config.get('pretrained', True)
+        input_size = int(config.get('input_size', 384))
+        if input_size < 32:
+            raise ValueError(f"input_size must be >= 32, got {input_size}")
 
         # Image encoder
         self.image_encoder = ImageEncoder(
@@ -39,49 +42,40 @@ class IntrinsicDecompositionV1(nn.Module):
         )
         skip_channels = self.image_encoder.feature_channels
 
-        # Get bottleneck spatial size (will be computed from input)
-        self.z_spatial_size = None
-
         # Decoders
         self.decoder_a = DecoderA(z_channels=z_channels, skip_channels=skip_channels)
         self.decoder_b = DecoderB(z_channels=z_channels, skip_channels=skip_channels)
         self.decoder_c = DecoderC(z_channels=z_channels, skip_channels=skip_channels)
         self.decoder_d = DecoderD(z_channels=z_channels, skip_channels=skip_channels)
 
-        # Adapters (initialized after first forward to know Z spatial size)
-        self.adapter_s_g = None
-        self.adapter_s_c = None
-        self.adapter_a_d = None
+        # Pre-initialize adapters so optimizer captures their parameters.
+        z_hw = input_size // 32
+        self.z_spatial_size = (z_hw, z_hw)
         self.z_channels = z_channels
-
-    def _initialize_adapters(self, z_global):
-        """Initialize adapters once we know Z spatial size and device."""
-        if self.adapter_s_g is not None:
-            return
-
-        _, _, h, w = z_global.shape
-        self.z_spatial_size = (h, w)
-        device = z_global.device
-
         self.adapter_s_g = BottleneckAdapter(
             in_channels=1,
             z_channels=self.z_channels,
-            z_spatial_size=self.z_spatial_size
-        ).to(device)
-
+            z_spatial_size=self.z_spatial_size,
+        )
         self.adapter_s_c = BottleneckAdapter(
             in_channels=3,
             z_channels=self.z_channels,
-            z_spatial_size=self.z_spatial_size
-        ).to(device)
-
+            z_spatial_size=self.z_spatial_size,
+        )
         self.adapter_a_d = BottleneckAdapter(
             in_channels=3,
             z_channels=self.z_channels,
-            z_spatial_size=self.z_spatial_size
-        ).to(device)
+            z_spatial_size=self.z_spatial_size,
+        )
 
-        print(f"Initialized adapters for Z spatial size: {self.z_spatial_size}")
+    def _validate_bottleneck_shape(self, z_global):
+        """Fail fast if runtime bottleneck shape differs from configured input size."""
+        _, _, h, w = z_global.shape
+        if (h, w) != self.z_spatial_size:
+            raise RuntimeError(
+                f"V1 adapter bottleneck mismatch: got {(h, w)}, expected {self.z_spatial_size}. "
+                "Set model.input_size to match training input_size."
+            )
 
     def forward(self, rgb, m_diffuse=None, **kwargs):
         """
@@ -101,9 +95,7 @@ class IntrinsicDecompositionV1(nn.Module):
         """
         # Encode image
         z_global, skip_features = self.image_encoder(rgb)
-
-        # Initialize adapters on first forward
-        self._initialize_adapters(z_global)
+        self._validate_bottleneck_shape(z_global)
 
         # Dec A: Gray shading
         s_g = self.decoder_a(z_global, skip_features)
@@ -136,7 +128,8 @@ class IntrinsicDecompositionV1(nn.Module):
         a_d = self.decoder_c(z_c, skip_features)
 
         # Adapt A_d to bottleneck
-        a_d_adapted = self.adapter_a_d(a_d)
+        # Dec D should not backprop into Dec C through this branch.
+        a_d_adapted = self.adapter_a_d(a_d.detach())
         z_d = torch.cat([z_global, s_c_adapted, a_d_adapted], dim=1)
 
         # Dec D: Diffuse shading

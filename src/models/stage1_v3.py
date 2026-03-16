@@ -55,7 +55,8 @@ class IntrinsicDecompositionV3(IntrinsicDecompositionV2):
             extra_features=[s_c_pyr[3], s_c_pyr[2], s_c_pyr[1]],
         )
 
-        a_d_pyr = self.albedo_adapter(a_d)
+        # Keep Dec D supervision from directly updating Dec C through albedo guidance.
+        a_d_pyr = self.albedo_adapter(a_d.detach())
         s_d = self.decoder_d(
             z_global,
             skip_features,

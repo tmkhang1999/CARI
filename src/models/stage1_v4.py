@@ -108,7 +108,8 @@ class IntrinsicDecompositionV4(IntrinsicDecompositionV3):
             ],
         )
 
-        a_d_pyr = self.albedo_adapter(a_d)
+        # Isolate Dec C optimization from Dec D supervision through albedo guidance.
+        a_d_pyr = self.albedo_adapter(a_d.detach())
         s_d = self.decoder_d(
             z_global,
             skip_features,

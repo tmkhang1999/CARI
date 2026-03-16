@@ -40,6 +40,8 @@ def scale_match(A_raw, A_pred, valid):
     a = (A_raw * v).reshape(A_raw.shape[0], -1)
     b = (A_pred * v).reshape(A_pred.shape[0], -1)
     c = (a * b).sum(dim=1) / ((a * a).sum(dim=1) + 1e-6)
+    # Prevent degenerate target scaling that can zero-out Dec-C supervision.
+    c = torch.clamp_min(c, 0.05)
     return c.view(-1, 1, 1, 1)
 
 
@@ -548,6 +550,7 @@ def build_stage1_model(config):
         'backbone': config['model'].get('backbone', 'convnextv2_base'),
         'pretrained': config['model'].get('pretrained', True),
         'num_seg_classes': config['model'].get('num_seg_classes', 41),
+        'input_size': int(config['train'].get('input_size', 384)),
     }
     model_map = {
         1: IntrinsicDecompositionV1,

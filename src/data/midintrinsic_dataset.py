@@ -161,7 +161,7 @@ class MIDIntrinsicDataset(Dataset):
         sample = self.samples[idx]
 
         albedo = self._load_exr(sample['albedo'])                 # linear HDR
-        valid_np = (albedo.mean(axis=-1) > 0.02).astype(np.float32)
+        valid_np = (albedo.min(axis=-1) > 0.01).astype(np.float32)
         rgb_mix = self._sample_mix(sample['illums'])              # tonemapped mix [0,1]
 
         combined = np.concatenate([
@@ -189,8 +189,22 @@ class MIDIntrinsicDataset(Dataset):
 
         combined = combined[top:top+size, left:left+size]
 
-        t = torch.from_numpy(combined).permute(2, 0, 1).unsqueeze(0).float()
-        t = F.interpolate(t, size=(self.input_size, self.input_size), mode='bilinear', align_corners=False).squeeze(0)
+        t_img = torch.from_numpy(combined[..., :6]).permute(2, 0, 1).unsqueeze(0).float()
+        t_img = F.interpolate(
+            t_img,
+            size=(self.input_size, self.input_size),
+            mode='bilinear',
+            align_corners=False,
+        ).squeeze(0)
+
+        t_mask = torch.from_numpy(combined[..., 6:7]).permute(2, 0, 1).unsqueeze(0).float()
+        t_mask = F.interpolate(
+            t_mask,
+            size=(self.input_size, self.input_size),
+            mode='nearest',
+        ).squeeze(0)
+
+        t = torch.cat([t_img, t_mask], dim=0)
 
         if self.split == 'train':
             if random.random() > 0.5:

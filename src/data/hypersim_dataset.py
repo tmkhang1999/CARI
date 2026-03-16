@@ -399,12 +399,12 @@ class HypersimDataset(Dataset):
 
         # ── Valid mask (before augmentation, in numpy) ────────────────────────
         # Primary: render_entity_id != -1 (sky / invalid geometry)
-        # Fallback when rid unavailable: mean albedo > 0.02
+        # Albedo gate: require all albedo channels to stay above floor.
         if rid is not None:
             sky_mask = (rid != -1)
         else:
             sky_mask = np.ones(rgb.shape[:2], dtype=bool)
-        alb_mask = alb.mean(axis=-1) > 0.02          # exclude mirrors, glass
+        alb_mask = alb.min(axis=-1) > 0.01       # reject near-zero per-channel albedo
         valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
@@ -447,11 +447,19 @@ class HypersimDataset(Dataset):
         seg_crop = seg[top:top+size, left:left+size]             # (size,size)
 
         # ── Resize to input_size ──────────────────────────────────────────────
-        t = torch.from_numpy(combined).permute(2, 0, 1).unsqueeze(0).float()
-        t = F.interpolate(
-            t, size=(self.input_size, self.input_size),
+        t_img = torch.from_numpy(combined[..., :12]).permute(2, 0, 1).unsqueeze(0).float()
+        t_img = F.interpolate(
+            t_img, size=(self.input_size, self.input_size),
             mode='bilinear', align_corners=False
-        ).squeeze(0)                                              # (13,H,W)
+        ).squeeze(0)                                              # (12,H,W)
+
+        t_mask = torch.from_numpy(combined[..., 12:13]).permute(2, 0, 1).unsqueeze(0).float()
+        t_mask = F.interpolate(
+            t_mask, size=(self.input_size, self.input_size),
+            mode='nearest'
+        ).squeeze(0)                                              # (1,H,W)
+
+        t = torch.cat([t_img, t_mask], dim=0)                     # (13,H,W)
 
         seg_t = torch.from_numpy(seg_crop.astype(np.float32)).unsqueeze(0).unsqueeze(0)
         seg_t = F.interpolate(

@@ -101,7 +101,8 @@ class FlexibleLoss(nn.Module):
 
         mask = valid_mask.float()
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
-        msg = self.msg_loss(D_g_pred, D_g_star)
+        # MSG is global by construction; weight by valid-pixel fraction.
+        msg = self.msg_loss(D_g_pred, D_g_star) * mask.mean()
         return l1 + self.lambda_msg * msg
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
@@ -112,7 +113,8 @@ class FlexibleLoss(nn.Module):
         mask = valid_mask.float()
 
         mse = self._masked_mse(xi_pred, xi_star, mask)
-        msg = self.msg_loss(xi_pred, xi_star)
+        # Match Dec A behavior so invalid regions do not drive MSG gradients.
+        msg = self.msg_loss(xi_pred, xi_star) * mask.mean()
         return mse + self.lambda_msg * msg
 
     def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None):
