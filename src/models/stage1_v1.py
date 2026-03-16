@@ -1,0 +1,177 @@
+"""
+Version 1 Model: Bottleneck-Only Cross-Decoder Architecture
+Simple baseline with no attention, no SPADE, no additional encoders.
+Cross-decoder signals are encoded to bottleneck resolution and concatenated to Z only.
+"""
+
+import torch
+import torch.nn as nn
+
+from .encoders.image_encoder import ImageEncoder
+from .decoders.decoder import DecoderA, DecoderB, DecoderC, DecoderD
+from .modules.adapters import BottleneckAdapter
+
+
+class IntrinsicDecompositionV1(nn.Module):
+    """
+    Version 1: Bottleneck-only cross-decoder architecture.
+
+    Pipeline:
+        Z + F_img                                -> Dec A -> S_g
+        Z + BottleneckAdapter(S_g) + F_img       -> Dec B -> xi (chroma)
+        Z + BottleneckAdapter(S_c) + F_img       -> Dec C -> A_d
+        Z + BottleneckAdapter(S_c, A_d) + F_img  -> Dec D -> S_d
+    """
+    def __init__(self, config):
+        super().__init__()
+
+        # Extract config
+        z_channels = config.get('z_channels', 1024)
+        freeze_stages = config.get('freeze_stages', [1, 2])
+        model_name = config.get('backbone', config.get('model_name', 'convnextv2_base'))
+        pretrained = config.get('pretrained', True)
+
+        # Image encoder
+        self.image_encoder = ImageEncoder(
+            model_name=model_name,
+            freeze_stages=freeze_stages,
+            pretrained=pretrained,
+        )
+        skip_channels = self.image_encoder.feature_channels
+
+        # Get bottleneck spatial size (will be computed from input)
+        self.z_spatial_size = None
+
+        # Decoders
+        self.decoder_a = DecoderA(z_channels=z_channels, skip_channels=skip_channels)
+        self.decoder_b = DecoderB(z_channels=z_channels, skip_channels=skip_channels)
+        self.decoder_c = DecoderC(z_channels=z_channels, skip_channels=skip_channels)
+        self.decoder_d = DecoderD(z_channels=z_channels, skip_channels=skip_channels)
+
+        # Adapters (initialized after first forward to know Z spatial size)
+        self.adapter_s_g = None
+        self.adapter_s_c = None
+        self.adapter_a_d = None
+        self.z_channels = z_channels
+
+    def _initialize_adapters(self, z_global):
+        """Initialize adapters once we know Z spatial size and device."""
+        if self.adapter_s_g is not None:
+            return
+
+        _, _, h, w = z_global.shape
+        self.z_spatial_size = (h, w)
+        device = z_global.device
+
+        self.adapter_s_g = BottleneckAdapter(
+            in_channels=1,
+            z_channels=self.z_channels,
+            z_spatial_size=self.z_spatial_size
+        ).to(device)
+
+        self.adapter_s_c = BottleneckAdapter(
+            in_channels=3,
+            z_channels=self.z_channels,
+            z_spatial_size=self.z_spatial_size
+        ).to(device)
+
+        self.adapter_a_d = BottleneckAdapter(
+            in_channels=3,
+            z_channels=self.z_channels,
+            z_spatial_size=self.z_spatial_size
+        ).to(device)
+
+        print(f"Initialized adapters for Z spatial size: {self.z_spatial_size}")
+
+    def forward(self, rgb, m_diffuse=None, **kwargs):
+        """
+        Args:
+            rgb: (N, 3, H, W) input RGB image
+            m_diffuse: (N,) optional routing mask for diffuse GT availability
+                       (unused in model; detach routing is handled in training)
+
+        Returns:
+            Dictionary with keys:
+                s_g: (N, 1, H, W) gray shading
+                xi: (N, 2, H, W) bounded chroma ratio
+                c: (N, 3, H, W) chroma map (converted from xi)
+                s_c: (N, 3, H, W) colorful shading = S_g * C
+                a_d: (N, 3, H, W) diffuse albedo
+                s_d: (N, 3, H, W) diffuse shading
+        """
+        # Encode image
+        z_global, skip_features = self.image_encoder(rgb)
+
+        # Initialize adapters on first forward
+        self._initialize_adapters(z_global)
+
+        # Dec A: Gray shading
+        s_g = self.decoder_a(z_global, skip_features)
+
+        # Adapt S_g to bottleneck
+        s_g_adapted = self.adapter_s_g(s_g)
+        z_b = torch.cat([z_global, s_g_adapted], dim=1)
+
+        # Dec B: Chroma (bounded ratio)
+        xi = self.decoder_b(z_b, skip_features)
+
+        # Convert xi to chroma C: C = [C_R/G, C_B/G]
+        # xi = [1/(C_R/G+1), 1/(C_B/G+1)] -> C_R/G = (1-xi)/xi
+        eps = 1e-7
+        c_rg = (1 - xi[:, 0:1, :, :]) / (xi[:, 0:1, :, :] + eps)
+        c_bg = (1 - xi[:, 1:2, :, :]) / (xi[:, 1:2, :, :] + eps)
+
+        # Build RGB chroma: C = [C_R/G * S_g, S_g, C_B/G * S_g]
+        # Simplified: C_R = C_R/G, C_G = 1, C_B = C_B/G
+        c = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
+
+        # Colorful shading S_c = S_g * C
+        s_c = s_g * c
+
+        # Adapt S_c to bottleneck
+        s_c_adapted = self.adapter_s_c(s_c)
+        z_c = torch.cat([z_global, s_c_adapted], dim=1)
+
+        # Dec C: Diffuse albedo
+        a_d = self.decoder_c(z_c, skip_features)
+
+        # Adapt A_d to bottleneck
+        a_d_adapted = self.adapter_a_d(a_d)
+        z_d = torch.cat([z_global, s_c_adapted, a_d_adapted], dim=1)
+
+        # Dec D: Diffuse shading
+        s_d = self.decoder_d(z_d, skip_features)
+
+        return {
+            's_g': s_g,
+            'xi': xi,
+            'c': c,
+            's_c': s_c,
+            'a_d': a_d,
+            's_d': s_d
+        }
+
+
+if __name__ == '__main__':
+    # Test
+    config = {
+        'z_channels': 1024,
+        'backbone': 'convnext_base',
+        'freeze_stages': [1, 2]
+    }
+
+    model = IntrinsicDecompositionV1(config)
+    x = torch.randn(2, 3, 384, 384)
+
+    # Test without masking
+    outputs = model(x)
+    print("Model outputs:")
+    for k, v in outputs.items():
+        print(f"  {k}: {v.shape}")
+
+    # Test with masking
+    m_diffuse = torch.tensor([1, 0], dtype=torch.float32)
+    outputs = model(x, m_diffuse=m_diffuse)
+    print("\nWith masking:")
+    for k, v in outputs.items():
+        print(f"  {k}: {v.shape}")
