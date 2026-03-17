@@ -134,7 +134,7 @@ class ImageEncoder(nn.Module):
 if __name__ == '__main__':
     # Test
     encoder = ImageEncoder(freeze_stages=[1, 2])
-    x = torch.randn(2, 3, 384, 384)
+    x = torch.randn(2, 3, 128, 384)
     z, skips = encoder(x)
 
     print(f"Z_global shape: {z.shape}")
