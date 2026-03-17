@@ -306,11 +306,12 @@ def _ssim_from_dssim(criterion, pred, target):
 
 
 def _vis_tonemap(img, percentile=99.0, eps=1e-6):
-    """Simple visualization tonemap to [0,1] per sample."""
+    """Simple visualization tonemap to [0,1] per sample with NaN/Inf guards."""
     if img.ndim == 4:
         img = img[0]
     if img.shape[0] == 1:
         img = img.repeat(3, 1, 1)
+    img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
     flat = img.reshape(-1)
     scale = torch.quantile(flat, percentile / 100.0).clamp_min(eps)
     vis = torch.clamp(img / scale, 0.0, 1.0)
@@ -325,16 +326,52 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             return None
         return _vis_tonemap(full_rgb_list[i])
 
-    tile_defs = [
-        ('00_original_input', _tile_full),
-        ('01_cropped_input', lambda i: _vis_tonemap(rgb[i:i+1])),
-        ('02_s_g_pred', lambda i: _vis_tonemap(predictions['s_g'][i:i+1])),
-        ('03_s_g_gt', lambda i: _vis_tonemap(1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0)),
-        ('04_a_d_pred', lambda i: _vis_tonemap(predictions['a_d'][i:i+1])),
-        ('05_a_d_gt', lambda i: _vis_tonemap(targets['A_d_star'][i:i+1])),
-        ('06_s_d_pred', lambda i: _vis_tonemap(predictions['s_d'][i:i+1])),
-        ('07_s_d_gt', lambda i: _vis_tonemap(1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0)),
+    def _normalize_tile(tile, target_hw=None):
+        """Move tile to CPU CHW float for safe concatenation and TensorBoard logging."""
+        if tile is None:
+            return None
+        if tile.ndim == 4:
+            if tile.shape[0] == 0:
+                raise ValueError('tile has empty batch dimension')
+            tile = tile[0]
+        if tile.ndim == 2:
+            tile = tile.unsqueeze(0)
+        if tile.ndim != 3:
+            raise ValueError(f'expected CHW tile, got shape={tuple(tile.shape)}')
+        if tile.shape[0] == 1:
+            tile = tile.repeat(3, 1, 1)
+        elif tile.shape[0] > 3:
+            tile = tile[:3]
+
+        tile = tile.detach().to(device='cpu', dtype=torch.float32)
+        tile = torch.clamp(tile, 0.0, 1.0)
+
+        if target_hw is not None and (tile.shape[1] != target_hw[0] or tile.shape[2] != target_hw[1]):
+            tile = torch.nn.functional.interpolate(
+                tile.unsqueeze(0),
+                size=target_hw,
+                mode='bilinear',
+                align_corners=False,
+            ).squeeze(0)
+        return tile
+
+    base_tiles = [
+        ('cropped_input', lambda i: _vis_tonemap(rgb[i:i+1])),
+        ('s_g_pred', lambda i: _vis_tonemap(predictions['s_g'][i:i+1])),
+        ('s_g_gt', lambda i: _vis_tonemap(1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0)),
+        ('a_d_pred', lambda i: _vis_tonemap(predictions['a_d'][i:i+1])),
+        ('a_d_gt', lambda i: _vis_tonemap(targets['A_d_star'][i:i+1])),
+        ('s_d_pred', lambda i: _vis_tonemap(predictions['s_d'][i:i+1])),
+        ('s_d_gt', lambda i: _vis_tonemap(1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0)),
     ]
+
+    def _with_indices(tiles, start_idx):
+        return [(f"{start_idx + idx:02d}_{name}", fn) for idx, (name, fn) in enumerate(tiles)]
+
+    if full_rgb_list:
+        tile_defs = [('00_original_input', _tile_full)] + _with_indices(base_tiles, start_idx=1)
+    else:
+        tile_defs = _with_indices(base_tiles, start_idx=0)
 
     writer.add_text(
         'val/examples/layout',
@@ -345,38 +382,29 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
         named_tiles = []
+        target_hw = None
         for name, fn in tile_defs:
-            tile = fn(i)
-            if tile is None:
-                continue
-            named_tiles.append((name, tile))
+            try:
+                tile = fn(i)
+                if tile is None:
+                    continue
+                norm_tile = _normalize_tile(tile, target_hw=target_hw)
+                if norm_tile is None:
+                    continue
+                if target_hw is None:
+                    target_hw = (int(norm_tile.shape[1]), int(norm_tile.shape[2]))
+                named_tiles.append((name, norm_tile))
+            except Exception as exc:
+                print(f"[warn][val step {global_step}] skipped tile '{name}' for sample_{i}: {exc}")
         if not named_tiles:
             continue
 
-        strip = torch.cat([t for _, t in named_tiles], dim=2)
+        tiles_cpu = [
+            t.detach().to(device='cpu', dtype=torch.float32)
+            for _, t in named_tiles
+        ]
+        strip = torch.cat(tiles_cpu, dim=2)
         writer.add_image(f'val/examples/sample_{i}', strip, global_step)
-
-        if i == 0:
-            for name, tile in named_tiles:
-                writer.add_image(f'val/examples/sample_0/{name}', tile, global_step)
-
-
-def _log_fullsize_inputs(writer, global_step, dataset, sample_indices, max_items=2):
-    """Log full-resolution uncropped RGB inputs for validation diagnostics."""
-    if dataset is None or not hasattr(dataset, 'get_full_rgb_tonemapped'):
-        return
-
-    n = min(len(sample_indices), int(max_items))
-    for i in range(n):
-        try:
-            full_rgb = dataset.get_full_rgb_tonemapped(int(sample_indices[i]))
-            writer.add_image(
-                f'val/examples_full/sample_{i}/rgb_input_fullsize',
-                _vis_tonemap(full_rgb),
-                global_step,
-            )
-        except Exception as exc:
-            print(f"[warn][val step {global_step}] failed full-size RGB logging for sample_{i}: {exc}")
 
 
 def validate(model, dataloader, criterion, device, global_step, writer, val_example_images=2):
@@ -420,25 +448,6 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
 
             if batch_idx == 0:
-                sample_idx = batch.get('sample_idx', None)
-                full_rgb_list = None
-                if sample_idx is not None:
-                    sample_idx_list = sample_idx.detach().cpu().tolist()
-                    ds = getattr(dataloader, 'dataset', None)
-                    if ds is not None and hasattr(ds, 'get_full_rgb_tonemapped'):
-                        full_rgb_list = []
-                        for idx in sample_idx_list[:val_example_images]:
-                            try:
-                                full_rgb_list.append(ds.get_full_rgb_tonemapped(int(idx)))
-                            except Exception:
-                                full_rgb_list.append(None)
-                        _log_fullsize_inputs(
-                            writer,
-                            global_step,
-                            ds,
-                            sample_idx_list,
-                            max_items=val_example_images,
-                        )
                 _log_val_examples(
                     writer,
                     global_step,
@@ -446,7 +455,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     predictions,
                     targets,
                     max_items=val_example_images,
-                    full_rgb_list=full_rgb_list,
+                    full_rgb_list=None,
                 )
 
             losses = criterion(predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg))
@@ -669,11 +678,15 @@ def main():
         )
         datasets['midintrinsic'] = train_mid
 
+    train_num_workers = int(config['train'].get('num_workers', 4))
+    val_num_workers = max(1, int(config['data'].get('val_num_workers', config['train'].get('val_num_workers', 2))))
+    val_cache_max_items = max(0, int(config['data'].get('val_cache_max_items', 64)))
+
     mixed_loader = MixedDataloader(
         datasets=datasets,
         weights=config['train'].get('sampling_weights_phase1', {'hypersim': 1.0, 'midintrinsic': 0.0}),
         batch_size=int(config['train']['batch_size']),
-        num_workers=int(config['train']['num_workers']),
+        num_workers=train_num_workers,
         seed=loader_seed,
     )
 
@@ -681,9 +694,9 @@ def main():
         root_dir=hypersim_root,
         batch_size=int(config['train']['batch_size']),
         split='val',
-        num_workers=int(config['train']['num_workers']),
+        num_workers=val_num_workers,
         input_size=int(config['train']['input_size']),
-        cache_max_items=cache_max_items,
+        cache_max_items=val_cache_max_items,
         crop_mode_train=crop_mode_train,
         crop_mode_val=crop_mode_val,
         split_file=split_file,
@@ -770,6 +783,7 @@ def main():
                 writer.add_scalar(f'train/{k}', v.item(), step)
 
         if (step + 1) % val_interval_iters == 0:
+            torch.cuda.empty_cache()
             vloss = validate(
                 model,
                 val_loader,

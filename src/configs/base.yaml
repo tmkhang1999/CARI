@@ -45,8 +45,10 @@ data:
   # cache_max_items / mid_cache_max_items:
   #   Bounded per-worker decode cache (LRU). 0 disables caching.
   #   Cache only stores decoded arrays; dataloader indices are never replayed.
-  cache_max_items: 512
-  mid_cache_max_items: 2048
+  cache_max_items: 256
+  mid_cache_max_items: 512
+  val_cache_max_items: 128   # defaults to cache_max_items when omitted
+  val_num_workers: 4         # defaults to train.num_workers when omitted
   crop_mode_train: 'random'   # random|center|hybrid
   crop_mode_val: 'center'     # random|center
 
@@ -64,6 +66,7 @@ data:
   # Hypersim I/O robustness controls
   hypersim_max_hdf5_retries: 1
   hypersim_skip_corrupt_samples: true
+
 
 # Loss weights
 loss:

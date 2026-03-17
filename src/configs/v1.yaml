@@ -9,10 +9,13 @@ model:
 
 train:
   batch_size: 8
-  num_workers: 8
+  num_workers: 6
+
   log_interval: 50
   val_interval_iters: 500
   checkpoint_interval_iters: 1000
+
+  val_example_images: 4
 
   phase1_iterations: 10000
   phase2_iterations: 10000
