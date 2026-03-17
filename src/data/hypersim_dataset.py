@@ -69,11 +69,20 @@ def _load_hdf5(path: str, retries: int = 0) -> np.ndarray:
 
 def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0) -> np.ndarray:
     """
-    Compress linear HDR to [0,1] without gamma — preserves linearity.
+    Compress linear HDR to [0,1] without gamma and with robust numeric guards.
     rgb: (H, W, 3) float32
     """
-    scale = float(np.percentile(rgb, percentile)) + 1e-6
-    return np.clip(rgb / scale, 0.0, 1.0).astype(np.float32)
+    # Promote to float64 to avoid overflow during division when scale is tiny.
+    rgb64 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64, copy=False)
+    scale = float(np.percentile(rgb64, percentile))
+    if not np.isfinite(scale) or scale <= 0.0:
+        scale = 1e-6
+    else:
+        scale = max(scale, 1e-6)
+
+    mapped = np.divide(rgb64, scale, out=np.zeros_like(rgb64), where=np.isfinite(rgb64))
+    mapped = np.nan_to_num(mapped, nan=0.0, posinf=1.0, neginf=0.0)
+    return np.clip(mapped, 0.0, 1.0).astype(np.float32)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +102,7 @@ class HypersimDataset(Dataset):
         cache_max_items: Maximum number of decoded arrays kept in RAM cache
                      per dataset worker. Set 0 to disable caching.
         crop_mode_train: Crop mode for train split: random|center|hybrid.
-        crop_mode_val: Crop mode for val split: random|center.
+        crop_mode_val: Crop mode for val split: random|center|.
         require_all_modalities: If True (default), skip frames missing normals
                      or semantics. Set False to use albedo-only frames
                      (normal/seg will be zero-filled).

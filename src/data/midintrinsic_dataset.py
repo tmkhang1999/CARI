@@ -99,7 +99,12 @@ class MIDIntrinsicDataset(Dataset):
         return scenes[:cut] if self.split == 'train' else scenes[cut:]
 
     def _tonemap_linear(self, img: np.ndarray) -> np.ndarray:
-        scale = float(np.percentile(img, self.percentile)) + 1e-6
+        img = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+        scale = float(np.percentile(img, self.percentile))
+        if not np.isfinite(scale) or scale <= 0.0:
+            scale = 1e-6
+        else:
+            scale += 1e-6
         return np.clip(img / scale, 0.0, 1.0).astype(np.float32)
 
     def _load_exr(self, path: str) -> np.ndarray:
