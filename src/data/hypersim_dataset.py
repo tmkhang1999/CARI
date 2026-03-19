@@ -144,8 +144,8 @@ class HypersimDataset(Dataset):
 
         if self.crop_mode_train not in {'random', 'center', 'hybrid'}:
             raise ValueError("crop_mode_train must be one of: random, center, hybrid")
-        if self.crop_mode_val not in {'random', 'center'}:
-            raise ValueError("crop_mode_val must be one of: random, center")
+        if self.crop_mode_val not in {'random', 'center', 'full'}:
+            raise ValueError("crop_mode_val must be one of: random, center, full")
 
         self.samples = self._build_file_list()
         print(
@@ -443,17 +443,21 @@ class HypersimDataset(Dataset):
         if crop_mode == 'hybrid':
             crop_mode = 'center' if np.random.rand() < 0.2 else 'random'
 
-        if crop_mode == 'center':
-            size = max_size
-            top = max((H - size) // 2, 0)
-            left = max((W - size) // 2, 0)
+        if crop_mode == 'full':
+            # Evaluation mode: keep the full frame, then resize to input_size.
+            seg_crop = seg
         else:
-            size = np.random.randint(min_size, max_size + 1) if max_size > min_size else max_size
-            top = np.random.randint(0, max(1, H - size + 1))
-            left = np.random.randint(0, max(1, W - size + 1))
+            if crop_mode == 'center':
+                size = max_size
+                top = max((H - size) // 2, 0)
+                left = max((W - size) // 2, 0)
+            else:
+                size = np.random.randint(min_size, max_size + 1) if max_size > min_size else max_size
+                top = np.random.randint(0, max(1, H - size + 1))
+                left = np.random.randint(0, max(1, W - size + 1))
 
-        combined = combined[top:top+size, left:left+size]        # (size,size,13)
-        seg_crop = seg[top:top+size, left:left+size]             # (size,size)
+            combined = combined[top:top+size, left:left+size]        # (size,size,13)
+            seg_crop = seg[top:top+size, left:left+size]             # (size,size)
 
         # ── Resize to input_size ──────────────────────────────────────────────
         t_img = torch.from_numpy(combined[..., :12]).permute(2, 0, 1).unsqueeze(0).float()
@@ -516,6 +520,7 @@ def get_hypersim_loader(
     strict_split: bool = True,
     max_hdf5_retries: int = 1,
     skip_corrupt_samples: bool = True,
+    pin_memory: bool = True,
 ) -> torch.utils.data.DataLoader:
     dataset = HypersimDataset(
         root_dir,
@@ -536,7 +541,7 @@ def get_hypersim_loader(
         batch_size=batch_size,
         shuffle=(split == 'train'),
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=bool(pin_memory),
         drop_last=(split == 'train'),
     )
 

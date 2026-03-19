@@ -1,18 +1,18 @@
 """
 Evaluation script for Stage 1 intrinsic decomposition.
-Computes scale-invariant metrics following Careaga & Aksoy 2023.
+Computes scale-invariant metrics on Hypersim validation split.
 """
 
+import argparse
+import inspect
 import os
 import sys
-import yaml
-import argparse
 from pathlib import Path
-import torch
-import torch.nn as nn
+
 import numpy as np
-from tqdm import tqdm
+import torch
 from skimage.metrics import structural_similarity as ssim
+from tqdm import tqdm
 
 # Make src importable
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -22,6 +22,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from data.hypersim_dataset import get_hypersim_loader
 from models import (
     IntrinsicDecompositionV1,
     IntrinsicDecompositionV2,
@@ -32,81 +33,116 @@ from models import (
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate Intrinsic Decomposition Model')
-    parser.add_argument('--checkpoint', type=str, required=True,
-                       help='Path to model checkpoint')
-    parser.add_argument('--dataset', type=str, default='hypersim',
-                       choices=['hypersim', 'interiornet', 'midintrinsic'],
-                       help='Dataset to evaluate on')
-    parser.add_argument('--split', type=str, default='val',
-                       choices=['train', 'val', 'test'],
-                       help='Dataset split')
-    parser.add_argument('--device', type=str, default='cuda',
-                       help='Device to use')
-    parser.add_argument('--save_outputs', action='store_true',
-                       help='Save prediction images')
-    parser.add_argument('--output_dir', type=str, default='outputs/eval',
-                       help='Directory to save outputs')
+    parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint')
+    parser.add_argument('--dataset', type=str, default='hypersim', choices=['hypersim'], help='Dataset to evaluate on')
+    parser.add_argument('--split', type=str, default='val', choices=['train', 'val', 'test'], help='Dataset split')
+    parser.add_argument('--device', type=str, default='cuda', help='Device to use')
+    parser.add_argument('--hypersim_root', type=str, default=None, help='Optional Hypersim root override')
+    parser.add_argument('--eval_input_size', type=int, default=1024, help='Fixed evaluation resize resolution')
+    parser.add_argument('--batch_size', type=int, default=1, help='Evaluation batch size')
+    parser.add_argument('--num_workers', type=int, default=2, help='Dataloader workers')
+    parser.add_argument('--cache_max_items', type=int, default=64, help='Dataset cache size for eval')
+    parser.add_argument('--max_batches', type=int, default=0, help='Limit evaluated batches for quick checks (0 = full split)')
     return parser.parse_args()
 
 
-def scale_invariant_mse(pred, target):
-    """
-    Compute scale-invariant MSE (LMSE in log space).
-    Normalizes both pred and target by their mean before comparison.
-    """
-    eps = 1e-7
-
-    # Normalize by mean (scale-invariant)
-    pred_norm = pred / (pred.mean() + eps)
-    target_norm = target / (target.mean() + eps)
-
-    # Compute MSE in log space
-    log_pred = torch.log(pred_norm + eps)
-    log_target = torch.log(target_norm + eps)
-
-    lmse = ((log_pred - log_target) ** 2).mean()
-
-    return lmse.item()
+def scale_match(A_raw, A_pred, valid):
+    v = valid.expand_as(A_raw).float()
+    a = (A_raw * v).reshape(A_raw.shape[0], -1)
+    b = (A_pred * v).reshape(A_pred.shape[0], -1)
+    c = (a * b).sum(dim=1) / ((a * a).sum(dim=1) + 1e-6)
+    c = torch.clamp_min(c, 0.05)
+    return c.view(-1, 1, 1, 1)
 
 
-def compute_rmse(pred, target):
-    """Compute scale-invariant RMSE."""
-    eps = 1e-7
-    pred_norm = pred / (pred.mean() + eps)
-    target_norm = target / (target.mean() + eps)
+def compute_targets(predictions, rgb, albedo_raw, valid_mask):
+    eps = 1e-6
+    c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
+    A_star = c * albedo_raw
+    S_star = rgb / (A_star + eps)
 
-    rmse = torch.sqrt(((pred_norm - target_norm) ** 2).mean())
-    return rmse.item()
+    S_g_star = 0.2126 * S_star[:, 0:1] + 0.7152 * S_star[:, 1:2] + 0.0722 * S_star[:, 2:3]
+    D_g_star = 1.0 / (S_g_star + 1.0)
+
+    C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
+    C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
+    xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+
+    return {
+        'D_g_star': D_g_star,
+        'xi_star': xi_star,
+        'A_d_star': A_star,
+        'pi_star': 1.0 / (S_star + 1.0),
+    }
+
+
+def _forward_kwargs(model, m_diffuse, normals, seg):
+    sig = inspect.signature(model.forward).parameters
+    kwargs = {}
+    if 'm_diffuse' in sig:
+        kwargs['m_diffuse'] = m_diffuse
+    if 'normals' in sig and normals is not None:
+        kwargs['normals'] = normals
+    if 'seg' in sig and seg is not None:
+        kwargs['seg'] = seg
+    return kwargs
+
+
+def _apply_diffuse_detach(predictions, m_diffuse):
+    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['s_d'].device)
+    predictions['s_d'] = predictions['s_d'] * mask + predictions['s_d'].detach() * (1.0 - mask)
+    return predictions
+
+
+def _masked_norm(pred, target, valid_mask, eps=1e-7):
+    v = valid_mask.bool().expand_as(pred)
+    p = pred[v]
+    t = target[v]
+    if p.numel() == 0:
+        return None, None
+    p = p / (p.mean() + eps)
+    t = t / (t.mean() + eps)
+    return p, t
+
+
+def scale_invariant_mse(pred, target, valid_mask):
+    p, t = _masked_norm(pred, target, valid_mask)
+    if p is None:
+        return 0.0
+    return float(((torch.log(p + 1e-7) - torch.log(t + 1e-7)) ** 2).mean().item())
+
+
+def compute_rmse(pred, target, valid_mask):
+    p, t = _masked_norm(pred, target, valid_mask)
+    if p is None:
+        return 0.0
+    return float(torch.sqrt(((p - t) ** 2).mean()).item())
 
 
 def compute_ssim(pred, target):
-    """Compute SSIM on normalized images."""
     eps = 1e-7
-
-    # Normalize
     pred_norm = pred / (pred.mean() + eps)
     target_norm = target / (target.mean() + eps)
 
-    # Convert to numpy
-    pred_np = pred_norm.cpu().numpy()
-    target_np = target_norm.cpu().numpy()
+    pred_np = pred_norm.detach().cpu().numpy()
+    target_np = target_norm.detach().cpu().numpy()
 
-    # Compute SSIM per channel, then average
     ssim_values = []
     for c in range(pred_np.shape[0]):
-        s = ssim(target_np[c], pred_np[c], data_range=target_np[c].max() - target_np[c].min())
-        ssim_values.append(s)
-
-    return np.mean(ssim_values)
+        data_range = float(max(target_np[c].max() - target_np[c].min(), 1e-6))
+        ssim_values.append(ssim(target_np[c], pred_np[c], data_range=data_range))
+    return float(np.mean(ssim_values))
 
 
 def build_stage1_model(model_cfg):
     version = int(model_cfg.get("version", 1))
     model_config = {
-        "z_channels": model_cfg.get("z_channels", 1536),
+        "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
-        "backbone": model_cfg.get("backbone", "convnext_large"),
+        "backbone": model_cfg.get("backbone", "convnextv2_base"),
         "pretrained": model_cfg.get("pretrained", True),
+        "num_seg_classes": model_cfg.get("num_seg_classes", 41),
+        "input_size": int(model_cfg.get("input_size", 1024)),
     }
     model_map = {
         1: IntrinsicDecompositionV1,
@@ -119,13 +155,7 @@ def build_stage1_model(model_cfg):
     return model_map[version](model_config)
 
 
-def evaluate_model(model, dataloader, device, save_outputs=False, output_dir=None):
-    """
-    Evaluate model on dataset.
-
-    Returns:
-        Dictionary of metrics
-    """
+def evaluate_model(model, dataloader, device, max_batches=0):
     model.eval()
 
     metrics = {
@@ -138,177 +168,165 @@ def evaluate_model(model, dataloader, device, save_outputs=False, output_dir=Non
         's_d_lmse': [],
         's_d_rmse': [],
         's_d_ssim': [],
-        'c_mse': []
+        'xi_mse': [],
     }
-
-    if save_outputs:
-        os.makedirs(output_dir, exist_ok=True)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
-            # Move data to device
+            if max_batches > 0 and batch_idx >= max_batches:
+                break
+
             rgb = batch['rgb'].to(device)
-            albedo_gt = batch.get('albedo')
-            s_g_gt = batch.get('s_g')
-            c_gt = batch.get('c')
-            s_d_gt = batch.get('s_d')
+            albedo_raw = batch['albedo_raw'].to(device)
+            valid_mask = batch['valid_mask'].to(device)
+            m_diffuse = batch['M_diffuse'].float().to(device)
+            seg = batch.get('seg')
+            if seg is not None:
+                seg = seg.to(device)
+            normals = batch.get('normals')
+            if normals is not None:
+                normals = normals.to(device)
 
-            m_diffuse = batch.get('M_diffuse')
-            if m_diffuse is None:
-                m_diffuse = batch.get('m_diffuse')
-            if m_diffuse is not None:
-                m_diffuse = m_diffuse.to(device)
+            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
+            predictions = _apply_diffuse_detach(predictions, m_diffuse)
+            targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
 
-            # Forward pass
-            if m_diffuse is None:
-                predictions = model(rgb)
-            else:
-                predictions = model(rgb, m_diffuse=m_diffuse)
+            inv_s_g_pred = 1.0 / (predictions['s_g'] + 1.0 + 1e-6)
+            inv_s_d_pred = 1.0 / (predictions['s_d'] + 1.0 + 1e-6)
+            inv_s_g_gt = targets['D_g_star']
+            inv_s_d_gt = targets['pi_star']
 
-            # Extract predictions
-            s_g_pred = predictions['s_g']
-            c_pred = predictions['c']
-            a_d_pred = predictions['a_d']
-            s_d_pred = predictions['s_d']
+            for i in range(rgb.shape[0]):
+                vm = valid_mask[i:i+1]
 
-            # Compute metrics per sample
-            batch_size = rgb.shape[0]
-            for i in range(batch_size):
-                # Gray shading metrics
-                if s_g_gt is not None:
-                    s_g_gt_i = s_g_gt[i].to(device)
-                    metrics['s_g_lmse'].append(scale_invariant_mse(s_g_pred[i], s_g_gt_i))
-                    metrics['s_g_rmse'].append(compute_rmse(s_g_pred[i], s_g_gt_i))
-                    metrics['s_g_ssim'].append(compute_ssim(s_g_pred[i], s_g_gt_i))
+                metrics['s_g_lmse'].append(scale_invariant_mse(inv_s_g_pred[i:i+1], inv_s_g_gt[i:i+1], vm))
+                metrics['s_g_rmse'].append(compute_rmse(inv_s_g_pred[i:i+1], inv_s_g_gt[i:i+1], vm))
+                metrics['s_g_ssim'].append(compute_ssim(inv_s_g_pred[i], inv_s_g_gt[i]))
 
-                # Albedo metrics
-                if albedo_gt is not None:
-                    albedo_gt_i = albedo_gt[i].to(device)
-                    metrics['a_d_lmse'].append(scale_invariant_mse(a_d_pred[i], albedo_gt_i))
-                    metrics['a_d_rmse'].append(compute_rmse(a_d_pred[i], albedo_gt_i))
-                    metrics['a_d_ssim'].append(compute_ssim(a_d_pred[i], albedo_gt_i))
+                metrics['a_d_lmse'].append(scale_invariant_mse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
+                metrics['a_d_rmse'].append(compute_rmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
+                metrics['a_d_ssim'].append(compute_ssim(predictions['a_d'][i], targets['A_d_star'][i]))
 
-                # Diffuse shading metrics
-                if s_d_gt is not None:
-                    s_d_gt_i = s_d_gt[i].to(device)
-                    metrics['s_d_lmse'].append(scale_invariant_mse(s_d_pred[i], s_d_gt_i))
-                    metrics['s_d_rmse'].append(compute_rmse(s_d_pred[i], s_d_gt_i))
-                    metrics['s_d_ssim'].append(compute_ssim(s_d_pred[i], s_d_gt_i))
+                metrics['s_d_lmse'].append(scale_invariant_mse(inv_s_d_pred[i:i+1], inv_s_d_gt[i:i+1], vm))
+                metrics['s_d_rmse'].append(compute_rmse(inv_s_d_pred[i:i+1], inv_s_d_gt[i:i+1], vm))
+                metrics['s_d_ssim'].append(compute_ssim(inv_s_d_pred[i], inv_s_d_gt[i]))
 
-                # Chroma metrics
-                if c_gt is not None:
-                    c_gt_i = c_gt[i].to(device)
-                    metrics['c_mse'].append(((c_pred[i] - c_gt_i) ** 2).mean().item())
+                xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
+                xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
+                metrics['xi_mse'].append(float(xi_err.item()))
 
-            # Save outputs if requested
-            if save_outputs and batch_idx < 10:  # Save first 10 batches
-                save_predictions(
-                    rgb, predictions, batch,
-                    output_dir, batch_idx
-                )
-
-    # Compute average metrics
     avg_metrics = {}
     for key, values in metrics.items():
-        if len(values) > 0:
-            avg_metrics[key] = np.mean(values)
-            avg_metrics[f'{key}_std'] = np.std(values)
+        if values:
+            avg_metrics[key] = float(np.mean(values))
+            avg_metrics[f'{key}_std'] = float(np.std(values))
+            avg_metrics[f'{key}_min'] = float(np.min(values))
+            avg_metrics[f'{key}_max'] = float(np.max(values))
+            avg_metrics[f'{key}_count'] = len(values)
 
     return avg_metrics
 
 
-def save_predictions(rgb, predictions, ground_truths, output_dir, batch_idx):
-    """Save prediction visualizations."""
-    import torchvision.utils as vutils
-    from PIL import Image
-
-    batch_size = rgb.shape[0]
-
-    for i in range(batch_size):
-        # Apply gamma for visualization
-        rgb_vis = torch.clamp(rgb[i].cpu(), 0, 1) ** (1/2.2)
-        a_d_vis = torch.clamp(predictions['a_d'][i].cpu(), 0, 1) ** (1/2.2)
-        s_g_vis = torch.clamp(predictions['s_g'][i].cpu(), 0, 1).repeat(3, 1, 1) ** (1/2.2)
-        s_c_vis = torch.clamp(predictions['s_c'][i].cpu(), 0, 1) ** (1/2.2)
-        s_d_vis = torch.clamp(predictions['s_d'][i].cpu(), 0, 1) ** (1/2.2)
-
-        # Create grid
-        images = [rgb_vis, a_d_vis, s_g_vis, s_c_vis, s_d_vis]
-        grid = vutils.make_grid(images, nrow=5, padding=10, pad_value=1.0)
-
-        # Save
-        save_path = os.path.join(output_dir, f'batch_{batch_idx:04d}_sample_{i:02d}.png')
-        vutils.save_image(grid, save_path)
+def _resolve_hypersim_root(args, config):
+    cfg_root = config.get('data', {}).get('hypersim_root', '../datasets/hypersim')
+    root = args.hypersim_root or cfg_root
+    if not os.path.isabs(root):
+        root = str(ROOT_DIR / root)
+    return root
 
 
 def main():
     args = parse_args()
 
-    # Load checkpoint
     print(f"Loading checkpoint from {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location='cpu')
     config = checkpoint.get('config', {})
 
-    # Set device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    # Build model
-    model = build_stage1_model(config.get("model", {})).to(device)
+    model_cfg = dict(config.get("model", {}))
+    model_cfg['input_size'] = int(args.eval_input_size)
+    model = build_stage1_model(model_cfg).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
     print(f"Model loaded from epoch {checkpoint.get('epoch', 'unknown')}")
 
-    # Build dataloader
-    print(f"Loading {args.dataset} dataset ({args.split} split)...")
-    # TODO: Implement actual dataloader
-    dataloader = None
+    hypersim_root = _resolve_hypersim_root(args, config)
+    print(f"Loading {args.dataset} dataset ({args.split} split) from {hypersim_root}")
 
-    if dataloader is None:
-        print("Error: Dataset loader not implemented yet.")
-        print("Please implement dataset loading for evaluation.")
-        return
-
-    # Evaluate
-    print("\nStarting evaluation...")
-    metrics = evaluate_model(
-        model, dataloader, device,
-        save_outputs=args.save_outputs,
-        output_dir=args.output_dir
+    data_cfg = config.get('data', {})
+    dataloader = get_hypersim_loader(
+        root_dir=hypersim_root,
+        batch_size=int(args.batch_size),
+        split=args.split,
+        num_workers=int(args.num_workers),
+        input_size=int(args.eval_input_size),
+        cache_max_items=int(args.cache_max_items),
+        crop_mode_train='random',
+        crop_mode_val='full',
+        split_file=data_cfg.get('hypersim_split_file', 'hypersim_split.json'),
+        split_seed=int(data_cfg.get('hypersim_split_seed', 42)),
+        split_ratio=float(data_cfg.get('hypersim_split_ratio', 0.9)),
+        strict_split=bool(data_cfg.get('hypersim_strict_split', True)),
+        max_hdf5_retries=int(data_cfg.get('hypersim_max_hdf5_retries', 1)),
+        skip_corrupt_samples=bool(data_cfg.get('hypersim_skip_corrupt_samples', True)),
+        pin_memory=False,
     )
 
-    # Print results
-    print("\n" + "="*60)
-    print("EVALUATION RESULTS")
-    print("="*60)
+    print("\nStarting evaluation...")
+    metrics = evaluate_model(
+        model,
+        dataloader,
+        device,
+        max_batches=int(args.max_batches),
+    )
 
-    print("\nGray Shading (S_g):")
+    print("\n" + "=" * 80)
+    print("EVALUATION RESULTS")
+    print("=" * 80)
+
+    # Get sample count from first metric
+    sample_count = metrics.get('s_g_lmse_count', 0)
+    print(f"\nTotal samples evaluated: {sample_count}\n")
+
+    print("Gray Shading (inverse D_g = 1/(1+S_g)):")
     if 's_g_lmse' in metrics:
-        print(f"  LMSE: {metrics['s_g_lmse']:.6f} +/- {metrics.get('s_g_lmse_std', 0):.6f}")
-        print(f"  RMSE: {metrics['s_g_rmse']:.6f} +/- {metrics.get('s_g_rmse_std', 0):.6f}")
-        print(f"  SSIM: {metrics['s_g_ssim']:.4f} +/- {metrics.get('s_g_ssim_std', 0):.4f}")
+        print(f"  LMSE: {metrics['s_g_lmse']:.6f} (mean) | {metrics.get('s_g_lmse_min', 0):.6f} (min) | {metrics.get('s_g_lmse_max', 0):.6f} (max) ± {metrics.get('s_g_lmse_std', 0):.6f}")
+        print(f"  RMSE: {metrics['s_g_rmse']:.6f} (mean) | {metrics.get('s_g_rmse_min', 0):.6f} (min) | {metrics.get('s_g_rmse_max', 0):.6f} (max) ± {metrics.get('s_g_rmse_std', 0):.6f}")
+        print(f"  SSIM: {metrics['s_g_ssim']:.4f} (mean) | {metrics.get('s_g_ssim_min', 0):.4f} (min) | {metrics.get('s_g_ssim_max', 0):.4f} (max) ± {metrics.get('s_g_ssim_std', 0):.4f}")
 
     print("\nDiffuse Albedo (A_d):")
     if 'a_d_lmse' in metrics:
-        print(f"  LMSE: {metrics['a_d_lmse']:.6f} +/- {metrics.get('a_d_lmse_std', 0):.6f}")
-        print(f"  RMSE: {metrics['a_d_rmse']:.6f} +/- {metrics.get('a_d_rmse_std', 0):.6f}")
-        print(f"  SSIM: {metrics['a_d_ssim']:.4f} +/- {metrics.get('a_d_ssim_std', 0):.4f}")
+        print(f"  LMSE: {metrics['a_d_lmse']:.6f} (mean) | {metrics.get('a_d_lmse_min', 0):.6f} (min) | {metrics.get('a_d_lmse_max', 0):.6f} (max) ± {metrics.get('a_d_lmse_std', 0):.6f}")
+        print(f"  RMSE: {metrics['a_d_rmse']:.6f} (mean) | {metrics.get('a_d_rmse_min', 0):.6f} (min) | {metrics.get('a_d_rmse_max', 0):.6f} (max) ± {metrics.get('a_d_rmse_std', 0):.6f}")
+        print(f"  SSIM: {metrics['a_d_ssim']:.4f} (mean) | {metrics.get('a_d_ssim_min', 0):.4f} (min) | {metrics.get('a_d_ssim_max', 0):.4f} (max) ± {metrics.get('a_d_ssim_std', 0):.4f}")
 
-    print("\nDiffuse Shading (S_d):")
+    print("\nDiffuse Shading (inverse pi = 1/(1+S_d)):")
     if 's_d_lmse' in metrics:
-        print(f"  LMSE: {metrics['s_d_lmse']:.6f} +/- {metrics.get('s_d_lmse_std', 0):.6f}")
-        print(f"  RMSE: {metrics['s_d_rmse']:.6f} +/- {metrics.get('s_d_rmse_std', 0):.6f}")
-        print(f"  SSIM: {metrics['s_d_ssim']:.4f} +/- {metrics.get('s_d_ssim_std', 0):.4f}")
+        print(f"  LMSE: {metrics['s_d_lmse']:.6f} (mean) | {metrics.get('s_d_lmse_min', 0):.6f} (min) | {metrics.get('s_d_lmse_max', 0):.6f} (max) ± {metrics.get('s_d_lmse_std', 0):.6f}")
+        print(f"  RMSE: {metrics['s_d_rmse']:.6f} (mean) | {metrics.get('s_d_rmse_min', 0):.6f} (min) | {metrics.get('s_d_rmse_max', 0):.6f} (max) ± {metrics.get('s_d_rmse_std', 0):.6f}")
+        print(f"  SSIM: {metrics['s_d_ssim']:.4f} (mean) | {metrics.get('s_d_ssim_min', 0):.4f} (min) | {metrics.get('s_d_ssim_max', 0):.4f} (max) ± {metrics.get('s_d_ssim_std', 0):.4f}")
 
-    print("\nChroma (C):")
-    if 'c_mse' in metrics:
-        print(f"  MSE:  {metrics['c_mse']:.6f} +/- {metrics.get('c_mse_std', 0):.6f}")
+    print("\nChroma (xi):")
+    if 'xi_mse' in metrics:
+        print(f"  MSE:  {metrics['xi_mse']:.6f} (mean) | {metrics.get('xi_mse_min', 0):.6f} (min) | {metrics.get('xi_mse_max', 0):.6f} (max) ± {metrics.get('xi_mse_std', 0):.6f}")
 
-    print("\n" + "="*60)
-
-    if args.save_outputs:
-        print(f"\nOutputs saved to {args.output_dir}")
+    print("\n" + "=" * 80)
+    print("SUMMARY - Mean Values Only")
+    print("=" * 80)
+    print(f"Gray Shading LMSE:   {metrics['s_g_lmse']:.6f}")
+    print(f"Gray Shading RMSE:   {metrics['s_g_rmse']:.6f}")
+    print(f"Gray Shading SSIM:   {metrics['s_g_ssim']:.4f}")
+    print(f"Albedo LMSE:         {metrics['a_d_lmse']:.6f}")
+    print(f"Albedo RMSE:         {metrics['a_d_rmse']:.6f}")
+    print(f"Albedo SSIM:         {metrics['a_d_ssim']:.4f}")
+    print(f"Diffuse Shading LMSE: {metrics['s_d_lmse']:.6f}")
+    print(f"Diffuse Shading RMSE: {metrics['s_d_rmse']:.6f}")
+    print(f"Diffuse Shading SSIM: {metrics['s_d_ssim']:.4f}")
+    print(f"Chroma MSE:          {metrics['xi_mse']:.6f}")
+    print("=" * 80)
 
 
 if __name__ == '__main__':
