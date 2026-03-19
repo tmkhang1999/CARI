@@ -65,7 +65,8 @@ IR-IID/
 ├── scripts/
 │   ├── train_stage1.sh
 │   ├── train_stage2.sh
-│   └── eval.sh
+│   ├── eval.sh
+│   └── infer_one_image.sh
 ├── src/
 │   ├── configs/
 │   │   └── base.yaml              # backbone, z_channels, loss weights, etc.
@@ -136,6 +137,18 @@ bash scripts/train_stage1.sh
 ```bash
 torchrun src/eval.py --checkpoint checkpoints/checkpoint_epoch_10.pth
 ```
+The evaluation script now prints aggregate metrics to stdout only (no TensorBoard scalars/images and no saved eval preview images).
+
+**5. Run full-size inference for one Hypersim frame**:
+```bash
+bash scripts/infer_one_image.sh \
+  --checkpoint checkpoints/v1/checkpoint_latest.pth \
+  --split val \
+  --sample_idx 0 \
+  --output_dir outputs/infer_one
+```
+
+Use `--match frame.0001` if you want to select by frame path substring.
 
 ---
 
