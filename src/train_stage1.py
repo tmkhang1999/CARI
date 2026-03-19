@@ -34,6 +34,48 @@ from data.midintrinsic_dataset import MIDIntrinsicDataset
 from data.mixed_dataloader import MixedDataloader
 
 
+TB_TAGS = {
+    'loss_a': '01_Losses/1_a',
+    'loss_b': '01_Losses/2_b',
+    'loss_c': '01_Losses/3_c_total',
+    'loss_d': '01_Losses/4_d',
+    'loss_total': '01_Losses/5_total',
+    'loss_c_l1': '01_Losses/3_c_L1',
+    'loss_c_msg': '01_Losses/3_c_MSG',
+    'loss_c_perceptual': '01_Losses/3_c_Perceptual',
+    'loss_c_tv': '01_Losses/3_c_TV',
+    'a_d_lmse': '02_Albedo_Ad/1_lmse',
+    'a_d_rmse': '02_Albedo_Ad/2_rmse',
+    'a_d_ssim': '02_Albedo_Ad/3_ssim',
+    's_g_lmse': '03_GrayShading_Sg/1_lmse',
+    's_g_rmse': '03_GrayShading_Sg/2_rmse',
+    's_g_ssim': '03_GrayShading_Sg/3_ssim',
+    'xi_mse': '04_Chroma_xi/1_mse',
+    's_d_lmse': '05_DiffuseShading_Sd/1_lmse',
+    's_d_rmse': '05_DiffuseShading_Sd/2_rmse',
+    's_d_ssim': '05_DiffuseShading_Sd/3_ssim',
+}
+
+
+def _log_ordered_scalars(writer, values, global_step):
+    """Write only requested TensorBoard tags in deterministic order."""
+    ordered = [
+        'loss_a', 'loss_b', 'loss_c', 'loss_d', 'loss_total',
+        'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv',
+        'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
+        's_g_lmse', 's_g_rmse', 's_g_ssim',
+        'xi_mse',
+        's_d_lmse', 's_d_rmse', 's_d_ssim',
+    ]
+    for key in ordered:
+        if key not in values:
+            continue
+        val = values[key]
+        if isinstance(val, torch.Tensor):
+            val = val.item()
+        writer.add_scalar(TB_TAGS[key], float(val), global_step)
+
+
 def scale_match(A_raw, A_pred, valid):
     """Least-squares per-image scalar c for c*A_raw ~= A_pred over valid pixels."""
     v = valid.expand_as(A_raw).float()
@@ -305,21 +347,26 @@ def _ssim_from_dssim(criterion, pred, target):
     return 1.0 - 2.0 * dssim
 
 
-def _vis_tonemap(img, percentile=99.0, eps=1e-6):
-    """Simple visualization tonemap to [0,1] per sample with NaN/Inf guards."""
+def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
+    """Inference-style tonemap to [0,1] per sample with NaN/Inf guards."""
     if img.ndim == 4:
         img = img[0]
     if img.shape[0] == 1:
         img = img.repeat(3, 1, 1)
     img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
-    flat = img.reshape(-1)
-    scale = torch.quantile(flat, percentile / 100.0).clamp_min(eps)
-    vis = torch.clamp(img / scale, 0.0, 1.0)
-    return vis
+    if scale is None:
+        scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+    scale = torch.as_tensor(scale, device=img.device, dtype=img.dtype).clamp_min(eps)
+    return torch.clamp(img / scale, 0.0, 1.0)
 
 
-def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=2, full_rgb_list=None):
-    """Log qualitative validation examples in the exact requested tile order."""
+def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=2, full_rgb_list=None, sample_index=None):
+    """Log qualitative validation examples in the exact requested tile order.
+    
+    Args:
+        sample_index: Optional global sample index for labeling in TensorBoard.
+                     If provided, logged under Examples/{sample_index} tag.
+    """
     # Tile order must match user request: original_input, cropped_input, s_g_pred, s_g_gt, a_d_pred, a_d_gt, s_d_pred, s_d_gt
     def _tile_full(i):
         if full_rgb_list is None or i >= len(full_rgb_list) or full_rgb_list[i] is None:
@@ -355,37 +402,63 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             ).squeeze(0)
         return tile
 
-    base_tiles = [
-        ('cropped_input', lambda i: _vis_tonemap(rgb[i:i+1])),
-        ('s_g_pred', lambda i: _vis_tonemap(predictions['s_g'][i:i+1])),
-        ('s_g_gt', lambda i: _vis_tonemap(1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0)),
-        ('a_d_pred', lambda i: _vis_tonemap(predictions['a_d'][i:i+1])),
-        ('a_d_gt', lambda i: _vis_tonemap(targets['A_d_star'][i:i+1])),
-        ('s_d_pred', lambda i: _vis_tonemap(predictions['s_d'][i:i+1])),
-        ('s_d_gt', lambda i: _vis_tonemap(1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0)),
+    layout_names = [
+        '00_original_input',
+        '01_cropped_input',
+        '02_inv_s_g_pred',
+        '03_inv_s_g_gt',
+        '04_a_d_pred',
+        '05_a_d_gt',
+        '06_inv_s_d_pred',
+        '07_inv_s_d_gt',
+    ] if full_rgb_list else [
+        '00_cropped_input',
+        '01_inv_s_g_pred',
+        '02_inv_s_g_gt',
+        '03_a_d_pred',
+        '04_a_d_gt',
+        '05_inv_s_d_pred',
+        '06_inv_s_d_gt',
     ]
 
-    def _with_indices(tiles, start_idx):
-        return [(f"{start_idx + idx:02d}_{name}", fn) for idx, (name, fn) in enumerate(tiles)]
-
-    if full_rgb_list:
-        tile_defs = [('00_original_input', _tile_full)] + _with_indices(base_tiles, start_idx=1)
+    # Set TensorBoard tag based on sample_index
+    if sample_index is not None:
+        example_tag = f'06_Examples/sample_{sample_index}'
     else:
-        tile_defs = _with_indices(base_tiles, start_idx=0)
-
+        example_tag = '06_Examples'
+    
     writer.add_text(
-        'val/examples/layout',
-        'left-to-right strip order: ' + ' | '.join([name for name, _ in tile_defs]),
+        f'{example_tag}/layout',
+        'left-to-right strip order: ' + ' | '.join(layout_names),
         global_step,
     )
 
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
         named_tiles = []
+
+        inv_s_g_pred = 1.0 / (predictions['s_g'][i:i+1] + 1.0 + 1e-6)
+        inv_s_g_gt = targets['D_g_star'][i:i+1]
+        inv_s_d_pred = 1.0 / (predictions['s_d'][i:i+1] + 1.0 + 1e-6)
+        inv_s_d_gt = targets['pi_star'][i:i+1]
+
+        sample_tiles = []
+        if full_rgb_list:
+            sample_tiles.append(('00_original_input', _tile_full(i)))
+
+        sample_tiles.extend([
+            (f"{'01' if full_rgb_list else '00'}_cropped_input", _vis_tonemap(rgb[i:i+1])),
+            (f"{'02' if full_rgb_list else '01'}_inv_s_g_pred", _vis_tonemap(inv_s_g_pred)),
+            (f"{'03' if full_rgb_list else '02'}_inv_s_g_gt", _vis_tonemap(inv_s_g_gt)),
+            (f"{'04' if full_rgb_list else '03'}_a_d_pred", _vis_tonemap(predictions['a_d'][i:i+1])),
+            (f"{'05' if full_rgb_list else '04'}_a_d_gt", _vis_tonemap(targets['A_d_star'][i:i+1])),
+            (f"{'06' if full_rgb_list else '05'}_inv_s_d_pred", _vis_tonemap(inv_s_d_pred)),
+            (f"{'07' if full_rgb_list else '06'}_inv_s_d_gt", _vis_tonemap(inv_s_d_gt)),
+        ])
+
         target_hw = None
-        for name, fn in tile_defs:
+        for name, tile in sample_tiles:
             try:
-                tile = fn(i)
                 if tile is None:
                     continue
                 norm_tile = _normalize_tile(tile, target_hw=target_hw)
@@ -396,24 +469,35 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
                 named_tiles.append((name, norm_tile))
             except Exception as exc:
                 print(f"[warn][val step {global_step}] skipped tile '{name}' for sample_{i}: {exc}")
+
         if not named_tiles:
             continue
 
-        tiles_cpu = [
-            t.detach().to(device='cpu', dtype=torch.float32)
-            for _, t in named_tiles
-        ]
-        strip = torch.cat(tiles_cpu, dim=2)
-        writer.add_image(f'val/examples/sample_{i}', strip, global_step)
+        strip = torch.cat([t for _, t in named_tiles], dim=2)
+        writer.add_image(f'{example_tag}/sample_{i}', strip, global_step)
 
 
-def validate(model, dataloader, criterion, device, global_step, writer, val_example_images=2):
+def validate(model, dataloader, criterion, device, global_step, writer, val_example_images=2, val_example_indices=None):
     """
     Validation for ablation comparison on fixed Hypersim val split.
     Logs both losses and per-decoder metrics from scale-matched targets.
+    
+    Args:
+        val_example_indices: list of global sample indices to log, e.g., [100, 110, 120].
+                           If provided, val_example_images is ignored.
     """
     model.eval()
-    total_loss = {'loss_a': 0.0, 'loss_b': 0.0, 'loss_c': 0.0, 'loss_d': 0.0, 'loss_total': 0.0}
+    total_loss = {
+        'loss_a': 0.0,
+        'loss_b': 0.0,
+        'loss_c': 0.0,
+        'loss_d': 0.0,
+        'loss_total': 0.0,
+        'loss_c_l1': 0.0,
+        'loss_c_msg': 0.0,
+        'loss_c_perceptual': 0.0,
+        'loss_c_tv': 0.0,
+    }
     total_metric = {
         's_g_lmse': 0.0,
         's_g_rmse': 0.0,
@@ -428,6 +512,17 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
     }
     n_samples = 0
     n_s_d_samples = 0
+    
+    # Prepare sample collection for visualization
+    if val_example_indices is None:
+        val_example_indices = []
+    val_example_indices = list(val_example_indices) if val_example_indices else []
+    use_indices = len(val_example_indices) > 0
+    use_count = not use_indices
+    
+    # Maps global sample index to (batch_idx, sample_in_batch)
+    indices_to_collect = {idx: None for idx in val_example_indices}
+    collected_samples = {}  # Maps global index to (rgb, predictions, targets)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation')):
@@ -447,7 +542,20 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
             targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
 
-            if batch_idx == 0:
+            # Collect samples at specified indices
+            batch_size = rgb.shape[0]
+            if use_indices:
+                for i in range(batch_size):
+                    global_idx = batch_idx * dataloader.batch_size + i
+                    if global_idx in indices_to_collect:
+                        collected_samples[global_idx] = {
+                            'rgb': rgb[i:i+1],
+                            'predictions': predictions,
+                            'targets': targets,
+                        }
+            
+            # For count-based mode, log from first batch only
+            if use_count and batch_idx == 0:
                 _log_val_examples(
                     writer,
                     global_step,
@@ -460,7 +568,8 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
 
             losses = criterion(predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg))
             for k in total_loss:
-                total_loss[k] += losses[k].item()
+                if k in losses:
+                    total_loss[k] += losses[k].item()
 
             # Reconstruct target-space shading tensors for requested metrics.
             s_g_star = 1.0 / (targets['D_g_star'] + 1e-6) - 1.0
@@ -520,10 +629,26 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     n_s_d_samples += 1
                 n_samples += 1
 
+    # Log collected samples for index-based visualization
+    if use_indices and collected_samples:
+        # Sort by global index for consistent logging order
+        sorted_indices = sorted(collected_samples.keys())
+        for global_idx in sorted_indices:
+            sample = collected_samples[global_idx]
+            _log_val_examples(
+                writer,
+                global_step,
+                sample['rgb'],
+                sample['predictions'],
+                sample['targets'],
+                max_items=1,
+                full_rgb_list=None,
+                sample_index=global_idx,
+            )
+
     denom_loss = max(len(dataloader), 1)
     for k in total_loss:
         total_loss[k] /= denom_loss
-        writer.add_scalar(f'val/{k}', total_loss[k], global_step)
 
     denom_metric = max(n_samples, 1)
     for k in total_metric:
@@ -531,7 +656,11 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             total_metric[k] /= max(n_s_d_samples, 1)
         else:
             total_metric[k] /= denom_metric
-        writer.add_scalar(f'val/{k}', total_metric[k], global_step)
+
+    val_out = {}
+    val_out.update(total_loss)
+    val_out.update(total_metric)
+    _log_ordered_scalars(writer, val_out, global_step)
 
 
     # Return combined dict for terminal reporting.
@@ -713,6 +842,7 @@ def main():
     val_interval_iters = int(config['train'].get('val_interval_iters', 2000))
     ckpt_interval_iters = int(config['train'].get('checkpoint_interval_iters', 5000))
     val_example_images = int(config['train'].get('val_example_images', 2))
+    val_example_indices = config['train'].get('val_example_indices', [])
 
     start_step = 0
     resume_path = _resolve_resume_path(args.resume, args.auto_resume, ckpt_dir)
@@ -779,8 +909,7 @@ def main():
             running[k] += losses[k].item()
 
         if step % int(config['train']['log_interval']) == 0:
-            for k, v in losses.items():
-                writer.add_scalar(f'train/{k}', v.item(), step)
+            _log_ordered_scalars(writer, losses, step)
 
         if (step + 1) % val_interval_iters == 0:
             torch.cuda.empty_cache()
@@ -792,6 +921,7 @@ def main():
                 step + 1,
                 writer,
                 val_example_images=val_example_images,
+                val_example_indices=val_example_indices,
             )
             print(f"[{step+1}] val: " + ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()]))
 

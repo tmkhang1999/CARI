@@ -118,36 +118,57 @@ class FlexibleLoss(nn.Module):
         return mse + self.lambda_msg * msg
 
     def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None):
-        """
-        Dec C loss: Diffuse albedo with multiple terms.
-        L_C = M_albedo * ( ||A_d − A_d*||₁ + λ_msg·MSG + λ_TV·TV_walls
-                            + λ_p·L_perceptual + λ_d·DSSIM )
-        """
+        """Dec C total loss (kept for backward compatibility)."""
+        total, _ = self.loss_c_with_details(
+            a_d_pred,
+            A_d_star,
+            valid_mask,
+            m_albedo,
+            seg_map,
+        )
+        return total
+
+    def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None):
+        """Dec C loss with per-term details for logging/debugging."""
+        zero = a_d_pred.new_tensor(0.0)
         if m_albedo.sum() == 0:
-            return torch.tensor(0.0, device=a_d_pred.device)
+            return zero, {
+                'loss_c_l1': zero,
+                'loss_c_msg': zero,
+                'loss_c_tv': zero,
+                'loss_c_perceptual': zero,
+                'loss_c_dssim': zero,
+                'loss_c_mask_ratio': zero,
+            }
 
         route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
-        mask_ratio = m_albedo.sum() / m_albedo.numel()
+        mask_ratio = (m_albedo.sum() / m_albedo.numel()).to(a_d_pred.dtype)
 
         l1 = self._masked_l1(a_d_pred, A_d_star, mask)
         msg = self._masked_msg(a_d_pred, A_d_star, mask_ratio)
 
-        # Semantic TV (only if seg_map provided)
-        tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None \
-            else torch.tensor(0.0, device=a_d_pred.device)
-
-        # Perceptual loss (operates on full images, masked implicitly by content)
+        tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
         perceptual = self.perceptual_loss(a_d_pred, A_d_star)
-
-        # DSSIM
         dssim = self._compute_dssim(a_d_pred, A_d_star)
 
-        return mask_ratio * (l1
-                             + self.lambda_msg * msg
-                             + self.lambda_tv * tv
-                             + self.lambda_perceptual * perceptual
-                             + self.lambda_dssim * dssim)
+        total = mask_ratio * (
+            l1
+            + self.lambda_msg * msg
+            + self.lambda_tv * tv
+            + self.lambda_perceptual * perceptual
+            + self.lambda_dssim * dssim
+        )
+
+        details = {
+            'loss_c_l1': l1.detach(),
+            'loss_c_msg': msg.detach(),
+            'loss_c_tv': tv.detach(),
+            'loss_c_perceptual': perceptual.detach(),
+            'loss_c_dssim': dssim.detach(),
+            'loss_c_mask_ratio': mask_ratio.detach(),
+        }
+        return total, details
 
     def loss_d(self, s_d_pred, pi_star, valid_mask, m_diffuse):
         """
@@ -195,21 +216,38 @@ class FlexibleLoss(nn.Module):
         lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask) \
             if targets.get('xi_star') is not None else zero
 
-        lc = self.loss_c(predictions['a_d'], targets['A_d_star'],
-                         valid_mask, m_albedo, seg_map) \
-            if targets.get('A_d_star') is not None else zero
+        if targets.get('A_d_star') is not None:
+            lc, lc_details = self.loss_c_with_details(
+                predictions['a_d'],
+                targets['A_d_star'],
+                valid_mask,
+                m_albedo,
+                seg_map,
+            )
+        else:
+            lc = zero
+            lc_details = {
+                'loss_c_l1': zero,
+                'loss_c_msg': zero,
+                'loss_c_tv': zero,
+                'loss_c_perceptual': zero,
+                'loss_c_dssim': zero,
+                'loss_c_mask_ratio': zero,
+            }
 
         ld = self.loss_d(predictions['s_d'], targets['pi_star'],
                          valid_mask, m_diffuse) \
             if targets.get('pi_star') is not None else zero
 
-        return {
+        out = {
             'loss_a': la,
             'loss_b': lb,
             'loss_c': lc,
             'loss_d': ld,
             'loss_total': la + lb + lc + ld,
         }
+        out.update(lc_details)
+        return out
 
 
 if __name__ == '__main__':
