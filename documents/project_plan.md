@@ -415,10 +415,10 @@ Output: (N, out_ch, H, W)
 **Output activations by decoder:**
 | Dec | out_ch | activation | range |
 |-----|--------|-----------|-------|
-| A   | 1      | Softplus  | (0, ∞) → represents S_g in log-safe positive space |
+| A   | 1      | Sigmoid   | (0, 1) → inverse gray shading D_g = 1/(S_g+1) |
 | B   | 2      | Sigmoid   | (0, 1) → bounded xi ratio |
 | C   | 3      | Sigmoid   | (0, 1) → albedo is bounded by definition |
-| D   | 3      | Softplus  | (0, ∞) → unbounded HDR shading |
+| D   | 3      | Sigmoid   | (0, 1) → inverse diffuse shading pi = 1/(S_d+1) |
 
 ---
 
@@ -426,18 +426,18 @@ Output: (N, out_ch, H, W)
 
 **Version 1 (V1)** — uses `DecoderA/B/C/D` from `decoder.py`
 ```
-Dec A: Z (N,Z_ch,H/32)                                        → (N,1,H,W)  S_g
+Dec A: Z (N,Z_ch,H/32)                                        → (N,1,H,W)  D_g
 Dec B: cat[Z, BN_adapt(S_g)] (N,2·Z_ch,H/32)                 → (N,2,H,W)  xi
 Dec C: cat[Z, BN_adapt(S_c)] (N,2·Z_ch,H/32)                 → (N,3,H,W)  A_d
-Dec D: cat[Z, BN_adapt(S_c), BN_adapt(A_d)] (N,3·Z_ch,H/32)  → (N,3,H,W)  S_d
+Dec D: cat[Z, BN_adapt(S_c), BN_adapt(A_d)] (N,3·Z_ch,H/32)  → (N,3,H,W)  pi
 ```
 
 **Version 2 (V2)** — uses `ProgressiveDecoder`
 ```
-Dec A: Z, no extras                                            → (N,1,H,W)  S_g
+Dec A: Z, no extras                                            → (N,1,H,W)  D_g
 Dec B: Z, extras=[S_g_pyr[3](256), S_g_pyr[2](128), S_g_pyr[1](64)]
 Dec C: Z, extras=[S_c_pyr[3](512), S_c_pyr[2](256), S_c_pyr[1](128)]
-Dec D: Z, extras=[cat(S_c,A_d)_pyr=(1024,512,256)]
+Dec D: Z, extras=[cat(S_c,A_d)_pyr=(1024,512,256)]            → (N,3,H,W)  pi
 ```
 
 **Version 3 (V3)** — V2 + ResidualAttention in A and D
@@ -518,7 +518,6 @@ valid_mask: (N,1,H,W) bool; seg_map optional for SemanticTVLoss
 
 **Dec A — Gray Shading (L_A)**
 ```
-D_g_pred = 1 / (S_g_pred + 1)          ← inverse-space mapping inside loss
 mask = valid_mask                      ← always active on valid pixels
 
 L_A = masked_L1(D_g_pred, D_g_star, mask)
@@ -549,12 +548,13 @@ L_C = mask_ratio · (
 
 **Dec D — Diffuse Shading (L_D)**
 ```
-pi_pred = 1 / (S_d_pred + 1)           ← inverse-space mapping inside loss
 mask = valid_mask × m_diffuse
 
 L_D = masked_MSE(pi_pred, pi_star, mask)
     + λ_msg · L_MSG(pi_pred, pi_star) · (Σm_diffuse / N)
 ```
+Here `pi_pred` is Decoder D output directly (inverse shading map `D_d`, often denoted `π`),
+so both MSE and MSG are applied directly in inverse space without additional mapping.
 No reconstruction loss — avoids forcing Dec D to absorb specular residual R.
 
 **Total:** `L_total = L_A + L_B + L_C + L_D`
@@ -752,7 +752,31 @@ val/examples/sample_0, val/examples/sample_1
 
 ### 5.4 Evaluation Protocol
 
-Scale-invariant metrics (Careaga & Aksoy 2023): normalize by mean before computing.
+Based on CD-IID / Ordinal Shading, Dec A and Dec D are evaluated in inverse shading space directly.
+
+**1. Metric Space**
+- Dec A predicts `D_g` directly with Sigmoid, and GT is `D_g_star`.
+- Dec D predicts `pi` directly with Sigmoid, and GT is `pi_star`.
+- No prediction-side inversion is used in losses or metrics.
+
+**2. Scale-Invariant RMSE**
+- RMSE uses valid-pixel masking and independent mean normalization for prediction and GT.
+- Since shading is now bounded in inverse space `(0,1)`, no `shading_cap` masking is needed.
+
+**3. SSIM Methodology**
+- Bounded SSIM is used for all bounded outputs (`D_g`, `A_d`, `pi`).
+- Prediction and GT are clamped to `[0,1]`, invalid pixels are masked out, then SSIM is computed.
+- No HDR shared-scale normalization is needed in inverse space.
+
+**4. LMSE (Local Mean Squared Error)**
+LMSE uses sliding windows (e.g., 20x20, stride 10).
+- Patch normalization uses fixed `N = C × k^2`.
+- Patches with low signal energy (`L2 < 1e-3`) are skipped to avoid unstable normalization.
+
+**5. Visualization Note**
+- For human-readable debug images, inverse predictions/GT can be converted back to linear shading with `S = 1/D - 1` and tonemapped.
+- This conversion is for visualization only, not for metric computation.
+
 Benchmarks: Hypersim val split, MAW (real albedo), ARAP (OOD synthetic).
 
 ---

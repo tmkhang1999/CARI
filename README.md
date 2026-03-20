@@ -99,7 +99,7 @@ IR-IID/
 │   │   └── semantic_tv_loss.py    # TV on wall/floor/ceiling (NYU-40)
 │   ├── train_stage1.py            # scale_match() + compute_targets() + training loop
 │   ├── train_stage2.py
-│   └── eval.py
+│   └── eval_hypersim.py
 ├── tests/
 │   ├── test_models.py             # V1-V4 forward pass + module shape checks
 │   └── test_losses.py             # FlexibleLoss with scale-matched targets
@@ -135,7 +135,7 @@ bash scripts/train_stage1.sh
 
 **4. Evaluate a checkpoint**:
 ```bash
-torchrun src/eval.py --checkpoint checkpoints/checkpoint_epoch_10.pth
+torchrun src/eval_hypersim.py --checkpoint checkpoints/checkpoint_epoch_10.pth
 ```
 The evaluation script now prints aggregate metrics to stdout only (no TensorBoard scalars/images and no saved eval preview images).
 
