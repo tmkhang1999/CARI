@@ -17,10 +17,10 @@ class IntrinsicDecompositionV1(nn.Module):
     Version 1: Bottleneck-only cross-decoder architecture.
 
     Pipeline:
-        Z + F_img                                -> Dec A -> S_g
+        Z + F_img                                -> Dec A -> D_g
         Z + BottleneckAdapter(S_g) + F_img       -> Dec B -> xi (chroma)
         Z + BottleneckAdapter(S_c) + F_img       -> Dec C -> A_d
-        Z + BottleneckAdapter(S_c, A_d) + F_img  -> Dec D -> S_d
+        Z + BottleneckAdapter(S_c, A_d) + F_img  -> Dec D -> pi
     """
     def __init__(self, config):
         super().__init__()
@@ -86,19 +86,22 @@ class IntrinsicDecompositionV1(nn.Module):
 
         Returns:
             Dictionary with keys:
-                s_g: (N, 1, H, W) gray shading
+                s_g: (N, 1, H, W) inverse gray shading D_g
                 xi: (N, 2, H, W) bounded chroma ratio
                 c: (N, 3, H, W) chroma map (converted from xi)
                 s_c: (N, 3, H, W) colorful shading = S_g * C
                 a_d: (N, 3, H, W) diffuse albedo
-                s_d: (N, 3, H, W) diffuse shading
+                s_d: (N, 3, H, W) inverse diffuse shading pi
         """
         # Encode image
         z_global, skip_features = self.image_encoder(rgb)
         self._validate_bottleneck_shape(z_global)
 
-        # Dec A: Gray shading
-        s_g = self.decoder_a(z_global, skip_features)
+        # Dec A: inverse gray shading D_g
+        d_g = self.decoder_a(z_global, skip_features)
+
+        # Convert to linear S_g for the cascade branches (Dec B/C/D).
+        s_g = 1.0 / (d_g + 1e-6) - 1.0
 
         # Adapt S_g to bottleneck
         s_g_adapted = self.adapter_s_g(s_g)
@@ -108,7 +111,7 @@ class IntrinsicDecompositionV1(nn.Module):
         xi = self.decoder_b(z_b, skip_features)
 
         # Convert xi to chroma C: C = [C_R/G, C_B/G]
-        # xi = [1/(C_R/G+1), 1/(C_B/G+1)] -> C_R/G = (1-xi)/xi
+        # xi = [1/(C_R/G+1), 1/(C_B/G+1)] -> xi = 1/(C+1) -> C+1 = 1/xi -> C = 1/xi - 1
         eps = 1e-7
         c_rg = (1 - xi[:, 0:1, :, :]) / (xi[:, 0:1, :, :] + eps)
         c_bg = (1 - xi[:, 1:2, :, :]) / (xi[:, 1:2, :, :] + eps)
@@ -132,16 +135,16 @@ class IntrinsicDecompositionV1(nn.Module):
         a_d_adapted = self.adapter_a_d(a_d.detach())
         z_d = torch.cat([z_global, s_c_adapted, a_d_adapted], dim=1)
 
-        # Dec D: Diffuse shading
-        s_d = self.decoder_d(z_d, skip_features)
+        # Dec D: inverse diffuse shading pi
+        pi = self.decoder_d(z_d, skip_features)
 
         return {
-            's_g': s_g,
+            'd_g': d_g,
             'xi': xi,
             'c': c,
             's_c': s_c,
             'a_d': a_d,
-            's_d': s_d
+            's_d': pi
         }
 
 

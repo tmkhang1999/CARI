@@ -28,7 +28,8 @@ class IntrinsicDecompositionV3(IntrinsicDecompositionV2):
             normals = torch.zeros_like(rgb)
         normal_feats = self.normal_encoder(normals)
 
-        s_g = self.decoder_a(
+        # Dec A outputs inverse shading D_g in (0,1) for supervision.
+        d_g = self.decoder_a(
             z_global,
             skip_features,
             stage_ops=[
@@ -37,6 +38,8 @@ class IntrinsicDecompositionV3(IntrinsicDecompositionV2):
                 lambda x: self.attn_a1(x, normal_feats[1]),
             ],
         )
+        # Cascade branches require linear shading S_g.
+        s_g = 1.0 / (d_g + 1e-6) - 1.0
 
         s_g_pyr = self.shading_adapter(s_g)
         xi = self.decoder_b(
@@ -57,7 +60,7 @@ class IntrinsicDecompositionV3(IntrinsicDecompositionV2):
 
         # Keep Dec D supervision from directly updating Dec C through albedo guidance.
         a_d_pyr = self.albedo_adapter(a_d.detach())
-        s_d = self.decoder_d(
+        pi = self.decoder_d(
             z_global,
             skip_features,
             extra_features=[
@@ -73,10 +76,10 @@ class IntrinsicDecompositionV3(IntrinsicDecompositionV2):
         )
 
         return {
-            "s_g": s_g,
+            "d_g": d_g,
             "xi": xi,
             "c": c,
             "s_c": s_c,
             "a_d": a_d,
-            "s_d": s_d,
+            "s_d": pi,
         }

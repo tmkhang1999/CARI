@@ -91,14 +91,11 @@ class FlexibleLoss(nn.Module):
     # ------------------------------------------------------------------
     # Per-decoder losses
     # ------------------------------------------------------------------
-    def loss_a(self, s_g_pred, D_g_star, valid_mask):
+    def loss_a(self, D_g_pred, D_g_star, valid_mask):
         """
         Dec A loss: Gray shading in inverse space.
         Always active on valid pixels when pseudo-GT albedo is available.
         """
-        # Map prediction to inverse space
-        D_g_pred = 1.0 / (s_g_pred + 1.0)
-
         mask = valid_mask.float()
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
         # MSG is global by construction; weight by valid-pixel fraction.
@@ -170,17 +167,16 @@ class FlexibleLoss(nn.Module):
         }
         return total, details
 
-    def loss_d(self, s_d_pred, pi_star, valid_mask, m_diffuse):
+    def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
         L_D = M_diffuse * ( ||π − π*||₂² + λ_msg * L_MSG(π, π*) )
+        Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
+        with no additional conversion.
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
-            return torch.tensor(0.0, device=s_d_pred.device)
-
-        # Map prediction to inverse space
-        pi_pred = 1.0 / (s_d_pred + 1.0)
+            return torch.tensor(0.0, device=pi_pred.device)
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
@@ -208,9 +204,9 @@ class FlexibleLoss(nn.Module):
         Returns:
             dict with individual losses and total loss.
         """
-        zero = predictions['s_g'].new_tensor(0.0)
+        zero = predictions['d_g'].new_tensor(0.0)
 
-        la = self.loss_a(predictions['s_g'], targets['D_g_star'], valid_mask) \
+        la = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask) \
             if targets.get('D_g_star') is not None else zero
 
         lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask) \

@@ -20,7 +20,7 @@ class ProgressiveDecoder(nn.Module):
         skip_channels,
         out_channels,
         stage_extra_channels=(0, 0, 0),
-        activation="softplus",
+        activation="sigmoid",
     ):
         super().__init__()
         e3, e2, e1 = stage_extra_channels

@@ -82,7 +82,7 @@ class ShadingAdapter(nn.Module):
     def forward(self, s_g):
         """
         Args:
-            s_g: (N, 1, H, W) gray shading prediction
+            s_g: (N, 1, H, W) linear gray shading S_g for cascade features
         Returns:
             List of 4 tensors at scales [H/2, H/4, H/8, H/16]
         """

@@ -25,7 +25,7 @@ class DecoderBlock(nn.Module):
 
 class DecoderA(nn.Module):
     """
-    Decoder A: Predicts gray shading S_g (1 channel).
+    Decoder A: Predicts inverse gray shading D_g (1 channel).
     Input: Z_global + F_img skips
     Version 1: No attention, raw skip concat
     """
@@ -53,7 +53,7 @@ class DecoderA(nn.Module):
             nn.Conv2d(96, 32, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 1, kernel_size=1),
-            nn.Softplus()  # Ensure positive shading
+            nn.Sigmoid()  # Inverse shading D_g in (0, 1)
         )
 
     def forward(self, z, skip_features):
@@ -62,7 +62,7 @@ class DecoderA(nn.Module):
             z: (N, z_channels, H/32, W/32) bottleneck
             skip_features: List of 4 tensors [H/4, H/8, H/16, H/32]
         Returns:
-            s_g: (N, 1, H, W) gray shading prediction
+            d_g: (N, 1, H, W) inverse gray shading prediction
         """
         # Stage 3: H/32 -> H/16
         x = self.dec3(z)
@@ -83,9 +83,9 @@ class DecoderA(nn.Module):
         x = nn.functional.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
 
         # Predict
-        s_g = self.head(x)
+        d_g = self.head(x)
 
-        return s_g
+        return d_g
 
 
 class DecoderB(nn.Module):
@@ -219,7 +219,7 @@ class DecoderC(nn.Module):
 
 class DecoderD(nn.Module):
     """
-    Decoder D: Predicts diffuse shading S_d (3 channels, unbounded HDR).
+    Decoder D: Predicts inverse diffuse shading pi (3 channels, bounded).
     Input: Z_global + F_img skips + S_c_adapted + A_d_adapted
     Version 1: Bottleneck adapters only
     """
@@ -241,12 +241,12 @@ class DecoderD(nn.Module):
         in_ch0 = 192 + skip_channels[0]
         self.dec0 = DecoderBlock(in_ch0, 96)
 
-        # Final prediction head for unbounded HDR shading
+        # Final prediction head for inverse diffuse shading
         self.head = nn.Sequential(
             nn.Conv2d(96, 32, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 3, kernel_size=1),
-            nn.Softplus()  # Ensure positive shading
+            nn.Sigmoid()  # Inverse shading pi in (0, 1)
         )
 
     def forward(self, z_combined, skip_features):
@@ -255,7 +255,7 @@ class DecoderD(nn.Module):
             z_combined: (N, z_channels*3, H/32, W/32) z + adapted S_c + adapted A_d
             skip_features: List of 4 tensors
         Returns:
-            s_d: (N, 3, H, W) diffuse shading (unbounded HDR)
+            pi: (N, 3, H, W) inverse diffuse shading pi in (0, 1)
         """
         # Stage 3
         x = self.dec3(z_combined)
@@ -276,9 +276,9 @@ class DecoderD(nn.Module):
         x = nn.functional.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
 
         # Predict
-        s_d = self.head(x)
+        pi = self.head(x)
 
-        return s_d
+        return pi
 
 
 if __name__ == '__main__':
@@ -292,8 +292,8 @@ if __name__ == '__main__':
     ]
 
     dec_a = DecoderA()
-    s_g = dec_a(z, skips)
-    print(f"Dec A output (S_g): {s_g.shape}")
+    d_g = dec_a(z, skips)
+    print(f"Dec A output (D_g): {d_g.shape}")
 
     z_b = torch.randn(2, 2048, 12, 12)  # z + adapted S_g
     dec_b = DecoderB()

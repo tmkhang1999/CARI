@@ -29,7 +29,7 @@ class IntrinsicDecompositionV2(nn.Module):
             skip_channels=skip_channels,
             out_channels=1,
             stage_extra_channels=(0, 0, 0),
-            activation="softplus",
+            activation="sigmoid",
         )
         self.decoder_b = ProgressiveDecoder(
             in_channels=z_channels,
@@ -50,7 +50,7 @@ class IntrinsicDecompositionV2(nn.Module):
             skip_channels=skip_channels,
             out_channels=3,
             stage_extra_channels=(1024, 512, 256),
-            activation="softplus",
+            activation="sigmoid",
         )
 
         self.shading_adapter = ShadingAdapter()
@@ -67,7 +67,10 @@ class IntrinsicDecompositionV2(nn.Module):
     def forward(self, rgb, m_diffuse=None, **kwargs):
         z_global, skip_features = self.image_encoder(rgb)
 
-        s_g = self.decoder_a(z_global, skip_features)
+        # Dec A outputs inverse shading D_g in (0,1) for supervision.
+        d_g = self.decoder_a(z_global, skip_features)
+        # Cascade branches require linear shading S_g.
+        s_g = 1.0 / (d_g + 1e-6) - 1.0
 
         s_g_pyr = self.shading_adapter(s_g)
         xi = self.decoder_b(
@@ -88,7 +91,7 @@ class IntrinsicDecompositionV2(nn.Module):
 
         # Dec D uses detached albedo guidance to avoid coupling loss_d into Dec C.
         a_d_pyr = self.albedo_adapter(a_d.detach())
-        s_d = self.decoder_d(
+        pi = self.decoder_d(
             z_global,
             skip_features,
             extra_features=[
@@ -99,10 +102,10 @@ class IntrinsicDecompositionV2(nn.Module):
         )
 
         return {
-            "s_g": s_g,
+            "d_g": d_g,
             "xi": xi,
             "c": c,
             "s_c": s_c,
             "a_d": a_d,
-            "s_d": s_d,
+            "s_d": pi,
         }
