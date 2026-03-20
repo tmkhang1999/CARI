@@ -272,36 +272,41 @@ def _apply_diffuse_detach(predictions, m_diffuse):
     return predictions
 
 
-def _masked_norm(pred, target, valid_mask, eps=1e-7):
-    v = valid_mask.bool().expand_as(pred)
-    p = pred[v]
-    t = target[v]
+def _masked_scale_invariant_rmse(pred, target, valid_mask, eps=1e-7):
+    """
+    Scale-invariant RMSE with outlier masking.
+    Normalizes by mean (not median) to match standard definition, but heavily relies on masking outliers.
+    """
+    mask = valid_mask.bool().expand_as(pred)
+
+    p = pred[mask]
+    t = target[mask]
     if p.numel() == 0:
-        return None, None
+        return 0.0
     p = p / (p.mean() + eps)
     t = t / (t.mean() + eps)
-    return p, t
-
-
-def _masked_scale_invariant_rmse(pred, target, valid_mask):
-    p, t = _masked_norm(pred, target, valid_mask)
-    if p is None:
-        return 0.0
     return float(torch.sqrt(((p - t) ** 2).mean()).item())
 
 
-def compute_ssim(pred, target):
-    eps = 1e-7
-    pred_norm = pred / (pred.mean() + eps)
-    target_norm = target / (target.mean() + eps)
-    pred_np = pred_norm.detach().cpu().numpy()
-    target_np = target_norm.detach().cpu().numpy()
+def compute_ssim_bounded(pred, target, valid_mask):
+    """SSIM for bounded outputs (e.g., albedo in [0,1])."""
+    pred_norm = torch.clamp(pred, 0.0, 1.0)
+    target_norm = torch.clamp(target, 0.0, 1.0)
 
-    vals = []
-    for c in range(pred_np.shape[0]):
-        data_range = float(max(target_np[c].max() - target_np[c].min(), 1e-6))
-        vals.append(ssim(target_np[c], pred_np[c], data_range=data_range))
-    return float(np.mean(vals))
+    mask_f = valid_mask.float().expand_as(target_norm)
+    pred_norm = pred_norm * mask_f
+    target_norm = target_norm * mask_f
+
+    fn_p = pred_norm.squeeze().detach().cpu().numpy()
+    fn_t = target_norm.squeeze().detach().cpu().numpy()
+
+    if fn_p.ndim == 3:
+        vals = []
+        for c in range(fn_p.shape[0]):
+            vals.append(ssim(fn_t[c], fn_p[c], data_range=1.0))
+        return float(np.mean(vals))
+    return float(ssim(fn_t, fn_p, data_range=1.0))
+
 
 
 def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid_ratio=0.5):
@@ -337,17 +342,25 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     if not valid_patch_mask.any():
         return torch.tensor(0.0, device=pred.device)
 
-    # 4. Normalize patches (Mean Squared Magnitude = 1)
-    # MSM(x) = sum(x^2)/N. For MSM=1, sum(x^2)=N.
-    # So we scale by sqrt(N) / norm2(x).
+    # Revert to fixed N but ensure valid_patch_mask filters properly
     N = float(C * k2)
     sqrt_N = N ** 0.5
 
-    p_norm = torch.norm(p_u, p=2, dim=1, keepdim=True) + 1e-7
-    t_norm = torch.norm(t_u, p=2, dim=1, keepdim=True) + 1e-7
+    # Only normalize patches where BOTH pred and target have sufficient signal
+    p_energy = torch.norm(p_u, p=2, dim=1, keepdim=True)
+    t_energy = torch.norm(t_u, p=2, dim=1, keepdim=True)
 
-    p_sc = (p_u / p_norm) * sqrt_N
-    t_sc = (t_u / t_norm) * sqrt_N
+    # Skip patches where either has near-zero energy (all-invalid or flat)
+    min_energy = 1e-3
+    has_signal = (p_energy.squeeze(1) > min_energy) & \
+                 (t_energy.squeeze(1) > min_energy) & \
+                 valid_patch_mask
+
+    if not has_signal.any():
+        return torch.tensor(0.0, device=pred.device)
+
+    p_sc = (p_u / (p_energy + 1e-7)) * sqrt_N
+    t_sc = (t_u / (t_energy + 1e-7)) * sqrt_N
 
     # 5. Compute MSE per patch
     # MSE = mean((p - t)^2)
@@ -356,7 +369,7 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
 
     # 6. Average over valid patches
     # Flatten batch and L
-    mse_flat = mse_per_patch[valid_patch_mask]
+    mse_flat = mse_per_patch[has_signal]
     return mse_flat.mean()
 
 
@@ -374,19 +387,58 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     import torchvision.utils as vutils
     from PIL import Image, ImageDraw, ImageFont
 
-    inv_s_g_pred = 1.0 / (preds["s_g"] + 1.0 + 1e-6)
-    inv_s_g_gt = gts["D_g_star"]
-    inv_s_d_pred = 1.0 / (preds["s_d"] + 1.0 + 1e-6)
-    inv_s_d_gt = gts["pi_star"]
+    def gamma_correct(x):
+        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3)
 
+    # 1. Albedo via Gamma Correction
+    a_d_pred_vis = gamma_correct(preds["a_d"])
+    a_d_gt_vis = gamma_correct(gts["A_d_star"])
+
+    # 2. Shading via Inverse Domain Tonemapping (1 - D)
+    s_g_pred_vis = 1.0 - preds["d_g"]
+    s_g_gt_vis = 1.0 - gts["D_g_star"]
+    s_d_pred_vis = 1.0 - preds["s_d"]
+    s_d_gt_vis = 1.0 - gts["pi_star"]
+
+    # 3. Colorful Shading (S_c) GT and Pred via Inverse Domain
+    s_g_gt_linear = 1.0 / (gts["D_g_star"] + 1e-6) - 1.0
+    c_rg_gt = 1.0 / (gts["xi_star"][:, 0:1] + 1e-6) - 1.0
+    c_bg_gt = 1.0 / (gts["xi_star"][:, 1:2] + 1e-6) - 1.0
+    s_c_gt_linear = torch.cat([c_rg_gt * s_g_gt_linear, s_g_gt_linear, c_bg_gt * s_g_gt_linear], dim=1)
+    s_c_gt_vis = 1.0 - (1.0 / (s_c_gt_linear + 1.0))
+
+    s_g_pred_linear = 1.0 / (preds["d_g"] + 1e-6) - 1.0
+    if "s_c" in preds:
+        s_c_pred_linear = 1.0 / (preds["s_c"] + 1e-6) - 1.0
+    elif "xi" in preds:
+        c_rg_pred = 1.0 / (preds["xi"][:, 0:1] + 1e-6) - 1.0
+        c_bg_pred = 1.0 / (preds["xi"][:, 1:2] + 1e-6) - 1.0
+        s_c_pred_linear = torch.cat([c_rg_pred * s_g_pred_linear, s_g_pred_linear, c_bg_pred * s_g_pred_linear], dim=1)
+    else:
+        s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
+
+    s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
+
+    # 4. & 5. Residuals: Positive (Specularity) and Negative (Saturation)
+    s_d_pred_linear = 1.0 / (preds["s_d"] + 1e-6) - 1.0
+    recon_diffuse = preds["a_d"] * s_d_pred_linear
+    pos_res_pred = torch.clamp(rgb - recon_diffuse, min=0.0)
+    neg_res_pred = torch.clamp(recon_diffuse - rgb, min=0.0)
+
+    # Note: s_g, s_d, s_c and a_d are already transformed to [0,1].
+    # Residuals and original RGB are still in linear unbounded space, so use _tonemap_vis
     titled_tiles = [
         ("Input tonemapped RGB", _tonemap_vis(rgb)),
-        ("Inverse S_g Pred", _tonemap_vis(inv_s_g_pred)),
-        ("Inverse S_g GT", _tonemap_vis(inv_s_g_gt)),
-        ("Albedo Pred", _tonemap_vis(preds["a_d"])),
-        ("Albedo GT", _tonemap_vis(gts["A_d_star"])),
-        ("Inverse S_d Pred", _tonemap_vis(inv_s_d_pred)),
-        ("Inverse S_d GT", _tonemap_vis(inv_s_d_gt)),
+        ("S_g Pred", torch.clamp(s_g_pred_vis, 0.0, 1.0)),
+        ("S_g GT", torch.clamp(s_g_gt_vis, 0.0, 1.0)),
+        ("Colorful S_c Pred", torch.clamp(s_c_pred_vis, 0.0, 1.0)),
+        ("Colorful S_c GT", torch.clamp(s_c_gt_vis, 0.0, 1.0)),
+        ("Albedo Pred", _tonemap_vis(a_d_pred_vis)),
+        ("Albedo GT", _tonemap_vis(a_d_gt_vis)),
+        ("S_d Pred", torch.clamp(s_d_pred_vis, 0.0, 1.0)),
+        ("S_d GT", torch.clamp(s_d_gt_vis, 0.0, 1.0)),
+        ("Positive Residual (R+)", _tonemap_vis(pos_res_pred)),
+        ("Negative Residual (R-)", _tonemap_vis(neg_res_pred)),
     ]
 
     tiles = []
@@ -398,6 +450,9 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     for title, tile in titled_tiles:
         tile = tile if tile.ndim == 3 else tile[0]
         c, h, w = tile.shape
+        if c == 1:
+            tile = tile.repeat(3, 1, 1)
+            c = 3
         canvas = torch.ones((c, h + footer_h, w), dtype=tile.dtype, device=tile.device)
         canvas[:, :h, :] = tile
 
@@ -509,20 +564,24 @@ def main():
     with torch.no_grad():
         targets = compute_targets(predictions, batch["rgb"], batch["albedo_raw"], batch["valid_mask"])
 
-    s_g_gt = 1.0 / (targets["D_g_star"] + 1e-6) - 1.0
-    s_d_gt = 1.0 / (targets["pi_star"] + 1e-6) - 1.0
+    # Compute metrics in inverse shading space (bounded).
+    d_g_pred = predictions["d_g"]
+    pi_pred = predictions["s_d"]
+    d_g_gt = targets["D_g_star"]
+    pi_gt = targets["pi_star"]
+
     valid_mask = batch["valid_mask"]
 
     metrics = {
-        "s_g_lmse": float(_compute_lmse(predictions["s_g"], s_g_gt, valid_mask).item()),
-        "s_g_rmse": _masked_scale_invariant_rmse(predictions["s_g"], s_g_gt, valid_mask),
-        "s_g_ssim": compute_ssim(predictions["s_g"][0], s_g_gt[0]),
+        "s_g_lmse": float(_compute_lmse(d_g_pred, d_g_gt, valid_mask).item()),
+        "s_g_rmse": _masked_scale_invariant_rmse(d_g_pred, d_g_gt, valid_mask),
+        "s_g_ssim": compute_ssim_bounded(d_g_pred[0], d_g_gt[0], valid_mask[0]),
         "a_d_lmse": float(_compute_lmse(predictions["a_d"], targets["A_d_star"], valid_mask).item()),
         "a_d_rmse": _masked_scale_invariant_rmse(predictions["a_d"], targets["A_d_star"], valid_mask),
-        "a_d_ssim": compute_ssim(predictions["a_d"][0], targets["A_d_star"][0]),
-        "s_d_lmse": float(_compute_lmse(predictions["s_d"], s_d_gt, valid_mask).item()),
-        "s_d_rmse": _masked_scale_invariant_rmse(predictions["s_d"], s_d_gt, valid_mask),
-        "s_d_ssim": compute_ssim(predictions["s_d"][0], s_d_gt[0]),
+        "a_d_ssim": compute_ssim_bounded(predictions["a_d"][0], targets["A_d_star"][0], valid_mask[0]),
+        "s_d_lmse": float(_compute_lmse(pi_pred, pi_gt, valid_mask).item()),
+        "s_d_rmse": _masked_scale_invariant_rmse(pi_pred, pi_gt, valid_mask),
+        "s_d_ssim": compute_ssim_bounded(pi_pred[0], pi_gt[0], valid_mask[0]),
         "xi_mse": float((((predictions["xi"] - targets["xi_star"]) ** 2) * valid_mask.expand_as(predictions["xi"]).float()).sum().item() / (valid_mask.expand_as(predictions["xi"]).float().sum().item() + 1e-7)),
     }
 
@@ -559,3 +618,4 @@ def main():
 if __name__ == "__main__":
     main()
 
+# python src/infer_one_image.py --checkpoint checkpoints/v1/checkpoint_latest.pth --split val --sample_idx 0 --device cpu --output_dir outputs/infer_one_smoke

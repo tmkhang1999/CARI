@@ -100,8 +100,8 @@ def _masked_norm(pred, target, valid_mask, eps=1e-7):
     t = target[v]
     if p.numel() == 0:
         return None, None
-    p = p / (p.median() + eps)
-    t = t / (t.median() + eps)
+    p = p / (p.mean() + eps)
+    t = t / (t.mean() + eps)
     return p, t
 
 
@@ -122,7 +122,7 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     unfold = torch.nn.Unfold(kernel_size=window_size, stride=stride)
     p_u = unfold(pred)        # (B, C*K*K, L)
     t_u = unfold(target)      # (B, C*K*K, L)
-    m_u = unfold(valid_mask)  # (B, 1*K*K, L)
+    m_u = unfold(valid_mask.float())  # (B, 1*K*K, L)
 
     # 3. Identify valid patches (at least 50% valid pixels)
     k2 = window_size * window_size
@@ -132,28 +132,26 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     if not valid_patch_mask.any():
         return 0.0
 
-    # Revert to fixed N but ensure valid_patch_mask filters properly
+    # 4. Normalize patches (Mean Squared Magnitude = 1)
     N = float(C * k2)
     sqrt_N = N ** 0.5
 
-    # Only normalize patches where BOTH pred and target have sufficient signal
-    p_energy = torch.norm(p_u, p=2, dim=1, keepdim=True)
-    t_energy = torch.norm(t_u, p=2, dim=1, keepdim=True)
+    p_norm = torch.norm(p_u, p=2, dim=1, keepdim=True)
+    t_norm = torch.norm(t_u, p=2, dim=1, keepdim=True)
 
-    # Skip patches where either has near-zero energy (all-invalid or flat)
+    # Skip patches where either pred/target has near-zero energy.
     min_energy = 1e-3
-    has_signal = (p_energy.squeeze(1) > min_energy) & \
-                 (t_energy.squeeze(1) > min_energy) & \
+    has_signal = (p_norm.squeeze(1) > min_energy) & \
+                 (t_norm.squeeze(1) > min_energy) & \
                  valid_patch_mask
 
     if not has_signal.any():
         return 0.0
 
-    p_sc = (p_u / (p_energy + 1e-7)) * sqrt_N
-    t_sc = (t_u / (t_energy + 1e-7)) * sqrt_N
+    p_sc = (p_u / (p_norm + 1e-7)) * sqrt_N
+    t_sc = (t_u / (t_norm + 1e-7)) * sqrt_N
 
     # 5. Compute MSE per patch
-    # MSE = mean((p - t)^2)
     diff_sq = (p_sc - t_sc) ** 2
     mse_per_patch = diff_sq.mean(dim=1)  # (B, L)
 
@@ -162,21 +160,15 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     return float(mse_flat.mean().item())
 
 
-def _masked_scale_invariant_rmse(pred, target, valid_mask, eps=1e-7):
-    """Scale-invariant RMSE following Grosse et al. / Careaga & Aksoy."""
-    mask = valid_mask.bool().expand_as(pred)
-
-    p = pred[mask]
-    t = target[mask]
-    if p.numel() == 0:
+def compute_rmse(pred, target, valid_mask):
+    p, t = _masked_norm(pred, target, valid_mask)
+    if p is None:
         return 0.0
-    p = p / (p.mean() + eps)
-    t = t / (t.mean() + eps)
     return float(torch.sqrt(((p - t) ** 2).mean()).item())
 
 
 def compute_ssim_bounded(pred, target, valid_mask):
-    """SSIM for bounded outputs (e.g., albedo in [0,1])."""
+    """SSIM for bounded outputs in [0,1], masked on valid pixels."""
     pred_norm = torch.clamp(pred, 0.0, 1.0)
     target_norm = torch.clamp(target, 0.0, 1.0)
 
@@ -193,7 +185,6 @@ def compute_ssim_bounded(pred, target, valid_mask):
             vals.append(ssim(fn_t[c], fn_p[c], data_range=1.0))
         return float(np.mean(vals))
     return float(ssim(fn_t, fn_p, data_range=1.0))
-
 
 
 def build_stage1_model(model_cfg):
@@ -253,46 +244,26 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
             targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
 
-            # Evaluate shading in inverse space (bounded).
-            d_g_pred = predictions['d_g']
-            pi_pred = predictions['s_d']
-            d_g_gt = targets['D_g_star']
-            pi_gt = targets['pi_star']
-
-            if batch_idx == 0:
-                print(f"Sanity Check [Batch 0]:")
-                print(f"D_g_gt range: {d_g_gt.min().item():.4f} to {d_g_gt.max().item():.4f}")
-                print(f"D_g_star range: {targets['D_g_star'].min().item():.4f} to {targets['D_g_star'].max().item():.4f}")
+            # Evaluate shading directly in inverse space (model outputs D_g and pi).
+            inv_s_g_pred = predictions['d_g']
+            inv_s_d_pred = predictions['s_d']
+            inv_s_g_gt = targets['D_g_star']
+            inv_s_d_gt = targets['pi_star']
 
             for i in range(rgb.shape[0]):
-                vm = valid_mask[i:i+1] # (1, 1, H, W)
+                vm = valid_mask[i:i+1]
 
-                # Gray Shading (inverse D_g)
-                metrics['s_g_lmse'].append(_compute_lmse(d_g_pred[i:i+1], d_g_gt[i:i+1], vm))
-                metrics['s_g_rmse'].append(_masked_scale_invariant_rmse(
-                    d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                ))
-                metrics['s_g_ssim'].append(compute_ssim_bounded(
-                    d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                ))
+                metrics['s_g_lmse'].append(_compute_lmse(inv_s_g_pred[i:i+1], inv_s_g_gt[i:i+1], vm))
+                metrics['s_g_rmse'].append(compute_rmse(inv_s_g_pred[i:i+1], inv_s_g_gt[i:i+1], vm))
+                metrics['s_g_ssim'].append(compute_ssim_bounded(inv_s_g_pred[i:i+1], inv_s_g_gt[i:i+1], vm))
 
-                # Albedo (A_d)
                 metrics['a_d_lmse'].append(_compute_lmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
-                metrics['a_d_rmse'].append(_masked_scale_invariant_rmse(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
-                ))
-                metrics['a_d_ssim'].append(compute_ssim_bounded(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
-                ))
+                metrics['a_d_rmse'].append(compute_rmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
+                metrics['a_d_ssim'].append(compute_ssim_bounded(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
 
-                # Diffuse Shading (inverse pi)
-                metrics['s_d_lmse'].append(_compute_lmse(pi_pred[i:i+1], pi_gt[i:i+1], vm))
-                metrics['s_d_rmse'].append(_masked_scale_invariant_rmse(
-                    pi_pred[i:i+1], pi_gt[i:i+1], vm
-                ))
-                metrics['s_d_ssim'].append(compute_ssim_bounded(
-                    pi_pred[i:i+1], pi_gt[i:i+1], vm
-                ))
+                metrics['s_d_lmse'].append(_compute_lmse(inv_s_d_pred[i:i+1], inv_s_d_gt[i:i+1], vm))
+                metrics['s_d_rmse'].append(compute_rmse(inv_s_d_pred[i:i+1], inv_s_d_gt[i:i+1], vm))
+                metrics['s_d_ssim'].append(compute_ssim_bounded(inv_s_d_pred[i:i+1], inv_s_d_gt[i:i+1], vm))
 
                 xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
                 xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
@@ -374,7 +345,7 @@ def main():
     sample_count = metrics.get('s_g_lmse_count', 0)
     print(f"\nTotal samples evaluated: {sample_count}\n")
 
-    print("Gray Shading (inverse D_g):")
+    print("Gray Shading (inverse D_g = 1/(1+S_g)):")
     if 's_g_lmse' in metrics:
         print(f"  LMSE: {metrics['s_g_lmse']:.6f} (mean) | {metrics.get('s_g_lmse_min', 0):.6f} (min) | {metrics.get('s_g_lmse_max', 0):.6f} (max) ± {metrics.get('s_g_lmse_std', 0):.6f}")
         print(f"  RMSE: {metrics['s_g_rmse']:.6f} (mean) | {metrics.get('s_g_rmse_min', 0):.6f} (min) | {metrics.get('s_g_rmse_max', 0):.6f} (max) ± {metrics.get('s_g_rmse_std', 0):.6f}")
@@ -386,7 +357,7 @@ def main():
         print(f"  RMSE: {metrics['a_d_rmse']:.6f} (mean) | {metrics.get('a_d_rmse_min', 0):.6f} (min) | {metrics.get('a_d_rmse_max', 0):.6f} (max) ± {metrics.get('a_d_rmse_std', 0):.6f}")
         print(f"  SSIM: {metrics['a_d_ssim']:.4f} (mean) | {metrics.get('a_d_ssim_min', 0):.4f} (min) | {metrics.get('a_d_ssim_max', 0):.4f} (max) ± {metrics.get('a_d_ssim_std', 0):.4f}")
 
-    print("\nDiffuse Shading (inverse pi):")
+    print("\nDiffuse Shading (inverse pi = 1/(1+S_d)):")
     if 's_d_lmse' in metrics:
         print(f"  LMSE: {metrics['s_d_lmse']:.6f} (mean) | {metrics.get('s_d_lmse_min', 0):.6f} (min) | {metrics.get('s_d_lmse_max', 0):.6f} (max) ± {metrics.get('s_d_lmse_std', 0):.6f}")
         print(f"  RMSE: {metrics['s_d_rmse']:.6f} (mean) | {metrics.get('s_d_rmse_min', 0):.6f} (min) | {metrics.get('s_d_rmse_max', 0):.6f} (max) ± {metrics.get('s_d_rmse_std', 0):.6f}")
@@ -414,4 +385,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# python src/eval_hypersim.py --checkpoint checkpoints/v1/checkpoint_latest.pth --dataset hypersim --split val --eval_input_size 384 --batch_size 8 --num_workers 4 --cache_max_items 512
 

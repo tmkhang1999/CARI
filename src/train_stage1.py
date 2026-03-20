@@ -11,9 +11,11 @@ from pathlib import Path
 
 import torch
 import yaml
+import numpy as np
 from torch.utils.data import Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from skimage.metrics import structural_similarity as ssim
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -306,17 +308,25 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     if not valid_patch_mask.any():
         return torch.tensor(0.0, device=pred.device)
 
-    # 4. Normalize patches (Mean Squared Magnitude = 1)
-    # MSM(x) = sum(x^2)/N. For MSM=1, sum(x^2)=N.
-    # So we scale by sqrt(N) / norm2(x).
+    # Revert to fixed N but ensure valid_patch_mask filters properly
     N = float(C * k2)
     sqrt_N = N ** 0.5
 
-    p_norm = torch.norm(p_u, p=2, dim=1, keepdim=True) + 1e-7
-    t_norm = torch.norm(t_u, p=2, dim=1, keepdim=True) + 1e-7
+    # Only normalize patches where BOTH pred and target have sufficient signal
+    p_energy = torch.norm(p_u, p=2, dim=1, keepdim=True)
+    t_energy = torch.norm(t_u, p=2, dim=1, keepdim=True)
 
-    p_sc = (p_u / p_norm) * sqrt_N
-    t_sc = (t_u / t_norm) * sqrt_N
+    # Skip patches where either has near-zero energy (all-invalid or flat)
+    min_energy = 1e-3
+    has_signal = (p_energy.squeeze(1) > min_energy) & \
+                 (t_energy.squeeze(1) > min_energy) & \
+                 valid_patch_mask
+
+    if not has_signal.any():
+        return torch.tensor(0.0, device=pred.device)
+
+    p_sc = (p_u / (p_energy + 1e-7)) * sqrt_N
+    t_sc = (t_u / (t_energy + 1e-7)) * sqrt_N
 
     # 5. Compute MSE per patch
     # MSE = mean((p - t)^2)
@@ -325,15 +335,21 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
 
     # 6. Average over valid patches
     # Flatten batch and L
-    mse_flat = mse_per_patch[valid_patch_mask]
+    mse_flat = mse_per_patch[has_signal]
     return mse_flat.mean()
 
 
-def _masked_scale_invariant_rmse(pred, target, valid_mask, eps=1e-7):
-    """RMSE after per-sample mean normalization on valid pixels."""
-    v = valid_mask.bool().expand_as(pred)
-    p = pred[v]
-    t = target[v]
+def _masked_scale_invariant_rmse(pred, target, valid_mask, eps=1e-7, shading_cap=None):
+    """
+    RMSE after per-sample mean normalization on valid pixels, with optional shading outlier cap.
+    """
+    mask = valid_mask.bool().expand_as(pred)
+    if shading_cap is not None:
+        outlier_mask = (target <= shading_cap)
+        mask = mask & outlier_mask.expand_as(pred)
+
+    p = pred[mask]
+    t = target[mask]
     if p.numel() == 0:
         return pred.new_tensor(0.0)
     p = p / (p.mean() + eps)
@@ -345,6 +361,65 @@ def _ssim_from_dssim(criterion, pred, target):
     """Convert criterion DSSIM helper to SSIM in [0,1]."""
     dssim = criterion._compute_dssim(pred, target)
     return 1.0 - 2.0 * dssim
+
+
+def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
+    """SSIM for unbounded shading with mean + 2*std robust scale from GT."""
+    # Handle batch dim
+    if pred.ndim == 4:
+        pred = pred[0]
+        target = target[0]
+        valid_mask = valid_mask[0]
+
+    v = valid_mask.bool().expand_as(target)
+    if shading_cap is not None:
+        v = v & (target <= shading_cap)
+
+    gt_valid = target[v]
+    if gt_valid.numel() < 100:
+        return 0.0
+
+    # Use mean + 2*std as scale
+    gt_mean = gt_valid.mean()
+    gt_std  = gt_valid.std()
+    scale   = (gt_mean + 2.0 * gt_std).clamp_min(eps)
+
+    pred_n = torch.clamp(pred / scale, 0.0, 1.0)
+    tgt_n = torch.clamp(target / scale, 0.0, 1.0)
+
+    mask_f = valid_mask.float().expand_as(tgt_n)
+    pred_n = pred_n * mask_f
+    tgt_n = tgt_n * mask_f
+
+    pred_np = pred_n.detach().cpu().numpy()
+    tgt_np = tgt_n.detach().cpu().numpy()
+
+    if pred_np.ndim == 3:
+        vals = []
+        for c in range(pred_np.shape[0]):
+            vals.append(ssim(tgt_np[c], pred_np[c], data_range=1.0))
+        return float(np.mean(vals))
+    return float(ssim(tgt_np, pred_np, data_range=1.0))
+
+
+def _compute_ssim_bounded(pred, target, valid_mask):
+    """SSIM for bounded outputs (e.g., albedo)."""
+    pred_n = torch.clamp(pred, 0.0, 1.0)
+    tgt_n = torch.clamp(target, 0.0, 1.0)
+
+    mask_f = valid_mask.float().expand_as(tgt_n)
+    pred_n = pred_n * mask_f
+    tgt_n = tgt_n * mask_f
+
+    pred_np = pred_n.squeeze().detach().cpu().numpy()
+    tgt_np = tgt_n.squeeze().detach().cpu().numpy()
+
+    if pred_np.ndim == 3:
+        vals = []
+        for c in range(pred_np.shape[0]):
+            vals.append(ssim(tgt_np[c], pred_np[c], data_range=1.0))
+        return float(np.mean(vals))
+    return float(ssim(tgt_np, pred_np, data_range=1.0))
 
 
 def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
@@ -403,23 +478,20 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         return tile
 
     layout_names = [
-        '00_original_input',
         '01_cropped_input',
-        '02_inv_s_g_pred',
-        '03_inv_s_g_gt',
+        '02_s_g_pred',
+        '03_s_g_gt',
         '04_a_d_pred',
         '05_a_d_gt',
-        '06_inv_s_d_pred',
-        '07_inv_s_d_gt',
-    ] if full_rgb_list else [
-        '00_cropped_input',
-        '01_inv_s_g_pred',
-        '02_inv_s_g_gt',
-        '03_a_d_pred',
-        '04_a_d_gt',
-        '05_inv_s_d_pred',
-        '06_inv_s_d_gt',
+        '06_s_d_pred',
+        '07_s_d_gt',
+        '08_s_c_pred',
+        '09_s_c_gt',
+        '10_pos_res_pred',
+        '11_neg_res_pred',
     ]
+    if full_rgb_list:
+        layout_names.insert(0, '00_original_input')
 
     # Set TensorBoard tag based on sample_index
     if sample_index is not None:
@@ -433,27 +505,73 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         global_step,
     )
 
+    def _gamma_correct(x):
+        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 2.2)
+    
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
         named_tiles = []
 
-        inv_s_g_pred = 1.0 / (predictions['s_g'][i:i+1] + 1.0 + 1e-6)
-        inv_s_g_gt = targets['D_g_star'][i:i+1]
-        inv_s_d_pred = 1.0 / (predictions['s_d'][i:i+1] + 1.0 + 1e-6)
-        inv_s_d_gt = targets['pi_star'][i:i+1]
+        # 1. Diffuse Albedo: Gamma Correction
+        a_d_pred_vis = _gamma_correct(predictions['a_d'][i:i+1])
+        a_d_gt_vis = _gamma_correct(targets['A_d_star'][i:i+1])
+
+        # 2. Shading: Tonemapping via Inverse Domain (1 - D)
+        s_g_pred_vis = 1.0 - predictions['d_g'][i:i+1]
+        s_g_gt_vis = 1.0 - targets['D_g_star'][i:i+1]
+        s_d_pred_vis = 1.0 - predictions['s_d'][i:i+1]
+        s_d_gt_vis = 1.0 - targets['pi_star'][i:i+1]
+
+        # 3. Colorized Shading (S_c) GT and Pred via Inverse Domain
+        s_g_gt_linear = 1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0
+        c_rg_gt = 1.0 / (targets['xi_star'][i:i+1, 0:1] + 1e-6) - 1.0
+        c_bg_gt = 1.0 / (targets['xi_star'][i:i+1, 1:2] + 1e-6) - 1.0
+        s_c_gt_linear = torch.cat([c_rg_gt * s_g_gt_linear, s_g_gt_linear, c_bg_gt * s_g_gt_linear], dim=1)
+        s_c_gt_vis = 1.0 - (1.0 / (s_c_gt_linear + 1.0))
+        
+        s_g_pred_linear = 1.0 / (predictions['d_g'][i:i+1] + 1e-6) - 1.0
+        if 's_c' in predictions:
+            s_c_pred_linear = 1.0 / (predictions['s_c'][i:i+1] + 1e-6) - 1.0
+        elif 'xi' in predictions:
+            c_rg_pred = 1.0 / (predictions['xi'][i:i+1, 0:1] + 1e-6) - 1.0
+            c_bg_pred = 1.0 / (predictions['xi'][i:i+1, 1:2] + 1e-6) - 1.0
+            s_c_pred_linear = torch.cat([c_rg_pred * s_g_pred_linear, s_g_pred_linear, c_bg_pred * s_g_pred_linear], dim=1)
+        else:
+            s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
+            
+        s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
+
+        # 4. & 5. Residuals: Positive (Specular) and Negative (Saturation)
+        a_d_pred = predictions['a_d'][i:i+1]
+        s_d_pred_linear = 1.0 / (predictions['s_d'][i:i+1] + 1e-6) - 1.0
+        I_lin = rgb[i:i+1]
+        recon_diffuse = a_d_pred * s_d_pred_linear
+        
+        pos_res_pred = torch.clamp(I_lin - recon_diffuse, min=0.0)
+        neg_res_pred = torch.clamp(recon_diffuse - I_lin, min=0.0)
+
+        # Residuals are in unbounded linear space; tonemap them for visibility
+        pos_res_vis = _vis_tonemap(pos_res_pred)
+        neg_res_vis = _vis_tonemap(neg_res_pred)
 
         sample_tiles = []
         if full_rgb_list:
             sample_tiles.append(('00_original_input', _tile_full(i)))
 
+        # Use _vis_tonemap only for the original linear input, but the others are already bounded/tonemapped
         sample_tiles.extend([
             (f"{'01' if full_rgb_list else '00'}_cropped_input", _vis_tonemap(rgb[i:i+1])),
-            (f"{'02' if full_rgb_list else '01'}_inv_s_g_pred", _vis_tonemap(inv_s_g_pred)),
-            (f"{'03' if full_rgb_list else '02'}_inv_s_g_gt", _vis_tonemap(inv_s_g_gt)),
-            (f"{'04' if full_rgb_list else '03'}_a_d_pred", _vis_tonemap(predictions['a_d'][i:i+1])),
-            (f"{'05' if full_rgb_list else '04'}_a_d_gt", _vis_tonemap(targets['A_d_star'][i:i+1])),
-            (f"{'06' if full_rgb_list else '05'}_inv_s_d_pred", _vis_tonemap(inv_s_d_pred)),
-            (f"{'07' if full_rgb_list else '06'}_inv_s_d_gt", _vis_tonemap(inv_s_d_gt)),
+            (f"{'02' if full_rgb_list else '01'}_s_g_pred", torch.clamp(s_g_pred_vis, 0.0, 1.0)),
+            (f"{'03' if full_rgb_list else '02'}_s_g_gt", torch.clamp(s_g_gt_vis, 0.0, 1.0)),
+            (f"{'04' if full_rgb_list else '03'}_s_c_pred", torch.clamp(s_c_pred_vis, 0.0, 1.0)),
+            (f"{'05' if full_rgb_list else '04'}_s_c_gt", torch.clamp(s_c_gt_vis, 0.0, 1.0)),
+            (f"{'06' if full_rgb_list else '05'}_a_d_pred", _vis_tonemap(a_d_pred_vis)),
+            (f"{'07' if full_rgb_list else '06'}_a_d_gt", _vis_tonemap(a_d_gt_vis)),
+            (f"{'08' if full_rgb_list else '07'}_s_d_pred", torch.clamp(s_d_pred_vis, 0.0, 1.0)),
+            (f"{'09' if full_rgb_list else '08'}_s_d_gt", torch.clamp(s_d_gt_vis, 0.0, 1.0)),
+    
+            # (f"{'10' if full_rgb_list else '09'}_pos_res_pred", pos_res_vis),
+            # (f"{'11' if full_rgb_list else '10'}_neg_res_pred", neg_res_vis),
         ])
 
         target_hw = None
@@ -571,24 +689,26 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                 if k in losses:
                     total_loss[k] += losses[k].item()
 
-            # Reconstruct target-space shading tensors for requested metrics.
-            s_g_star = 1.0 / (targets['D_g_star'] + 1e-6) - 1.0
-            s_d_star = 1.0 / (targets['pi_star'] + 1e-6) - 1.0
+            # Evaluate in inverse shading space (bounded) to match decoder outputs.
+            d_g_star = targets['D_g_star']
+            pi_star = targets['pi_star']
+            d_g_pred = predictions['s_g']
+            pi_pred = predictions['s_d']
 
             batch_size = rgb.shape[0]
             for i in range(batch_size):
                 vm = valid_mask[i:i+1]
 
-                # Dec A metrics on S_g
+                # Dec A metrics on inverse gray shading D_g
                 total_metric['s_g_lmse'] += _compute_lmse(
-                    predictions['s_g'][i:i+1], s_g_star[i:i+1], vm
+                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 ).item()
                 total_metric['s_g_rmse'] += _masked_scale_invariant_rmse(
-                    predictions['s_g'][i:i+1], s_g_star[i:i+1], vm
+                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 ).item()
-                total_metric['s_g_ssim'] += float(_ssim_from_dssim(
-                    criterion, predictions['s_g'][i:i+1], s_g_star[i:i+1]
-                ))
+                total_metric['s_g_ssim'] += _compute_ssim_bounded(
+                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
+                )
 
                 # Dec B metric on xi
                 xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
@@ -602,20 +722,20 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                 total_metric['a_d_rmse'] += _masked_scale_invariant_rmse(
                     predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
                 ).item()
-                total_metric['a_d_ssim'] += float(_ssim_from_dssim(
-                    criterion, predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1]
-                ))
+                total_metric['a_d_ssim'] += _compute_ssim_bounded(
+                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
+                )
 
-                # Dec D metrics on S_d (count only when diffuse GT is available)
+                # Dec D metrics on inverse diffuse shading pi (count only when diffuse GT is available)
                 if m_diffuse[i].item() > 0.5:
                     s_d_lmse = _compute_lmse(
-                        predictions['s_d'][i:i+1], s_d_star[i:i+1], vm
+                        pi_pred[i:i+1], pi_star[i:i+1], vm
                     )
                     s_d_rmse = _masked_scale_invariant_rmse(
-                        predictions['s_d'][i:i+1], s_d_star[i:i+1], vm
+                        pi_pred[i:i+1], pi_star[i:i+1], vm
                     )
-                    s_d_ssim = torch.as_tensor(_ssim_from_dssim(
-                        criterion, predictions['s_d'][i:i+1], s_d_star[i:i+1]
+                    s_d_ssim = torch.as_tensor(_compute_ssim_bounded(
+                        pi_pred[i:i+1], pi_star[i:i+1], vm
                     ), device=rgb.device)
 
                     # Guard against NaN/Inf so TensorBoard tags are always emitted.
