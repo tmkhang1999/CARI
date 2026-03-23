@@ -89,13 +89,22 @@ def scale_match(A_raw, A_pred, valid):
     return c.view(-1, 1, 1, 1)
 
 
-def compute_targets(predictions, rgb, albedo_raw, valid_mask):
-    """Compute scale-matched training targets after forward pass."""
+def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_diffuse=None):
+    """Compute training targets with per-sample routing for diffuse GT availability."""
     eps = 1e-6
     c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
 
     A_star = c * albedo_raw
-    S_star = rgb / (A_star + eps)
+    # Fallback shading estimate used by datasets without diffuse shading GT.
+    S_star_fallback = rgb / (A_star + eps)
+
+    # If diffuse illumination GT exists (e.g., Hypersim), use it for Dec-A/B/D
+    # on routed samples and keep fallback on the rest (e.g., MIDIntrinsics).
+    S_star = S_star_fallback
+    if illum_raw is not None and m_diffuse is not None:
+        route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
+        illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        S_star = route * illum + (1.0 - route) * S_star_fallback
 
     S_g_star = (
         0.2126 * S_star[:, 0:1]
@@ -246,6 +255,9 @@ def train_one_step(model, batch, criterion, optimizer, device):
 
     rgb = batch['rgb'].to(device)
     albedo_raw = batch['albedo_raw'].to(device)
+    illum_raw = batch.get('illum_raw', None)
+    if illum_raw is not None:
+        illum_raw = illum_raw.to(device)
     valid_mask = batch['valid_mask'].to(device)
     m_diffuse = batch['M_diffuse'].float().to(device)
     m_albedo = batch['M_albedo'].float().to(device)
@@ -258,7 +270,14 @@ def train_one_step(model, batch, criterion, optimizer, device):
 
     predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
     predictions = _apply_diffuse_detach(predictions, m_diffuse)
-    targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
+    targets = compute_targets(
+        predictions,
+        rgb,
+        albedo_raw,
+        valid_mask,
+        illum_raw=illum_raw,
+        m_diffuse=m_diffuse,
+    )
 
     losses = criterion(
         predictions,
@@ -646,6 +665,9 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
         for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation')):
             rgb = batch['rgb'].to(device)
             albedo_raw = batch['albedo_raw'].to(device)
+            illum_raw = batch.get('illum_raw', None)
+            if illum_raw is not None:
+                illum_raw = illum_raw.to(device)
             valid_mask = batch['valid_mask'].to(device)
             m_diffuse = batch['M_diffuse'].float().to(device)
             m_albedo = batch['M_albedo'].float().to(device)
@@ -658,7 +680,14 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
 
             predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
-            targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
+            targets = compute_targets(
+                predictions,
+                rgb,
+                albedo_raw,
+                valid_mask,
+                illum_raw=illum_raw,
+                m_diffuse=m_diffuse,
+            )
 
             # Collect samples at specified indices
             batch_size = rgb.shape[0]
@@ -692,7 +721,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             # Evaluate in inverse shading space (bounded) to match decoder outputs.
             d_g_star = targets['D_g_star']
             pi_star = targets['pi_star']
-            d_g_pred = predictions['s_g']
+            d_g_pred = predictions['d_g']
             pi_pred = predictions['s_d']
 
             batch_size = rgb.shape[0]
