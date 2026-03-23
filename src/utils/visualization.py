@@ -28,7 +28,7 @@ def visualize_predictions(rgb, predictions, save_path=None):
     for i in range(batch_size):
         # Apply gamma for visualization
         rgb_vis = apply_gamma(rgb[i].cpu())
-        s_g_vis = apply_gamma(predictions['s_g'][i].cpu()).repeat(3, 1, 1)
+        s_g_vis = apply_gamma(predictions['d_g'][i].cpu()).repeat(3, 1, 1)
         c_vis = torch.clamp(predictions['c'][i].cpu() / 2.0, 0, 1)  # Normalize chroma for vis
         s_c_vis = apply_gamma(predictions['s_c'][i].cpu())
         a_d_vis = apply_gamma(predictions['a_d'][i].cpu())
@@ -79,7 +79,7 @@ def create_comparison_grid(rgb, predictions, ground_truths, save_path=None):
 
         # Predictions
         a_d_pred = apply_gamma(predictions['a_d'][i].cpu())
-        s_g_pred = apply_gamma(predictions['s_g'][i].cpu()).repeat(3, 1, 1)
+        s_g_pred = apply_gamma(predictions['d_g'][i].cpu()).repeat(3, 1, 1)
         s_d_pred = apply_gamma(predictions['s_d'][i].cpu())
 
         # Ground truths
