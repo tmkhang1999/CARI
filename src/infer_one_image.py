@@ -88,6 +88,7 @@ def _build_stage1_model(model_cfg):
     model_map = {
         1: IntrinsicDecompositionV1,
         2: IntrinsicDecompositionV2,
+        2.5: IntrinsicDecompositionV2_5,
         3: IntrinsicDecompositionV3,
         4: IntrinsicDecompositionV4,
     }
@@ -121,6 +122,7 @@ def _to_chw_tensor(arr_hwc):
 def _prepare_one_sample(sample):
     rgb = _load_hdf5(sample["color"], retries=1)
     alb = _load_hdf5(sample["albedo"], retries=1)
+    illum = _load_hdf5(sample["illum"], retries=1)
     norm = _load_hdf5(sample["normal"], retries=1) if sample.get("normal") else np.zeros_like(rgb)
     seg = _load_hdf5(sample["seg"], retries=1) if sample.get("seg") else np.zeros(rgb.shape[:2], dtype=np.int32)
     rid = _load_hdf5(sample["rid"], retries=1) if sample.get("rid") else None
@@ -137,6 +139,7 @@ def _prepare_one_sample(sample):
     out = {
         "rgb": _to_chw_tensor(rgb_tm).unsqueeze(0),
         "albedo_raw": _to_chw_tensor(alb).unsqueeze(0),
+        "illum_raw": _to_chw_tensor(illum).unsqueeze(0),
         "normals": _to_chw_tensor(norm).unsqueeze(0),
         "seg": torch.from_numpy(seg.astype(np.int64)).unsqueeze(0).unsqueeze(0),
         "valid_mask": torch.from_numpy(valid).unsqueeze(0).unsqueeze(0).bool(),
@@ -160,7 +163,7 @@ def _maybe_resize_batch(batch, max_side):
     new_w = max(1, int(round(w * scale)))
 
     resized = dict(batch)
-    for key in ["rgb", "albedo_raw", "normals"]:
+    for key in ["rgb", "albedo_raw", "illum_raw", "normals"]:
         resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
     resized["valid_mask"] = F.interpolate(batch["valid_mask"].float(), size=(new_h, new_w), mode="nearest").bool()
     resized["seg"] = F.interpolate(batch["seg"].float(), size=(new_h, new_w), mode="nearest").long()
@@ -171,7 +174,7 @@ def _maybe_resize_batch(batch, max_side):
 
 def _resize_batch_to_hw(batch, new_h, new_w):
     resized = dict(batch)
-    for key in ["rgb", "albedo_raw", "normals"]:
+    for key in ["rgb", "albedo_raw", "illum_raw", "normals"]:
         resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
     resized["valid_mask"] = F.interpolate(batch["valid_mask"].float(), size=(new_h, new_w), mode="nearest").bool()
     resized["seg"] = F.interpolate(batch["seg"].float(), size=(new_h, new_w), mode="nearest").long()
@@ -193,7 +196,7 @@ def _try_forward_with_shape_fallback(model, batch):
     try:
         pred = model(
             batch["rgb"],
-            **_forward_kwargs(model, batch["M_diffuse"], batch["normals"], batch["seg"]),
+            **_forward_kwargs(model, batch["M_diffuse"], batch["normals"], batch["seg"], batch["valid_mask"]),
         )
         return pred, None
     except RuntimeError as exc:
@@ -214,7 +217,7 @@ def _try_forward_with_shape_fallback(model, batch):
         resized = _resize_batch_to_hw(batch, exp_h, exp_w)
         pred = model(
             resized["rgb"],
-            **_forward_kwargs(model, resized["M_diffuse"], resized["normals"], resized["seg"]),
+            **_forward_kwargs(model, resized["M_diffuse"], resized["normals"], resized["seg"], resized["valid_mask"]),
         )
         reason = (
             f"Model requires fixed size due to adapter bottleneck shape; "
@@ -232,12 +235,17 @@ def scale_match(A_raw, A_pred, valid):
     return c.view(-1, 1, 1, 1)
 
 
-def compute_targets(predictions, rgb, albedo_raw, valid_mask):
+def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_diffuse=None):
     eps = 1e-6
     c = scale_match(albedo_raw, predictions["a_d"].detach(), valid_mask)
 
     A_star = c * albedo_raw
-    S_star = rgb / (A_star + eps)
+    S_star_fallback = rgb / (A_star + eps)
+    S_star = S_star_fallback
+    if illum_raw is not None and m_diffuse is not None:
+        route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
+        illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        S_star = route * illum + (1.0 - route) * S_star_fallback
 
     S_g_star = 0.2126 * S_star[:, 0:1] + 0.7152 * S_star[:, 1:2] + 0.0722 * S_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
@@ -254,7 +262,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask):
     }
 
 
-def _forward_kwargs(model, m_diffuse, normals, seg):
+def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
     sig = inspect.signature(model.forward).parameters
     kwargs = {}
     if "m_diffuse" in sig:
@@ -263,6 +271,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg):
         kwargs["normals"] = normals
     if "seg" in sig and seg is not None:
         kwargs["seg"] = seg
+    if "valid_mask" in sig and valid_mask is not None:
+        kwargs["valid_mask"] = valid_mask
     return kwargs
 
 
@@ -562,7 +572,14 @@ def main():
     }
 
     with torch.no_grad():
-        targets = compute_targets(predictions, batch["rgb"], batch["albedo_raw"], batch["valid_mask"])
+        targets = compute_targets(
+            predictions,
+            batch["rgb"],
+            batch["albedo_raw"],
+            batch["valid_mask"],
+            illum_raw=batch.get("illum_raw", None),
+            m_diffuse=batch.get("M_diffuse", None),
+        )
 
     # Compute metrics in inverse shading space (bounded).
     d_g_pred = predictions["d_g"]

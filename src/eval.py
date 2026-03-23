@@ -55,11 +55,16 @@ def scale_match(A_raw, A_pred, valid):
     return c.view(-1, 1, 1, 1)
 
 
-def compute_targets(predictions, rgb, albedo_raw, valid_mask):
+def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_diffuse=None):
     eps = 1e-6
     c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
     A_star = c * albedo_raw
-    S_star = rgb / (A_star + eps)
+    S_star_fallback = rgb / (A_star + eps)
+    S_star = S_star_fallback
+    if illum_raw is not None and m_diffuse is not None:
+        route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
+        illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        S_star = route * illum + (1.0 - route) * S_star_fallback
 
     S_g_star = 0.2126 * S_star[:, 0:1] + 0.7152 * S_star[:, 1:2] + 0.0722 * S_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
@@ -76,7 +81,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask):
     }
 
 
-def _forward_kwargs(model, m_diffuse, normals, seg):
+def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
     sig = inspect.signature(model.forward).parameters
     kwargs = {}
     if 'm_diffuse' in sig:
@@ -85,6 +90,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg):
         kwargs['normals'] = normals
     if 'seg' in sig and seg is not None:
         kwargs['seg'] = seg
+    if 'valid_mask' in sig and valid_mask is not None:
+        kwargs['valid_mask'] = valid_mask
     return kwargs
 
 
@@ -209,6 +216,7 @@ def build_stage1_model(model_cfg):
     model_map = {
         1: IntrinsicDecompositionV1,
         2: IntrinsicDecompositionV2,
+        2.5: IntrinsicDecompositionV2_5,
         3: IntrinsicDecompositionV3,
         4: IntrinsicDecompositionV4,
     }
@@ -240,6 +248,9 @@ def evaluate_model(model, dataloader, device, max_batches=0):
 
             rgb = batch['rgb'].to(device)
             albedo_raw = batch['albedo_raw'].to(device)
+            illum_raw = batch.get('illum_raw', None)
+            if illum_raw is not None:
+                illum_raw = illum_raw.to(device)
             valid_mask = batch['valid_mask'].to(device)
             m_diffuse = batch['M_diffuse'].float().to(device)
             seg = batch.get('seg')
@@ -249,9 +260,16 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             if normals is not None:
                 normals = normals.to(device)
 
-            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
+            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
-            targets = compute_targets(predictions, rgb, albedo_raw, valid_mask)
+            targets = compute_targets(
+                predictions,
+                rgb,
+                albedo_raw,
+                valid_mask,
+                illum_raw=illum_raw,
+                m_diffuse=m_diffuse,
+            )
 
             # Evaluate shading in inverse space (bounded).
             d_g_pred = predictions['d_g']
