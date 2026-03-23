@@ -227,7 +227,7 @@ def _resolve_resume_path(resume_arg, auto_resume, ckpt_dir):
     return resume_arg
 
 
-def _forward_kwargs(model, m_diffuse, normals, seg):
+def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
     sig = inspect.signature(model.forward).parameters
     kwargs = {}
     if 'm_diffuse' in sig:
@@ -236,6 +236,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg):
         kwargs['normals'] = normals
     if 'seg' in sig and seg is not None:
         kwargs['seg'] = seg
+    if 'valid_mask' in sig and valid_mask is not None:
+        kwargs['valid_mask'] = valid_mask
     return kwargs
 
 
@@ -268,7 +270,7 @@ def train_one_step(model, batch, criterion, optimizer, device):
     if normals is not None:
         normals = normals.to(device)
 
-    predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
+    predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
     predictions = _apply_diffuse_detach(predictions, m_diffuse)
     targets = compute_targets(
         predictions,
@@ -678,7 +680,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             if normals is not None:
                 normals = normals.to(device)
 
-            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg))
+            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
             targets = compute_targets(
                 predictions,
@@ -842,6 +844,7 @@ def build_stage1_model(config):
     model_map = {
         1: IntrinsicDecompositionV1,
         2: IntrinsicDecompositionV2,
+        2.5: IntrinsicDecompositionV2_5,
         3: IntrinsicDecompositionV3,
         4: IntrinsicDecompositionV4,
     }
