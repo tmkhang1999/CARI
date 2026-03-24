@@ -129,7 +129,7 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     unfold = torch.nn.Unfold(kernel_size=window_size, stride=stride)
     p_u = unfold(pred)        # (B, C*K*K, L)
     t_u = unfold(target)      # (B, C*K*K, L)
-    m_u = unfold(valid_mask)  # (B, 1*K*K, L)
+    m_u = unfold(valid_mask.float())  # (B, 1*K*K, L)
 
     # 3. Identify valid patches (at least 50% valid pixels)
     k2 = window_size * window_size

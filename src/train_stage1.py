@@ -249,7 +249,11 @@ def _apply_diffuse_detach(predictions, m_diffuse):
 
 
 def _loss_seg(model, seg):
-    return seg if 'seg' in inspect.signature(model.forward).parameters else None
+    if 'seg' not in inspect.signature(model.forward).parameters:
+        return None
+    if seg is not None and seg.dim() == 4 and seg.shape[1] == 1:
+        return seg[:, 0]
+    return seg
 
 
 def train_one_step(model, batch, criterion, optimizer, device):
@@ -498,21 +502,31 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             ).squeeze(0)
         return tile
 
-    layout_names = [
-        '01_cropped_input',
-        '02_s_g_pred',
-        '03_s_g_gt',
-        '04_a_d_pred',
-        '05_a_d_gt',
-        '06_s_d_pred',
-        '07_s_d_gt',
-        '08_s_c_pred',
-        '09_s_c_gt',
-        '10_pos_res_pred',
-        '11_neg_res_pred',
-    ]
     if full_rgb_list:
-        layout_names.insert(0, '00_original_input')
+        layout_names = [
+            '00_original_input',
+            '01_cropped_input',
+            '02_s_g_pred',
+            '03_s_g_gt',
+            '04_s_c_pred',
+            '05_s_c_gt',
+            '06_a_d_pred',
+            '07_a_d_gt',
+            '08_s_d_pred',
+            '09_s_d_gt',
+        ]
+    else:
+        layout_names = [
+            '00_cropped_input',
+            '01_s_g_pred',
+            '02_s_g_gt',
+            '03_s_c_pred',
+            '04_s_c_gt',
+            '05_a_d_pred',
+            '06_a_d_gt',
+            '07_s_d_pred',
+            '08_s_d_gt',
+        ]
 
     # Set TensorBoard tag based on sample_index
     if sample_index is not None:
@@ -552,7 +566,7 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         
         s_g_pred_linear = 1.0 / (predictions['d_g'][i:i+1] + 1e-6) - 1.0
         if 's_c' in predictions:
-            s_c_pred_linear = 1.0 / (predictions['s_c'][i:i+1] + 1e-6) - 1.0
+            s_c_pred_linear = predictions['s_c'][i:i+1]
         elif 'xi' in predictions:
             c_rg_pred = 1.0 / (predictions['xi'][i:i+1, 0:1] + 1e-6) - 1.0
             c_bg_pred = 1.0 / (predictions['xi'][i:i+1, 1:2] + 1e-6) - 1.0
@@ -741,7 +755,10 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 )
 
-                # Dec B metric on xi
+                # Dec B metric on xi.
+                # vm is (1,1,H,W); expand_as makes it (1,2,H,W) to match xi channels.
+                # Numerator and denominator both sum over channel and spatial dims,
+                # so this computes mean squared error per xi element.
                 xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
                 xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
                 total_metric['xi_mse'] += xi_err.item()
@@ -797,10 +814,12 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                 sample_index=global_idx,
             )
 
+    # Losses are averaged over batches because criterion returns batch-level scalars.
     denom_loss = max(len(dataloader), 1)
     for k in total_loss:
         total_loss[k] /= denom_loss
 
+    # Metrics are accumulated per sample in the inner loop, so normalize by sample count.
     denom_metric = max(n_samples, 1)
     for k in total_metric:
         if k.startswith('s_d_'):
@@ -832,7 +851,7 @@ def _phase_schedule(train_cfg, global_step):
 
 
 def build_stage1_model(config):
-    version = int(config['model'].get('version', 1))
+    version = float(model_cfg.get("version", 1))
     model_cfg = {
         'z_channels': config['model'].get('z_channels', 1024),
         'freeze_stages': config['model'].get('freeze_stages', [1, 2]),

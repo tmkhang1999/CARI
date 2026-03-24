@@ -15,7 +15,7 @@ train:
   val_interval_iters: 500
   checkpoint_interval_iters: 1000
 
-  val_example_images: 4
+  val_example_images: 3
 
   phase1_iterations: 10000
   phase2_iterations: 10000

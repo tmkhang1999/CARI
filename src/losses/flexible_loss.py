@@ -42,6 +42,9 @@ class FlexibleLoss(nn.Module):
         self.perceptual_loss = PerceptualLoss()
         self.semantic_tv_loss = SemanticTVLoss(target_classes=[1, 2, 22])
 
+        # Cache Gaussian DSSIM windows by channel/device/dtype/size.
+        self._dssim_window_cache = {}
+
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
@@ -59,21 +62,29 @@ class FlexibleLoss(nn.Module):
         """MSG loss scaled by the fraction of valid samples."""
         return self.msg_loss(pred, target) * mask_ratio
 
-    @staticmethod
-    def _compute_dssim(pred, target, window_size=11):
-        """DSSIM = (1 - SSIM) / 2."""
-        C1 = 0.01 ** 2
-        C2 = 0.03 ** 2
+    def _get_dssim_window(self, channels, device, dtype, window_size):
+        key = (int(channels), str(device), str(dtype), int(window_size))
+        window = self._dssim_window_cache.get(key)
+        if window is not None:
+            return window
 
         sigma = 1.5
-        coords = torch.arange(window_size, dtype=pred.dtype, device=pred.device)
+        coords = torch.arange(window_size, dtype=dtype, device=device)
         gauss = torch.exp(-((coords - window_size // 2) ** 2) / (2.0 * sigma ** 2))
         gauss = gauss / gauss.sum()
 
         window_1d = gauss.unsqueeze(1)
         window_2d = (window_1d @ window_1d.t()).unsqueeze(0).unsqueeze(0)
+        window = window_2d.expand(channels, 1, window_size, window_size).contiguous()
+        self._dssim_window_cache[key] = window
+        return window
+
+    def _compute_dssim(self, pred, target, window_size=11):
+        """DSSIM = (1 - SSIM) / 2."""
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
         C = pred.shape[1]
-        window = window_2d.expand(C, 1, window_size, window_size).contiguous()
+        window = self._get_dssim_window(C, pred.device, pred.dtype, window_size)
 
         pad = window_size // 2
         mu1 = F.conv2d(pred, window, padding=pad, groups=C)

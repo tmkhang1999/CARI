@@ -16,7 +16,7 @@ Disk layout (unchanged — do NOT reorganise):
 Returns per __getitem__ (raw arrays — scale matching happens in training loop):
     rgb:        (3, H, W)  float32  tonemapped linear [0,1]   ← encoder input
     albedo_raw: (3, H, W)  float32  raw linear HDR albedo     ← for scale_match()
-    illum_raw:  (3, H, W)  float32  raw linear HDR illumination
+    illum_raw:  (3, H, W)  float32  linear illumination normalized by RGB percentile scale
     normals:    (3, H, W)  float32  unit vectors
     valid_mask: (1, H, W)  bool
     seg:        (1, H, W)  long     NYU-40 labels (0-40)
@@ -67,18 +67,26 @@ def _load_hdf5(path: str, retries: int = 0) -> np.ndarray:
     ) from last_exc
 
 
-def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0) -> np.ndarray:
+def _compute_tonemap_scale(rgb: np.ndarray, percentile: float = 99.0) -> float:
+    """Compute robust positive scale used for RGB/illum normalization."""
+    rgb64 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64, copy=False)
+    scale = float(np.percentile(rgb64, percentile))
+    if not np.isfinite(scale) or scale <= 0.0:
+        return 1e-6
+    return max(scale, 1e-6)
+
+
+def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0, scale: float | None = None) -> np.ndarray:
     """
     Compress linear HDR to [0,1] without gamma and with robust numeric guards.
     rgb: (H, W, 3) float32
     """
     # Promote to float64 to avoid overflow during division when scale is tiny.
     rgb64 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64, copy=False)
-    scale = float(np.percentile(rgb64, percentile))
-    if not np.isfinite(scale) or scale <= 0.0:
-        scale = 1e-6
+    if scale is None:
+        scale = _compute_tonemap_scale(rgb64, percentile=percentile)
     else:
-        scale = max(scale, 1e-6)
+        scale = max(float(scale), 1e-6)
 
     mapped = np.divide(rgb64, scale, out=np.zeros_like(rgb64), where=np.isfinite(rgb64))
     mapped = np.nan_to_num(mapped, nan=0.0, posinf=1.0, neginf=0.0)
@@ -417,7 +425,14 @@ class HypersimDataset(Dataset):
         valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
-        rgb_tm = _tonemap_linear(rgb)    # (H,W,3) float32, [0,1]
+        # Use one shared percentile scale so routed illum and fallback rgb/albedo
+        # produce targets in the same numeric regime.
+        tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
+        rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
+        illum_norm = np.nan_to_num(
+            illum, nan=0.0, posinf=0.0, neginf=0.0
+        ).astype(np.float64, copy=False) / tonemap_scale
+        illum_norm = illum_norm.astype(np.float32, copy=False)
 
         # ── Stack for joint spatial augmentation ─────────────────────────────
         # Layout (channel-last, axis=-1):
@@ -429,7 +444,7 @@ class HypersimDataset(Dataset):
         combined = np.concatenate([
             rgb_tm.astype(np.float32),
             alb.astype(np.float32),
-            illum.astype(np.float32),
+            illum_norm,
             norm.astype(np.float32),
             valid_np[..., None],
         ], axis=-1)   # (H,W,13)
@@ -492,7 +507,7 @@ class HypersimDataset(Dataset):
         return {
             'rgb':        t[0:3],               # (3,H,W) tonemapped linear [0,1]
             'albedo_raw': t[3:6],               # (3,H,W) raw HDR  → scale_match()
-            'illum_raw':  t[6:9],               # (3,H,W) raw HDR
+            'illum_raw':  t[6:9],               # (3,H,W) normalized by shared RGB scale
             'normals':    t[9:12],              # (3,H,W) unit vectors
             'valid_mask': t[12:13].bool(),      # (1,H,W)
             'seg':        seg_t,                # (1,H,W) long, NYU-40

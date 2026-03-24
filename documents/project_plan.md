@@ -40,12 +40,13 @@ Cascade (V4 full):
   Z + F_img_i + ResidualAttn(F_N_i) + A_d_i + S_c_i         → Dec D → S_d (N,3,H,W)
 ```
 
-**Training Loop (after forward pass — scale matching required):**
+**Training Loop (after forward pass — routing & scale matching):**
 ```
 A_pred (detached) + albedo_raw + valid_mask
   → scale_match() → c (N,1,1,1)
   → A_star = c * albedo_raw              → A_d_star (Dec C target)
-  → S_star = rgb / (A_star + ε)
+  → S_star_fallback = rgb / (A_star + ε)
+  → S_star = (m_diffuse * illum_raw) + (1 - m_diffuse) * S_star_fallback
   → S_g_star = luminance(S_star)         → D_g_star = 1/(S_g_star+1)  (Dec A target)
   → xi_star  = [1/(C_RG+1), 1/(C_BG+1)] (Dec B target)
   → pi_star  = 1/(S_star+1)             (Dec D target)
@@ -893,7 +894,8 @@ Inverse shading (compresses unbounded HDR to (0,1]):
 
 Scale-matched GT derivation (after forward pass):
   A_star   = c × albedo_raw
-  S_star   = rgb / (A_star + ε)
+  # Primary: use illum_raw (Hypersim) if available; Fallback: rgb / (A_star + ε)
+  S_star   = illum_raw if (illum_raw is not None) else (rgb / (A_star + ε))
   S_g_star = 0.2126·S_r + 0.7152·S_g + 0.0722·S_b    (BT.709 luminance)
   D_g_star = 1/(S_g_star + 1)         → Dec A target  (N,1,H,W)
   xi_star  = [1/(S_r/S_g+1), 1/(S_b/S_g+1)] → Dec B target  (N,2,H,W)

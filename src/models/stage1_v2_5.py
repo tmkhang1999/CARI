@@ -1,5 +1,6 @@
 from .stage1_v2 import IntrinsicDecompositionV2
 from .modules.illuminant_descriptor import IlluminantDescriptor
+import torch
 
 
 class IntrinsicDecompositionV2_5(IntrinsicDecompositionV2):

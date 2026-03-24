@@ -10,7 +10,7 @@ train:
   val_interval_iters: 2000
   checkpoint_interval_iters: 5000
   val_example_images: 2  # ignored if val_example_indices is set
-  val_example_indices: []  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
+  val_example_indices: [100, 110, 120]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
   input_size: 384
 
   # Two-phase curriculum (global-iteration based)

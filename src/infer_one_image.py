@@ -28,10 +28,11 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from data.hypersim_dataset import HypersimDataset, _load_hdf5, _tonemap_linear
+from data.hypersim_dataset import HypersimDataset, _compute_tonemap_scale, _load_hdf5, _tonemap_linear
 from models import (
     IntrinsicDecompositionV1,
     IntrinsicDecompositionV2,
+    IntrinsicDecompositionV2_5,
     IntrinsicDecompositionV3,
     IntrinsicDecompositionV4,
 )
@@ -134,12 +135,14 @@ def _prepare_one_sample(sample):
     alb_mask = alb.min(axis=-1) > 0.01
     valid = (sky_mask & alb_mask).astype(np.float32)
 
-    rgb_tm = _tonemap_linear(rgb)
+    tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
+    rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)
+    illum_norm = np.nan_to_num(illum, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64) / tonemap_scale
 
     out = {
         "rgb": _to_chw_tensor(rgb_tm).unsqueeze(0),
         "albedo_raw": _to_chw_tensor(alb).unsqueeze(0),
-        "illum_raw": _to_chw_tensor(illum).unsqueeze(0),
+        "illum_raw": _to_chw_tensor(illum_norm.astype(np.float32)).unsqueeze(0),
         "normals": _to_chw_tensor(norm).unsqueeze(0),
         "seg": torch.from_numpy(seg.astype(np.int64)).unsqueeze(0).unsqueeze(0),
         "valid_mask": torch.from_numpy(valid).unsqueeze(0).unsqueeze(0).bool(),
@@ -307,14 +310,22 @@ def compute_ssim_bounded(pred, target, valid_mask):
     pred_norm = pred_norm * mask_f
     target_norm = target_norm * mask_f
 
-    fn_p = pred_norm.squeeze().detach().cpu().numpy()
-    fn_t = target_norm.squeeze().detach().cpu().numpy()
+    fn_p = pred_norm.detach().cpu().numpy()
+    fn_t = target_norm.detach().cpu().numpy()
+
+    # Drop batch dimension when present and evaluate per-channel explicitly.
+    if fn_p.ndim == 4:
+        fn_p = fn_p[0]
+        fn_t = fn_t[0]
 
     if fn_p.ndim == 3:
+        if fn_p.shape[0] == 1:
+            return float(ssim(fn_t[0], fn_p[0], data_range=1.0))
         vals = []
         for c in range(fn_p.shape[0]):
             vals.append(ssim(fn_t[c], fn_p[c], data_range=1.0))
         return float(np.mean(vals))
+
     return float(ssim(fn_t, fn_p, data_range=1.0))
 
 
@@ -419,7 +430,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
 
     s_g_pred_linear = 1.0 / (preds["d_g"] + 1e-6) - 1.0
     if "s_c" in preds:
-        s_c_pred_linear = 1.0 / (preds["s_c"] + 1e-6) - 1.0
+        s_c_pred_linear = preds["s_c"]
     elif "xi" in preds:
         c_rg_pred = 1.0 / (preds["xi"][:, 0:1] + 1e-6) - 1.0
         c_bg_pred = 1.0 / (preds["xi"][:, 1:2] + 1e-6) - 1.0
@@ -479,7 +490,9 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         tiles.append(tile_labeled)
 
     grid = vutils.make_grid(tiles, nrow=len(tiles), padding=4, pad_value=1.0)
-    os.makedirs(os.path.dirname(out_png), exist_ok=True)
+    out_dir = os.path.dirname(out_png)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     vutils.save_image(grid, out_png)
 
 
