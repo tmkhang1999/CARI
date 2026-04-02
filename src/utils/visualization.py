@@ -20,7 +20,7 @@ def visualize_predictions(rgb, predictions, save_path=None):
 
     Args:
         rgb: (N, 3, H, W) input RGB
-        predictions: Dict with keys ['s_g', 'xi', 'c', 's_c', 'a_d', 's_d']
+        predictions: Dict with keys ['d_g', 'xi', 'c', 's_c', 'a_d', 'pi']
         save_path: Optional path to save image
     """
     batch_size = rgb.shape[0]
@@ -32,7 +32,7 @@ def visualize_predictions(rgb, predictions, save_path=None):
         c_vis = torch.clamp(predictions['c'][i].cpu() / 2.0, 0, 1)  # Normalize chroma for vis
         s_c_vis = apply_gamma(predictions['s_c'][i].cpu())
         a_d_vis = apply_gamma(predictions['a_d'][i].cpu())
-        s_d_vis = apply_gamma(predictions['s_d'][i].cpu())
+        s_d_vis = apply_gamma(predictions['pi'][i].cpu())
 
         # Create grid
         images = [rgb_vis, s_g_vis, c_vis, s_c_vis, a_d_vis, s_d_vis]
@@ -80,12 +80,12 @@ def create_comparison_grid(rgb, predictions, ground_truths, save_path=None):
         # Predictions
         a_d_pred = apply_gamma(predictions['a_d'][i].cpu())
         s_g_pred = apply_gamma(predictions['d_g'][i].cpu()).repeat(3, 1, 1)
-        s_d_pred = apply_gamma(predictions['s_d'][i].cpu())
+        s_d_pred = apply_gamma(predictions['pi'][i].cpu())
 
         # Ground truths
         a_d_gt = apply_gamma(ground_truths['a_d'][i].cpu())
         s_g_gt = apply_gamma(ground_truths['s_g'][i].cpu()).repeat(3, 1, 1)
-        s_d_gt = apply_gamma(ground_truths['s_d'][i].cpu())
+        s_d_gt = apply_gamma(ground_truths['pi'][i].cpu())
 
         # Error maps
         a_d_error = torch.abs(a_d_pred - a_d_gt).mean(dim=0, keepdim=True).repeat(3, 1, 1)
@@ -165,12 +165,12 @@ if __name__ == '__main__':
     # Create dummy data
     rgb = torch.rand(2, 3, 256, 256)
     predictions = {
-        's_g': torch.rand(2, 1, 256, 256),
+        'd_g': torch.rand(2, 1, 256, 256),
         'xi': torch.rand(2, 2, 256, 256),
         'c': torch.rand(2, 3, 256, 256),
         's_c': torch.rand(2, 3, 256, 256),
         'a_d': torch.rand(2, 3, 256, 256),
-        's_d': torch.rand(2, 3, 256, 256)
+        'pi': torch.rand(2, 3, 256, 256)
     }
 
     # Test prediction visualization

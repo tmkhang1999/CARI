@@ -32,12 +32,12 @@ def _base_config():
 
 
 def _assert_output_shapes(outputs, b, h, w):
-    assert outputs["s_g"].shape == (b, 1, h, w)
+    assert outputs["d_g"].shape == (b, 1, h, w)
     assert outputs["xi"].shape == (b, 2, h, w)
     assert outputs["c"].shape == (b, 3, h, w)
     assert outputs["s_c"].shape == (b, 3, h, w)
     assert outputs["a_d"].shape == (b, 3, h, w)
-    assert outputs["s_d"].shape == (b, 3, h, w)
+    assert outputs["pi"].shape == (b, 3, h, w)
 
 
 def test_stage_versions_forward():
@@ -95,7 +95,7 @@ def test_module_smoke():
 
 
 def test_ccr_function():
-    from models.stage1_v4 import compute_ccr
+    from models.stage1_v5 import compute_ccr
 
     x = torch.rand(1, 3, 64, 64) + 0.1
     y = compute_ccr(x)

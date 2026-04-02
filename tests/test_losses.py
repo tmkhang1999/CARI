@@ -22,12 +22,12 @@ def test_flexible_loss_shapes():
     loss_fn = FlexibleLoss(config)
 
     predictions = {
-        's_g': torch.rand(2, 1, 64, 64),
+        'd_g': torch.rand(2, 1, 64, 64),
         'xi': torch.rand(2, 2, 64, 64),
         'c': torch.rand(2, 3, 64, 64),
         's_c': torch.rand(2, 3, 64, 64),
         'a_d': torch.rand(2, 3, 64, 64),
-        's_d': torch.rand(2, 3, 64, 64),
+        'pi': torch.rand(2, 3, 64, 64),
     }
 
     # Scale-matched, target-space GTs (as computed in training loop)
@@ -63,8 +63,8 @@ def test_loss_routing_no_diffuse():
     loss_fn = FlexibleLoss(config)
 
     preds = {k: torch.rand(2, c, 32, 32)
-             for k, c in [('s_g', 1), ('xi', 2), ('c', 3),
-                          ('s_c', 3), ('a_d', 3), ('s_d', 3)]}
+             for k, c in [('d_g', 1), ('xi', 2), ('c', 3),
+                          ('s_c', 3), ('a_d', 3), ('pi', 3)]}
     targets = {
         'D_g_star': torch.rand(2, 1, 32, 32),
         'xi_star': torch.rand(2, 2, 32, 32),
