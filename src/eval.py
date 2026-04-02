@@ -26,8 +26,11 @@ from data.hypersim_dataset import get_hypersim_loader
 from models import (
     IntrinsicDecompositionV1,
     IntrinsicDecompositionV2,
+    IntrinsicDecompositionV2_5,
     IntrinsicDecompositionV3,
     IntrinsicDecompositionV4,
+    IntrinsicDecompositionV5,
+    IntrinsicDecompositionV6,
 )
 
 
@@ -96,8 +99,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
 
 
 def _apply_diffuse_detach(predictions, m_diffuse):
-    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['s_d'].device)
-    predictions['s_d'] = predictions['s_d'] * mask + predictions['s_d'].detach() * (1.0 - mask)
+    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['pi'].device)
+    predictions['pi'] = predictions['pi'] * mask + predictions['pi'].detach() * (1.0 - mask)
     return predictions
 
 
@@ -204,7 +207,7 @@ def compute_ssim_bounded(pred, target, valid_mask):
 
 
 def build_stage1_model(model_cfg):
-    version = int(model_cfg.get("version", 1))
+    version = float(model_cfg.get("version", 1))
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -219,6 +222,8 @@ def build_stage1_model(model_cfg):
         2.5: IntrinsicDecompositionV2_5,
         3: IntrinsicDecompositionV3,
         4: IntrinsicDecompositionV4,
+        5: IntrinsicDecompositionV5,
+        6: IntrinsicDecompositionV6,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -273,7 +278,7 @@ def evaluate_model(model, dataloader, device, max_batches=0):
 
             # Evaluate shading in inverse space (bounded).
             d_g_pred = predictions['d_g']
-            pi_pred = predictions['s_d']
+            pi_pred = predictions['pi']
             d_g_gt = targets['D_g_star']
             pi_gt = targets['pi_star']
 
@@ -349,7 +354,7 @@ def main():
     model_cfg = dict(config.get("model", {}))
     model_cfg['input_size'] = int(args.eval_input_size)
     model = build_stage1_model(model_cfg).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     model.eval()
 
     print(f"Model loaded from epoch {checkpoint.get('epoch', 'unknown')}")

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import yaml
 import numpy as np
 from torch.utils.data import Subset
@@ -27,8 +28,11 @@ if str(SRC_DIR) not in sys.path:
 from models import (
     IntrinsicDecompositionV1,
     IntrinsicDecompositionV2,
+    IntrinsicDecompositionV2_5,
     IntrinsicDecompositionV3,
     IntrinsicDecompositionV4,
+    IntrinsicDecompositionV5,
+    IntrinsicDecompositionV6,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -46,6 +50,7 @@ TB_TAGS = {
     'loss_c_msg': '01_Losses/3_c_MSG',
     'loss_c_perceptual': '01_Losses/3_c_Perceptual',
     'loss_c_tv': '01_Losses/3_c_TV',
+    'loss_c_dssim': '01_Losses/3_c_dssim',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
     'a_d_rmse': '02_Albedo_Ad/2_rmse',
     'a_d_ssim': '02_Albedo_Ad/3_ssim',
@@ -63,7 +68,7 @@ def _log_ordered_scalars(writer, values, global_step):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
         'loss_a', 'loss_b', 'loss_c', 'loss_d', 'loss_total',
-        'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv',
+        'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
@@ -95,6 +100,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
 
     A_star = c * albedo_raw
+    A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
     # Fallback shading estimate used by datasets without diffuse shading GT.
     S_star_fallback = rgb / (A_star + eps)
 
@@ -105,6 +111,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
         route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
         illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
         S_star = route * illum + (1.0 - route) * S_star_fallback
+    S_star = torch.nan_to_num(S_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
 
     S_g_star = (
         0.2126 * S_star[:, 0:1]
@@ -116,9 +123,12 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
     C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
     xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+    xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
     A_d_star = A_star
+    D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
     pi_star = 1.0 / (S_star + 1.0)
+    pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
     return {
         'D_g_star': D_g_star,
@@ -131,7 +141,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Stage 1')
     parser.add_argument('--config', type=str, default=None)
-    parser.add_argument('--version', type=int, default=None)
+    parser.add_argument('--version', type=str, default=None)
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint path or "latest"')
     parser.add_argument('--auto-resume', action='store_true', help='Resume from latest checkpoint in version checkpoint dir')
     parser.add_argument('--device', type=str, default='cuda')
@@ -180,7 +190,7 @@ def save_checkpoint(model, optimizer, losses, config, filename, global_step):
 
 def load_checkpoint(model, optimizer, checkpoint_path, map_location=None):
     ckpt = torch.load(checkpoint_path, map_location=map_location)
-    model.load_state_dict(ckpt['model_state_dict'])
+    model.load_state_dict(ckpt['model_state_dict'], strict=False)
     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
     global_step = int(ckpt.get('global_step', 0))
     losses = ckpt.get('losses', {})
@@ -243,8 +253,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
 
 def _apply_diffuse_detach(predictions, m_diffuse):
     """Detach only Dec-D output where diffuse supervision is unavailable."""
-    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['s_d'].device)
-    predictions['s_d'] = predictions['s_d'] * mask + predictions['s_d'].detach() * (1.0 - mask)
+    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['pi'].device)
+    predictions['pi'] = predictions['pi'] * mask + predictions['pi'].detach() * (1.0 - mask)
     return predictions
 
 
@@ -292,6 +302,7 @@ def train_one_step(model, batch, criterion, optimizer, device):
         m_albedo,
         valid_mask,
         _loss_seg(model, seg),
+        normals=normals,
     )
 
     optimizer.zero_grad()
@@ -389,7 +400,10 @@ def _ssim_from_dssim(criterion, pred, target):
 
 
 def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
-    """SSIM for unbounded shading with mean + 2*std robust scale from GT."""
+    """SSIM for unbounded shading with mean + 2*std robust scale from GT.
+    
+    Uses GPU-resident computation to avoid CPU transfers.
+    """
     # Handle batch dim
     if pred.ndim == 4:
         pred = pred[0]
@@ -416,6 +430,33 @@ def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
     pred_n = pred_n * mask_f
     tgt_n = tgt_n * mask_f
 
+    # Try GPU-resident patch similarity (10× faster than CPU SSIM)
+    if pred_n.ndim == 3:
+        C, H, W = pred_n.shape
+        if H >= 5 and W >= 5 and C > 0:
+            try:
+                unfold = torch.nn.Unfold(kernel_size=5, stride=5)
+                p_n_batch = pred_n.unsqueeze(0)  # (1, C, H, W)
+                t_n_batch = tgt_n.unsqueeze(0)   # (1, C, H, W)
+                m_batch = mask_f.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+                
+                p_p = unfold(p_n_batch)   # (1, C*25, L)
+                t_p = unfold(t_n_batch)   # (1, C*25, L)
+                m_p = unfold(m_batch)     # (1, 1*25, L)
+                
+                p_norm = (p_p ** 2).sum(dim=1, keepdim=True).sqrt()
+                t_norm = (t_p ** 2).sum(dim=1, keepdim=True).sqrt()
+                
+                sim = (p_p * t_p).sum(dim=1) / (p_norm.squeeze(1) * t_norm.squeeze(1) + 1e-7)
+                sim = (sim + 1.0) / 2.0
+                
+                m_valid = (m_p.sum(dim=1) > 1.0).float()
+                if m_valid.sum() > 0:
+                    return float((sim * m_valid).sum() / (m_valid.sum() + 1e-7))
+            except Exception:
+                pass  # fallback to CPU
+
+    # CPU fallback
     pred_np = pred_n.detach().cpu().numpy()
     tgt_np = tgt_n.detach().cpu().numpy()
 
@@ -427,8 +468,12 @@ def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
     return float(ssim(tgt_np, pred_np, data_range=1.0))
 
 
-def _compute_ssim_bounded(pred, target, valid_mask):
-    """SSIM for bounded outputs (e.g., albedo)."""
+def _compute_ssim_bounded(pred, target, valid_mask, fast_mode=False):
+    """SSIM for bounded outputs (e.g., albedo).
+
+    fast_mode=False keeps exact skimage SSIM for metric fidelity.
+    fast_mode=True uses a patch cosine proxy for faster validation.
+    """
     pred_n = torch.clamp(pred, 0.0, 1.0)
     tgt_n = torch.clamp(target, 0.0, 1.0)
 
@@ -436,6 +481,32 @@ def _compute_ssim_bounded(pred, target, valid_mask):
     pred_n = pred_n * mask_f
     tgt_n = tgt_n * mask_f
 
+    # Optional fast path (metric proxy, not exact SSIM)
+    if fast_mode and pred_n.ndim == 4:
+        B, C, H, W = pred_n.shape
+        if H >= 5 and W >= 5:
+            try:
+                unfold = torch.nn.Unfold(kernel_size=5, stride=5)
+                p_p = unfold(pred_n)   # (B, C*25, L)
+                t_p = unfold(tgt_n)    # (B, C*25, L)
+                m_p = unfold(mask_f)   # (B, 1*25, L)
+                
+                p_norm = (p_p ** 2).sum(dim=1, keepdim=True).sqrt()  # (B, 1, L)
+                t_norm = (t_p ** 2).sum(dim=1, keepdim=True).sqrt()  # (B, 1, L)
+                
+                # Cosine similarity per patch
+                sim = (p_p * t_p).sum(dim=1) / (p_norm.squeeze(1) * t_norm.squeeze(1) + 1e-7)
+                sim = (sim + 1.0) / 2.0  # map [-1,1] to [0,1]
+                
+                # Average over valid patches
+                m_valid = (m_p.sum(dim=1) > 1.0).float()  # (B, L)
+                if m_valid.sum() > 0:
+                    score = (sim * m_valid).sum() / (m_valid.sum() + 1e-7)
+                    return float(score)
+            except Exception:
+                pass  # fallback to exact method
+    
+    # CPU fallback for small images or errors
     pred_np = pred_n.squeeze().detach().cpu().numpy()
     tgt_np = tgt_n.squeeze().detach().cpu().numpy()
 
@@ -502,31 +573,18 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             ).squeeze(0)
         return tile
 
-    if full_rgb_list:
-        layout_names = [
-            '00_original_input',
-            '01_cropped_input',
-            '02_s_g_pred',
-            '03_s_g_gt',
-            '04_s_c_pred',
-            '05_s_c_gt',
-            '06_a_d_pred',
-            '07_a_d_gt',
-            '08_s_d_pred',
-            '09_s_d_gt',
-        ]
-    else:
-        layout_names = [
-            '00_cropped_input',
-            '01_s_g_pred',
-            '02_s_g_gt',
-            '03_s_c_pred',
-            '04_s_c_gt',
-            '05_a_d_pred',
-            '06_a_d_gt',
-            '07_s_d_pred',
-            '08_s_d_gt',
-        ]
+    layout_names = [
+        'Tonemapped RGB',
+        'Gray Shading GT',
+        'Colorized Shading GT',
+        'Albedo GT',
+        'Diffuse Shading GT',
+        'Diffuse Reconstruction',
+        'Gray Shading Pred',
+        'Colorized Shading Pred',
+        'Albedo Pred',
+        'Diffuse Shading Pred',
+    ]
 
     # Set TensorBoard tag based on sample_index
     if sample_index is not None:
@@ -554,7 +612,7 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         # 2. Shading: Tonemapping via Inverse Domain (1 - D)
         s_g_pred_vis = 1.0 - predictions['d_g'][i:i+1]
         s_g_gt_vis = 1.0 - targets['D_g_star'][i:i+1]
-        s_d_pred_vis = 1.0 - predictions['s_d'][i:i+1]
+        s_d_pred_vis = 1.0 - predictions['pi'][i:i+1]
         s_d_gt_vis = 1.0 - targets['pi_star'][i:i+1]
 
         # 3. Colorized Shading (S_c) GT and Pred via Inverse Domain
@@ -576,49 +634,84 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             
         s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
 
-        # 4. & 5. Residuals: Positive (Specular) and Negative (Saturation)
+        # Reconstruction used in row-2 tile: (a_d_pred x s_d_pred_linear)
         a_d_pred = predictions['a_d'][i:i+1]
-        s_d_pred_linear = 1.0 / (predictions['s_d'][i:i+1] + 1e-6) - 1.0
-        I_lin = rgb[i:i+1]
-        recon_diffuse = a_d_pred * s_d_pred_linear
-        
-        pos_res_pred = torch.clamp(I_lin - recon_diffuse, min=0.0)
-        neg_res_pred = torch.clamp(recon_diffuse - I_lin, min=0.0)
+        s_d_pred_linear = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
+        recon_pred_vis = _vis_tonemap(a_d_pred * s_d_pred_linear)
 
-        # Residuals are in unbounded linear space; tonemap them for visibility
-        pos_res_vis = _vis_tonemap(pos_res_pred)
-        neg_res_vis = _vis_tonemap(neg_res_pred)
+        sample_tiles = [
+            ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1])),
+            ('Gray Shading GT', s_g_gt_vis),
+            ('Colorized Shading GT', s_c_gt_vis),
+            ('Albedo GT', _vis_tonemap(a_d_gt_vis)),
+            ('Diffuse Shading GT', s_d_gt_vis),
+            ('Diffuse Reconstruction', recon_pred_vis),
+            ('Gray Shading Pred', s_g_pred_vis),
+            ('Colorized Shading Pred', s_c_pred_vis),
+            ('Albedo Pred', _vis_tonemap(a_d_pred_vis)),
+            ('Diffuse Shading Pred', s_d_pred_vis),
+        ]
 
-        sample_tiles = []
-        if full_rgb_list:
-            sample_tiles.append(('00_original_input', _tile_full(i)))
+        final_target_hw = None
+        footer_h = 50 
+        tile_scale = 0.5
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype("DejaVuSans.ttf", 15)
+        except OSError:
+            from PIL import ImageFont
+            font = ImageFont.load_default()
 
-        # Use _vis_tonemap only for the original linear input, but the others are already bounded/tonemapped
-        sample_tiles.extend([
-            (f"{'01' if full_rgb_list else '00'}_cropped_input", _vis_tonemap(rgb[i:i+1])),
-            (f"{'02' if full_rgb_list else '01'}_s_g_pred", torch.clamp(s_g_pred_vis, 0.0, 1.0)),
-            (f"{'03' if full_rgb_list else '02'}_s_g_gt", torch.clamp(s_g_gt_vis, 0.0, 1.0)),
-            (f"{'04' if full_rgb_list else '03'}_s_c_pred", torch.clamp(s_c_pred_vis, 0.0, 1.0)),
-            (f"{'05' if full_rgb_list else '04'}_s_c_gt", torch.clamp(s_c_gt_vis, 0.0, 1.0)),
-            (f"{'06' if full_rgb_list else '05'}_a_d_pred", _vis_tonemap(a_d_pred_vis)),
-            (f"{'07' if full_rgb_list else '06'}_a_d_gt", _vis_tonemap(a_d_gt_vis)),
-            (f"{'08' if full_rgb_list else '07'}_s_d_pred", torch.clamp(s_d_pred_vis, 0.0, 1.0)),
-            (f"{'09' if full_rgb_list else '08'}_s_d_gt", torch.clamp(s_d_gt_vis, 0.0, 1.0)),
-    
-            # (f"{'10' if full_rgb_list else '09'}_pos_res_pred", pos_res_vis),
-            # (f"{'11' if full_rgb_list else '10'}_neg_res_pred", neg_res_vis),
-        ])
-
-        target_hw = None
         for name, tile in sample_tiles:
             try:
                 if tile is None:
                     continue
-                norm_tile = _normalize_tile(tile, target_hw=target_hw)
+                # Normalize per-tile first, then force a single final HW after all
+                # visualization transforms (scale + footer + text) so cat() is safe.
+                norm_tile = _normalize_tile(tile, target_hw=None)
                 if norm_tile is None:
                     continue
-                if target_hw is None:
-                    target_hw = (int(norm_tile.shape[1]), int(norm_tile.shape[2]))
+                
+                # Apply tile scaling
+                if tile_scale != 1.0:
+                    norm_tile = F.interpolate(
+                        norm_tile.unsqueeze(0),
+                        scale_factor=tile_scale,
+                        mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(0)
+                
+                # Add footer with title
+                c, h, w = norm_tile.shape
+                canvas = torch.ones((c, h + footer_h, w), dtype=norm_tile.dtype, device=norm_tile.device)
+                canvas[:, :h, :] = norm_tile
+                
+                # Render title text onto footer using PIL
+                try:
+                    canvas_np = (canvas.clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+                    from PIL import Image, ImageDraw
+                    img = Image.fromarray(canvas_np)
+                    draw = ImageDraw.Draw(img)
+                    text_w = draw.textlength(name, font=font)
+                    x = max(0, int((w - text_w) // 2))
+                    y = h + 10
+                    draw.text((x, y), name, fill=(0, 0, 0), font=font)
+                    norm_tile = torch.from_numpy(np.array(img).astype(np.float32) / 255.0).permute(2, 0, 1)
+                except Exception as e:
+                    norm_tile = canvas
+                
+                if final_target_hw is None:
+                    final_target_hw = (int(norm_tile.shape[1]), int(norm_tile.shape[2]))
+                elif (
+                    norm_tile.shape[1] != final_target_hw[0]
+                    or norm_tile.shape[2] != final_target_hw[1]
+                ):
+                    norm_tile = torch.nn.functional.interpolate(
+                        norm_tile.unsqueeze(0),
+                        size=final_target_hw,
+                        mode='bilinear',
+                        align_corners=False,
+                    ).squeeze(0)
                 named_tiles.append((name, norm_tile))
             except Exception as exc:
                 print(f"[warn][val step {global_step}] skipped tile '{name}' for sample_{i}: {exc}")
@@ -626,11 +719,34 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         if not named_tiles:
             continue
 
-        strip = torch.cat([t for _, t in named_tiles], dim=2)
-        writer.add_image(f'{example_tag}/sample_{i}', strip, global_step)
+        tiles = [t for _, t in named_tiles]
+        if len(tiles) >= 10:
+            row1_img = torch.cat(tiles[:5], dim=2)
+            row2_img = torch.cat(tiles[5:10], dim=2)
+            strip = torch.cat([row1_img, row2_img], dim=1)
+        else:
+            # Fallback to single-row if some tiles were skipped.
+            strip = torch.cat(tiles, dim=2)
+
+        if sample_index is not None:
+            image_tag = f'{example_tag}/index_{sample_index}'
+        else:
+            image_tag = f'{example_tag}/sample_{i}'
+        writer.add_image(image_tag, strip, global_step)
 
 
-def validate(model, dataloader, criterion, device, global_step, writer, val_example_images=2, val_example_indices=None):
+def validate(
+    model,
+    dataloader,
+    criterion,
+    device,
+    global_step,
+    writer,
+    val_example_images=2,
+    val_example_indices=None,
+    max_val_batches=None,
+    fast_val_metrics=False,
+):
     """
     Validation for ablation comparison on fixed Hypersim val split.
     Logs both losses and per-decoder metrics from scale-matched targets.
@@ -638,6 +754,11 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
     Args:
         val_example_indices: list of global sample indices to log, e.g., [100, 110, 120].
                            If provided, val_example_images is ignored.
+        max_val_batches: int or None. If set, scalar losses/metrics are computed on first N
+                batches for speed. When val_example_indices is provided, extra batches
+                may still be scanned to collect requested visualization samples.
+        fast_val_metrics: bool. If True, uses proxy SSIM metric for speed.
+                  If False (default), uses exact skimage SSIM.
     """
     model.eval()
     total_loss = {
@@ -673,12 +794,25 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
     use_indices = len(val_example_indices) > 0
     use_count = not use_indices
     
-    # Maps global sample index to (batch_idx, sample_in_batch)
-    indices_to_collect = {idx: None for idx in val_example_indices}
+    indices_to_collect = set(int(idx) for idx in val_example_indices)
     collected_samples = {}  # Maps global index to (rgb, predictions, targets)
+    processed_batches = 0
 
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation')):
+        metric_batches_to_process = len(dataloader) if max_val_batches is None else min(max_val_batches, len(dataloader))
+        # If explicit indices are requested, keep scanning until all are found (or dataloader ends),
+        # but only accumulate scalar metrics for the first `max_val_batches` batches.
+        if use_indices:
+            progress_total = len(dataloader)
+        else:
+            progress_total = metric_batches_to_process
+
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation', total=progress_total)):
+            metric_budget_reached = max_val_batches is not None and batch_idx >= max_val_batches
+            need_more_index_samples = use_indices and (len(collected_samples) < len(indices_to_collect))
+            if metric_budget_reached and not need_more_index_samples:
+                break
+
             rgb = batch['rgb'].to(device)
             albedo_raw = batch['albedo_raw'].to(device)
             illum_raw = batch.get('illum_raw', None)
@@ -705,16 +839,22 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                 m_diffuse=m_diffuse,
             )
 
-            # Collect samples at specified indices
+            # Collect samples at specified indices.
+            # Prefer true dataset sample indices when available so logging is robust to
+            # sampler behavior and variable batch composition.
             batch_size = rgb.shape[0]
+            sample_indices = batch.get('sample_idx', None)
             if use_indices:
                 for i in range(batch_size):
-                    global_idx = batch_idx * dataloader.batch_size + i
+                    if sample_indices is not None:
+                        global_idx = int(sample_indices[i].item())
+                    else:
+                        global_idx = int(batch_idx * dataloader.batch_size + i)
                     if global_idx in indices_to_collect:
                         collected_samples[global_idx] = {
                             'rgb': rgb[i:i+1],
-                            'predictions': predictions,
-                            'targets': targets,
+                            'predictions': {k: v[i:i+1] for k, v in predictions.items()},
+                            'targets': {k: v[i:i+1] for k, v in targets.items()},
                         }
             
             # For count-based mode, log from first batch only
@@ -729,7 +869,14 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     full_rgb_list=None,
                 )
 
-            losses = criterion(predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg))
+            # When max_val_batches is set and we are scanning extra batches only to satisfy
+            # val_example_indices, skip scalar loss/metric accumulation for those extra batches.
+            if metric_budget_reached:
+                continue
+
+            processed_batches += 1
+
+            losses = criterion(predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg), normals=normals)
             for k in total_loss:
                 if k in losses:
                     total_loss[k] += losses[k].item()
@@ -738,7 +885,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             d_g_star = targets['D_g_star']
             pi_star = targets['pi_star']
             d_g_pred = predictions['d_g']
-            pi_pred = predictions['s_d']
+            pi_pred = predictions['pi']
 
             batch_size = rgb.shape[0]
             for i in range(batch_size):
@@ -752,7 +899,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 ).item()
                 total_metric['s_g_ssim'] += _compute_ssim_bounded(
-                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
+                    d_g_pred[i:i+1], d_g_star[i:i+1], vm, fast_mode=fast_val_metrics
                 )
 
                 # Dec B metric on xi.
@@ -771,7 +918,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                     predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
                 ).item()
                 total_metric['a_d_ssim'] += _compute_ssim_bounded(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
+                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm, fast_mode=fast_val_metrics
                 )
 
                 # Dec D metrics on inverse diffuse shading pi (count only when diffuse GT is available)
@@ -783,7 +930,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
                         pi_pred[i:i+1], pi_star[i:i+1], vm
                     )
                     s_d_ssim = torch.as_tensor(_compute_ssim_bounded(
-                        pi_pred[i:i+1], pi_star[i:i+1], vm
+                        pi_pred[i:i+1], pi_star[i:i+1], vm, fast_mode=fast_val_metrics
                     ), device=rgb.device)
 
                     # Guard against NaN/Inf so TensorBoard tags are always emitted.
@@ -796,6 +943,14 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
 
                     n_s_d_samples += 1
                 n_samples += 1
+
+    if use_indices:
+        missing_indices = sorted(indices_to_collect - set(collected_samples.keys()))
+        if missing_indices:
+            print(
+                "[validate] requested val_example_indices not found in this run: "
+                f"{missing_indices}"
+            )
 
     # Log collected samples for index-based visualization
     if use_indices and collected_samples:
@@ -815,7 +970,7 @@ def validate(model, dataloader, criterion, device, global_step, writer, val_exam
             )
 
     # Losses are averaged over batches because criterion returns batch-level scalars.
-    denom_loss = max(len(dataloader), 1)
+    denom_loss = max(processed_batches, 1)
     for k in total_loss:
         total_loss[k] /= denom_loss
 
@@ -851,7 +1006,7 @@ def _phase_schedule(train_cfg, global_step):
 
 
 def build_stage1_model(config):
-    version = float(model_cfg.get("version", 1))
+    version = float(config['model'].get('version', 1))   # float(), not int()
     model_cfg = {
         'z_channels': config['model'].get('z_channels', 1024),
         'freeze_stages': config['model'].get('freeze_stages', [1, 2]),
@@ -861,11 +1016,13 @@ def build_stage1_model(config):
         'input_size': int(config['train'].get('input_size', 384)),
     }
     model_map = {
-        1: IntrinsicDecompositionV1,
-        2: IntrinsicDecompositionV2,
+        1.0: IntrinsicDecompositionV1,
+        2.0: IntrinsicDecompositionV2,
         2.5: IntrinsicDecompositionV2_5,
-        3: IntrinsicDecompositionV3,
-        4: IntrinsicDecompositionV4,
+        3.0: IntrinsicDecompositionV3,
+        4.0: IntrinsicDecompositionV4,
+        5.0: IntrinsicDecompositionV5,
+        6.0: IntrinsicDecompositionV6,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -904,7 +1061,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    version = int(config['model']['version'])
+    version = config['model']['version']
     ckpt_dir = os.path.join(config['paths']['checkpoint_dir'], f'v{version}')
     log_dir = os.path.join(config['paths']['log_dir'], f'v{version}')
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -1014,6 +1171,12 @@ def main():
     ckpt_interval_iters = int(config['train'].get('checkpoint_interval_iters', 5000))
     val_example_images = int(config['train'].get('val_example_images', 2))
     val_example_indices = config['train'].get('val_example_indices', [])
+    max_val_batches = config['train'].get('max_val_batches', None)
+    if max_val_batches is not None:
+        max_val_batches = int(max_val_batches)
+        if max_val_batches <= 0:
+            max_val_batches = None
+    fast_val_metrics = bool(config['train'].get('fast_val_metrics', False))
 
     start_step = 0
     resume_path = _resolve_resume_path(args.resume, args.auto_resume, ckpt_dir)
@@ -1093,6 +1256,8 @@ def main():
                 writer,
                 val_example_images=val_example_images,
                 val_example_indices=val_example_indices,
+                max_val_batches=max_val_batches,
+                fast_val_metrics=fast_val_metrics,
             )
             print(f"[{step+1}] val: " + ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()]))
 

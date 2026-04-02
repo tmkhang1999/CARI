@@ -35,6 +35,8 @@ from models import (
     IntrinsicDecompositionV2_5,
     IntrinsicDecompositionV3,
     IntrinsicDecompositionV4,
+    IntrinsicDecompositionV5,
+    IntrinsicDecompositionV6,
 )
 
 
@@ -92,6 +94,8 @@ def _build_stage1_model(model_cfg):
         2.5: IntrinsicDecompositionV2_5,
         3: IntrinsicDecompositionV3,
         4: IntrinsicDecompositionV4,
+        5: IntrinsicDecompositionV5,
+        6: IntrinsicDecompositionV6,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -280,8 +284,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
 
 
 def _apply_diffuse_detach(predictions, m_diffuse):
-    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions["s_d"].device)
-    predictions["s_d"] = predictions["s_d"] * mask + predictions["s_d"].detach() * (1.0 - mask)
+    mask = m_diffuse.view(-1, 1, 1, 1).to(predictions["pi"].device)
+    predictions["pi"] = predictions["pi"] * mask + predictions["pi"].detach() * (1.0 - mask)
     return predictions
 
 
@@ -418,7 +422,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     # 2. Shading via Inverse Domain Tonemapping (1 - D)
     s_g_pred_vis = 1.0 - preds["d_g"]
     s_g_gt_vis = 1.0 - gts["D_g_star"]
-    s_d_pred_vis = 1.0 - preds["s_d"]
+    s_d_pred_vis = 1.0 - preds["pi"]
     s_d_gt_vis = 1.0 - gts["pi_star"]
 
     # 3. Colorful Shading (S_c) GT and Pred via Inverse Domain
@@ -440,30 +444,27 @@ def _save_visual_strip(rgb, preds, gts, out_png):
 
     s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
 
-    # 4. & 5. Residuals: Positive (Specularity) and Negative (Saturation)
-    s_d_pred_linear = 1.0 / (preds["s_d"] + 1e-6) - 1.0
+    # Reconstruction tile for row 2: (a_d_pred x s_d_pred)
+    s_d_pred_linear = 1.0 / (preds["pi"] + 1e-6) - 1.0
     recon_diffuse = preds["a_d"] * s_d_pred_linear
-    pos_res_pred = torch.clamp(rgb - recon_diffuse, min=0.0)
-    neg_res_pred = torch.clamp(recon_diffuse - rgb, min=0.0)
 
-    # Note: s_g, s_d, s_c and a_d are already transformed to [0,1].
-    # Residuals and original RGB are still in linear unbounded space, so use _tonemap_vis
+    # Fixed 2-row order to match training-time TensorBoard layout.
     titled_tiles = [
-        ("Input tonemapped RGB", _tonemap_vis(rgb)),
-        ("S_g Pred", torch.clamp(s_g_pred_vis, 0.0, 1.0)),
-        ("S_g GT", torch.clamp(s_g_gt_vis, 0.0, 1.0)),
-        ("Colorful S_c Pred", torch.clamp(s_c_pred_vis, 0.0, 1.0)),
-        ("Colorful S_c GT", torch.clamp(s_c_gt_vis, 0.0, 1.0)),
-        ("Albedo Pred", _tonemap_vis(a_d_pred_vis)),
+        ("Tonemapped RGB", _tonemap_vis(rgb)),
+        ("Gray Shading GT", s_g_gt_vis),
+        ("Colorful Shading GT", s_c_gt_vis),
         ("Albedo GT", _tonemap_vis(a_d_gt_vis)),
-        ("S_d Pred", torch.clamp(s_d_pred_vis, 0.0, 1.0)),
-        ("S_d GT", torch.clamp(s_d_gt_vis, 0.0, 1.0)),
-        ("Positive Residual (R+)", _tonemap_vis(pos_res_pred)),
-        ("Negative Residual (R-)", _tonemap_vis(neg_res_pred)),
+        ("Diffuse Shading GT", s_d_gt_vis),
+        ("Diffuse Reconstruction", _tonemap_vis(recon_diffuse)),
+        ("Gray Shading Pred", s_g_pred_vis),
+        ("Colorful Shading Pred", s_c_pred_vis),
+        ("Albedo Pred", _tonemap_vis(a_d_pred_vis)),
+        ("Diffuse Shading Pred", s_d_pred_vis),
     ]
 
     tiles = []
-    footer_h = 80
+    footer_h = 120
+    tile_scale = 1.25
     try:
         font = ImageFont.truetype("DejaVuSans.ttf", 60)
     except OSError:
@@ -474,6 +475,14 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         if c == 1:
             tile = tile.repeat(3, 1, 1)
             c = 3
+        if tile_scale != 1.0:
+            tile = F.interpolate(
+                tile.unsqueeze(0),
+                scale_factor=tile_scale,
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            c, h, w = tile.shape
         canvas = torch.ones((c, h + footer_h, w), dtype=tile.dtype, device=tile.device)
         canvas[:, :h, :] = tile
 
@@ -489,7 +498,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         tile_labeled = torch.from_numpy(np.array(img).astype(np.float32) / 255.0).permute(2, 0, 1)
         tiles.append(tile_labeled)
 
-    grid = vutils.make_grid(tiles, nrow=len(tiles), padding=4, pad_value=1.0)
+    grid = vutils.make_grid(tiles, nrow=5, padding=4, pad_value=1.0)
     out_dir = os.path.dirname(out_png)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -504,7 +513,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
     model = _build_stage1_model(config.get("model", {})).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     model.eval()
 
     hypersim_root = _resolve_hypersim_root(args, config)
@@ -596,7 +605,7 @@ def main():
 
     # Compute metrics in inverse shading space (bounded).
     d_g_pred = predictions["d_g"]
-    pi_pred = predictions["s_d"]
+    pi_pred = predictions["pi"]
     d_g_gt = targets["D_g_star"]
     pi_gt = targets["pi_star"]
 

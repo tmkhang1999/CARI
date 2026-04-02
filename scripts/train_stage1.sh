@@ -57,6 +57,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+# Handle versions like 2.5 which are stored as v2_5.yaml
+if [[ ! -f "$CONFIG" ]]; then
+    ALT_CONFIG="${ROOT_DIR}/src/configs/v${VERSION//./_}.yaml"
+    if [[ -f "$ALT_CONFIG" ]]; then
+        CONFIG="$ALT_CONFIG"
+    fi
+fi
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "ERROR: Config not found: $CONFIG"
