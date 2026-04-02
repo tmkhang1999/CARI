@@ -58,5 +58,5 @@ class IntrinsicDecompositionV2_5(IntrinsicDecompositionV2):
             'c': c, 
             's_c': s_c, 
             'a_d': a_d, 
-            's_d': pi
+            'pi': pi
             }

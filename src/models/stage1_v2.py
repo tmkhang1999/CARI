@@ -107,5 +107,5 @@ class IntrinsicDecompositionV2(nn.Module):
             "c": c,
             "s_c": s_c,
             "a_d": a_d,
-            "s_d": pi,
+            "pi": pi,
         }

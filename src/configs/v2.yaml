@@ -9,12 +9,15 @@ model:
 
 train:
   batch_size: 8
+  num_workers: 6
+
   log_interval: 50
-  val_interval_iters: 2000
-  checkpoint_interval_iters: 5000
-  phase1_iterations: 50000
-  phase2_iterations: 50000
-  extend_iterations: 75000
+  val_interval_iters: 500
+  checkpoint_interval_iters: 1000
+
+  phase1_iterations: 10000
+  phase2_iterations: 10000
+  extend_iterations: 15000
   sampling_weights_phase1:
     hypersim: 1.0
     midintrinsic: 0.0

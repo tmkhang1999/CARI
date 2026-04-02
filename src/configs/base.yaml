@@ -11,6 +11,8 @@ train:
   checkpoint_interval_iters: 5000
   val_example_images: 2  # ignored if val_example_indices is set
   val_example_indices: [100, 110, 120]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
+  max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
+  fast_val_metrics: false # false=exact skimage SSIM, true=faster proxy SSIM
   input_size: 384
 
   # Two-phase curriculum (global-iteration based)
@@ -48,8 +50,8 @@ data:
   #   Cache only stores decoded arrays; dataloader indices are never replayed.
   cache_max_items: 256
   mid_cache_max_items: 512
-  val_cache_max_items: 128   # defaults to cache_max_items when omitted
-  val_num_workers: 4         # defaults to train.num_workers when omitted
+  val_cache_max_items: 256      # validation: use same as training for better cache hit rate
+  val_num_workers: 6            # validation: increased from 2 to reduce data loading bottleneck
   crop_mode_train: 'random'   # random|center|hybrid
   crop_mode_val: 'center'     # random|center
 
@@ -73,8 +75,10 @@ data:
 loss:
   lambda_msg: 0.5
   lambda_tv: 0.1
-  lambda_perceptual: 0.05
-  lambda_dssim: 0.4
+  lambda_perceptual: 0.05 #0.05 
+  lambda_dssim: 0.4 #0.4
+  tv_type: 'segmentation' # options: 'segmentation', 'normals', null (disable TV)
+  tv_target_classes: [1, 22] # NYU40 IDs, default wall(1) + ceiling(22)
 
 # Paths  (relative to repo root when run from IR-IID/)
 paths:

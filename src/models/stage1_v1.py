@@ -91,7 +91,7 @@ class IntrinsicDecompositionV1(nn.Module):
                 c: (N, 3, H, W) chroma map (converted from xi)
                 s_c: (N, 3, H, W) colorful shading = S_g * C
                 a_d: (N, 3, H, W) diffuse albedo
-                s_d: (N, 3, H, W) inverse diffuse shading pi
+                pi: (N, 3, H, W) inverse diffuse shading pi
         """
         # Encode image
         z_global, skip_features = self.image_encoder(rgb)
@@ -144,7 +144,7 @@ class IntrinsicDecompositionV1(nn.Module):
             'c': c,
             's_c': s_c,
             'a_d': a_d,
-            's_d': pi
+            'pi': pi
         }
 
 

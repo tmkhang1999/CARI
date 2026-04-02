@@ -1,6 +1,5 @@
-# Stage 1 V4 — CCR Guidance + SPADE Semantic Normalization
-# Adds CCREncoder (6ch) + ResidualAttention in Dec C + SPADE.
-# Requires normals + seg in the batch.
+# Stage 1 V4 — V1 + segmentation-guided SPADE in Dec C
+# Uses segmentation map for model guidance (SPADE) and TV loss masking.
 model:
   version: 4
   backbone: convnextv2_base
@@ -11,12 +10,18 @@ model:
 
 train:
   batch_size: 8
-  log_interval: 50
-  val_interval_iters: 2000
-  checkpoint_interval_iters: 5000
-  phase1_iterations: 50000
-  phase2_iterations: 50000
-  extend_iterations: 75000
+  num_workers: 6
+
+  log_interval: 500
+  val_interval_iters: 1000
+  checkpoint_interval_iters: 1000
+
+  val_example_images: 3
+
+  phase1_iterations: 10000
+  phase2_iterations: 10000
+  extend_iterations: 15000
+  
   sampling_weights_phase1:
     hypersim: 1.0
     midintrinsic: 0.0
@@ -29,3 +34,7 @@ data:
   subset_seed: 42
   hypersim_train_max_images: 0
   midintrinsic_train_max_images: 0
+
+loss:
+  tv_type: 'segmentation' # or 'normals', or null to disable TV
+  tv_target_classes: [1, 22] # NYU40 wall + ceiling
