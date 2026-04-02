@@ -13,11 +13,11 @@ class SemanticTVLoss(nn.Module):
     Semantic Total Variation loss for enforcing smoothness on structural surfaces.
     Only applies to pixels belonging to specified semantic classes.
     """
-    def __init__(self, target_classes=[1, 2, 22]):
+    def __init__(self, target_classes=[1, 22]):
         """
         Args:
             target_classes: List of class IDs to apply TV loss on
-                           Default: [1=wall, 2=floor, 22=ceiling] for NYU-40 classes
+                           Default: [1=wall, 22=ceiling] for NYU-40 classes
         """
         super().__init__()
         self.target_classes = target_classes
@@ -74,11 +74,62 @@ class SemanticTVLoss(nn.Module):
 
 if __name__ == '__main__':
     # Test
-    loss_fn = SemanticTVLoss(target_classes=[1, 2, 22])
+    loss_fn = SemanticTVLoss(target_classes=[1, 22])
 
     pred = torch.rand(2, 3, 256, 256)
     seg_map = torch.randint(0, 40, (2, 256, 256), dtype=torch.long)
 
     loss = loss_fn(pred, seg_map)
     print(f"Semantic TV Loss: {loss.item()}")
+    
 
+class NormalGuidedTVLoss(nn.Module):
+    """
+    Normal-guided Total Variation loss.
+    Weights the spatial gradients of the predicted Albedo by the cosine similarity
+    of the neighboring surface normals.
+    Restores the piecewise-constant prior without needing semantic labels.
+    """
+    def __init__(self, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def compute_tv_with_normals(self, x, normals):
+        # 1. Horizontal Gradients
+        diff_h = torch.abs(x[:, :, :, 1:] - x[:, :, :, :-1])
+        
+        # 2. Horizontal Normal Similarity
+        # We compute similarity for the (W-1) pairs
+        cos_sim_h = F.cosine_similarity(normals[:, :, :, 1:], normals[:, :, :, :-1], dim=1, eps=self.eps)
+        
+        # Use a power to make the mask more sensitive to small normal changes (corners)
+        weight_h = torch.pow(F.relu(cos_sim_h), 8).unsqueeze(1) 
+        
+        # 3. Apply Weight THEN Pad (or pad weight with 1.0)
+        # This ensures the last column doesn't accidentally lose its TV smoothing
+        tv_h = diff_h * weight_h
+        tv_h = F.pad(tv_h, (0, 1, 0, 0), mode='replicate')
+
+        # 4. Vertical Gradients
+        diff_v = torch.abs(x[:, :, 1:, :] - x[:, :, :-1, :])
+        cos_sim_v = F.cosine_similarity(normals[:, :, 1:, :], normals[:, :, :-1, :], dim=1, eps=self.eps)
+        weight_v = torch.pow(F.relu(cos_sim_v), 8).unsqueeze(1)
+        
+        tv_v = diff_v * weight_v
+        tv_v = F.pad(tv_v, (0, 0, 0, 1), mode='replicate')
+
+        # Return mean across channels (RGB) to get (N, 1, H, W)
+        return tv_h.mean(dim=1, keepdim=True) + tv_v.mean(dim=1, keepdim=True)
+
+    def forward(self, pred, normals, valid_mask=None):
+        """
+        Args:
+            pred: (N, C, H, W) prediction
+            normals: (N, 3, H, W) normals
+            valid_mask: (N, 1, H, W) boolean mask
+        """
+        tv = self.compute_tv_with_normals(pred, normals)
+        if valid_mask is not None:
+            mask = valid_mask.float()
+            return (tv * mask).sum() / (mask.sum() + self.eps)
+        return tv.mean()

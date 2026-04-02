@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .msg_loss import MultiScaleGradientLoss
 from .perceptual_loss import PerceptualLoss
-from .semantic_tv_loss import SemanticTVLoss
+from .semantic_tv_loss import SemanticTVLoss, NormalGuidedTVLoss
 
 
 class FlexibleLoss(nn.Module):
@@ -36,14 +36,30 @@ class FlexibleLoss(nn.Module):
         self.lambda_tv = config.get('lambda_tv', 0.1)
         self.lambda_perceptual = config.get('lambda_perceptual', 0.05)
         self.lambda_dssim = config.get('lambda_dssim', 0.1)
+        self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
+        self.tv_target_classes = config.get('tv_target_classes', [1, 22])
 
         # Loss modules
         self.msg_loss = MultiScaleGradientLoss(num_scales=4)
         self.perceptual_loss = PerceptualLoss()
-        self.semantic_tv_loss = SemanticTVLoss(target_classes=[1, 2, 22])
+        self.semantic_tv_loss = SemanticTVLoss(target_classes=self.tv_target_classes)
+        self.normal_tv_loss = NormalGuidedTVLoss()
 
         # Cache Gaussian DSSIM windows by channel/device/dtype/size.
         self._dssim_window_cache = {}
+
+    @staticmethod
+    def _normalize_tv_type(tv_type):
+        """Normalize TV mode. Supports disabling via None/'none'/'off'."""
+        if tv_type is None:
+            return None
+        if isinstance(tv_type, str):
+            mode = tv_type.strip().lower()
+            if mode in ('none', 'off', ''):
+                return None
+            if mode in ('segmentation', 'normals'):
+                return mode
+        return tv_type
 
     # ------------------------------------------------------------------
     # Utility
@@ -125,7 +141,7 @@ class FlexibleLoss(nn.Module):
         msg = self.msg_loss(xi_pred, xi_star) * mask.mean()
         return mse + self.lambda_msg * msg
 
-    def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None):
+    def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
         """Dec C total loss (kept for backward compatibility)."""
         total, _ = self.loss_c_with_details(
             a_d_pred,
@@ -133,10 +149,11 @@ class FlexibleLoss(nn.Module):
             valid_mask,
             m_albedo,
             seg_map,
+            normals,
         )
         return total
 
-    def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None):
+    def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
         """Dec C loss with per-term details for logging/debugging."""
         zero = a_d_pred.new_tensor(0.0)
         if m_albedo.sum() == 0:
@@ -156,7 +173,13 @@ class FlexibleLoss(nn.Module):
         l1 = self._masked_l1(a_d_pred, A_d_star, mask)
         msg = self._masked_msg(a_d_pred, A_d_star, mask_ratio)
 
-        tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
+        if self.tv_type is None:
+            tv = zero
+        elif self.tv_type == 'normals' and normals is not None:
+            tv = self.normal_tv_loss(a_d_pred, normals, valid_mask=mask)
+        else:
+            tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
+
         perceptual = self.perceptual_loss(a_d_pred, A_d_star)
         dssim = self._compute_dssim(a_d_pred, A_d_star)
 
@@ -201,10 +224,10 @@ class FlexibleLoss(nn.Module):
     # Main entry point
     # ------------------------------------------------------------------
     def forward(self, predictions, targets, m_diffuse, m_albedo,
-                valid_mask, seg_map=None):
+                valid_mask, seg_map=None, normals=None):
         """
         Args:
-            predictions: dict with keys [s_g, xi, c, s_c, a_d, s_d]
+            predictions: dict with keys [d_g, xi, c, s_c, a_d, pi]
             targets: dict with keys [D_g_star, xi_star, A_d_star, pi_star]
                      computed in training loop via scale_match → target-space conversion.
             m_diffuse: (N,) float routing mask for diffuse shading GT availability.
@@ -230,6 +253,7 @@ class FlexibleLoss(nn.Module):
                 valid_mask,
                 m_albedo,
                 seg_map,
+                normals,
             )
         else:
             lc = zero
@@ -242,7 +266,7 @@ class FlexibleLoss(nn.Module):
                 'loss_c_mask_ratio': zero,
             }
 
-        ld = self.loss_d(predictions['s_d'], targets['pi_star'],
+        ld = self.loss_d(predictions['pi'], targets['pi_star'],
                          valid_mask, m_diffuse) \
             if targets.get('pi_star') is not None else zero
 
@@ -267,12 +291,12 @@ if __name__ == '__main__':
     loss_fn = FlexibleLoss(config)
 
     predictions = {
-        's_g': torch.rand(2, 1, 64, 64),
+        'd_g': torch.rand(2, 1, 64, 64),
         'xi': torch.rand(2, 2, 64, 64),
         'c': torch.rand(2, 3, 64, 64),
         's_c': torch.rand(2, 3, 64, 64),
         'a_d': torch.rand(2, 3, 64, 64),
-        's_d': torch.rand(2, 3, 64, 64),
+        'pi': torch.rand(2, 3, 64, 64),
     }
     targets = {
         'D_g_star': torch.rand(2, 1, 64, 64),

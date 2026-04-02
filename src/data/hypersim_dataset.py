@@ -93,6 +93,17 @@ def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0, scale: float | No
     return np.clip(mapped, 0.0, 1.0).astype(np.float32)
 
 
+def _sanitize_normals(normals: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Replace invalid normal vectors and re-normalize to unit length."""
+    n = np.nan_to_num(normals, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+    n = np.clip(n, -1.0, 1.0)
+    norm = np.linalg.norm(n, axis=-1, keepdims=True)
+    safe = np.maximum(norm, eps)
+    n = n / safe
+    n = np.where(norm > eps, n, 0.0)
+    return n.astype(np.float32, copy=False)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dataset
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,6 +425,14 @@ class HypersimDataset(Dataset):
         rid:   np.ndarray | None,  # (H,W) int32, optional
     ) -> dict:
 
+        # Sanitize all modalities before any downstream math.
+        rgb = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        alb = np.nan_to_num(alb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        alb = np.clip(alb, 0.0, None)
+        illum = np.nan_to_num(illum, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        illum = np.clip(illum, 0.0, None)
+        norm = _sanitize_normals(norm)
+
         # ── Valid mask (before augmentation, in numpy) ────────────────────────
         # Primary: render_entity_id != -1 (sky / invalid geometry)
         # Albedo gate: require all albedo channels to stay above floor.
@@ -429,9 +448,7 @@ class HypersimDataset(Dataset):
         # produce targets in the same numeric regime.
         tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
         rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
-        illum_norm = np.nan_to_num(
-            illum, nan=0.0, posinf=0.0, neginf=0.0
-        ).astype(np.float64, copy=False) / tonemap_scale
+        illum_norm = illum.astype(np.float64, copy=False) / tonemap_scale
         illum_norm = illum_norm.astype(np.float32, copy=False)
 
         # ── Stack for joint spatial augmentation ─────────────────────────────
