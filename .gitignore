@@ -34,3 +34,5 @@ logs/
 fig/
 documents/references
 preprocessor/infer_m2f_ins.py
+preprocessor/inputs
+preprocessor/outputs
