@@ -1,6 +1,6 @@
-# Stage 1 V6 — V1 + segmentation SPADE + CCR (Dec C) + normals (Dec A & D)
+# Stage 1 V7 — FiLM (Dec B) + GuidanceEncoder B/C/D + CCR/SPADE ordered Dec C
 model:
-  version: 6
+  version: 7
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
@@ -36,7 +36,7 @@ data:
 
 loss:
   lambda_msg: 0.5
-  lambda_tv: 0.3
+  lambda_tv: 0.3 #0.1
   lambda_perceptual: 0.07 #0.05 
   lambda_dssim: 0.4 #0.4
   tv_type: 'segmentation' # options: 'segmentation', 'normals', null (disable TV)

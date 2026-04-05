@@ -227,7 +227,9 @@ class FlexibleLoss(nn.Module):
                 valid_mask, seg_map=None, normals=None):
         """
         Args:
-            predictions: dict with keys [d_g, xi, c, s_c, a_d, pi]
+            predictions: dict with required keys [d_g, xi, a_d, pi].
+                         Optional keys like [c, s_c] may be present for
+                         visualization/debug but are not used by this loss.
             targets: dict with keys [D_g_star, xi_star, A_d_star, pi_star]
                      computed in training loop via scale_match → target-space conversion.
             m_diffuse: (N,) float routing mask for diffuse shading GT availability.

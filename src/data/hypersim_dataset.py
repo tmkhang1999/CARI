@@ -69,39 +69,47 @@ def _load_hdf5(path: str, retries: int = 0) -> np.ndarray:
 
 def _compute_tonemap_scale(rgb: np.ndarray, percentile: float = 99.0) -> float:
     """Compute robust positive scale used for RGB/illum normalization."""
-    rgb64 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64, copy=False)
-    scale = float(np.percentile(rgb64, percentile))
+    # Use float32 to save memory/compute.
+    rgb_flat = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False).reshape(-1)
+    
+    # Fast O(n) approximation of percentile using partition
+    k = int(len(rgb_flat) * (percentile / 100.0))
+    if k >= len(rgb_flat):
+        k = len(rgb_flat) - 1
+    
+    # np.partition is O(N) compared to np.percentile which is O(N log N) via full sort
+    scale = float(np.partition(rgb_flat, k)[k])
+    
     if not np.isfinite(scale) or scale <= 0.0:
         return 1e-6
     return max(scale, 1e-6)
-
 
 def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0, scale: float | None = None) -> np.ndarray:
     """
     Compress linear HDR to [0,1] without gamma and with robust numeric guards.
     rgb: (H, W, 3) float32
     """
-    # Promote to float64 to avoid overflow during division when scale is tiny.
-    rgb64 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64, copy=False)
+    # Keep in float32. The tiny scale division is safe if we clamp the scale.
+    rgb32 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
     if scale is None:
-        scale = _compute_tonemap_scale(rgb64, percentile=percentile)
+        scale = _compute_tonemap_scale(rgb32, percentile=percentile)
     else:
         scale = max(float(scale), 1e-6)
 
-    mapped = np.divide(rgb64, scale, out=np.zeros_like(rgb64), where=np.isfinite(rgb64))
+    mapped = np.divide(rgb32, scale, out=np.zeros_like(rgb32), where=np.isfinite(rgb32))
     mapped = np.nan_to_num(mapped, nan=0.0, posinf=1.0, neginf=0.0)
-    return np.clip(mapped, 0.0, 1.0).astype(np.float32)
-
+    return np.clip(mapped, 0.0, 1.0)
 
 def _sanitize_normals(normals: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Replace invalid normal vectors and re-normalize to unit length."""
     n = np.nan_to_num(normals, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
     n = np.clip(n, -1.0, 1.0)
-    norm = np.linalg.norm(n, axis=-1, keepdims=True)
+    # Faster L2 norm than np.linalg.norm
+    norm = np.sqrt(np.sum(n * n, axis=-1, keepdims=True))
     safe = np.maximum(norm, eps)
     n = n / safe
     n = np.where(norm > eps, n, 0.0)
-    return n.astype(np.float32, copy=False)
+    return n
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,8 +289,7 @@ class HypersimDataset(Dataset):
                     # Required photometric modalities
                     alb_path   = base + '.diffuse_reflectance.hdf5'
                     illum_path = base + '.diffuse_illumination.hdf5'
-                    res_path   = base + '.residual.hdf5'
-                    if not all(os.path.exists(p) for p in [alb_path, illum_path, res_path]):
+                    if not all(os.path.exists(p) for p in [alb_path, illum_path]):
                         continue
 
                     # Geometry modalities
@@ -298,7 +305,6 @@ class HypersimDataset(Dataset):
                         'color':    color_path,
                         'albedo':   alb_path,
                         'illum':    illum_path,
-                        'residual': res_path,
                         'normal':   norm_path if has_geo else None,
                         'seg':      seg_path  if has_geo else None,
                         'rid':      rid_path  if os.path.exists(rid_path) else None,
@@ -335,7 +341,6 @@ class HypersimDataset(Dataset):
             sample.get('albedo'),
             sample.get('illum'),
             sample.get('residual'),
-            sample.get('normal'),
             sample.get('seg'),
             sample.get('rid'),
         ]
@@ -448,8 +453,7 @@ class HypersimDataset(Dataset):
         # produce targets in the same numeric regime.
         tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
         rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
-        illum_norm = illum.astype(np.float64, copy=False) / tonemap_scale
-        illum_norm = illum_norm.astype(np.float32, copy=False)
+        illum_norm = illum / tonemap_scale
 
         # ── Stack for joint spatial augmentation ─────────────────────────────
         # Layout (channel-last, axis=-1):
@@ -575,6 +579,8 @@ def get_hypersim_loader(
         num_workers=num_workers,
         pin_memory=bool(pin_memory),
         drop_last=(split == 'train'),
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
 

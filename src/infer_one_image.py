@@ -37,6 +37,8 @@ from models import (
     IntrinsicDecompositionV4,
     IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
+    IntrinsicDecompositionV7,
+    IntrinsicDecompositionV8,
 )
 
 
@@ -78,7 +80,7 @@ def _resolve_hypersim_root(args, config):
 
 
 def _build_stage1_model(model_cfg):
-    version = int(model_cfg.get("version", 1))
+    version = float(model_cfg.get("version", 1))
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -96,6 +98,8 @@ def _build_stage1_model(model_cfg):
         4: IntrinsicDecompositionV4,
         5: IntrinsicDecompositionV5,
         6: IntrinsicDecompositionV6,
+        7: IntrinsicDecompositionV7,
+        8: IntrinsicDecompositionV8,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -448,18 +452,37 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     s_d_pred_linear = 1.0 / (preds["pi"] + 1e-6) - 1.0
     recon_diffuse = preds["a_d"] * s_d_pred_linear
 
-    # Fixed 2-row order to match training-time TensorBoard layout.
+    s_d_gt_linear = 1.0 / (gts["pi_star"] + 1e-6) - 1.0
+    recon_diffuse_gt = gts["A_d_star"] * s_d_gt_linear
+
+    # 4. Derived Albedos for row 3 (I / S_* pred)
+    a_g_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_g_pred_linear + 1e-6)))
+    a_c_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_c_pred_linear + 1e-6)))
+    a_d_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_d_pred_linear + 1e-6)))
+    blank_tile = torch.ones_like(a_g_derived_vis)
+
+    # 3-row order layout
     titled_tiles = [
         ("Tonemapped RGB", _tonemap_vis(rgb)),
+        ("Diffuse Recon GT", _tonemap_vis(recon_diffuse_gt)),
         ("Gray Shading GT", s_g_gt_vis),
         ("Colorful Shading GT", s_c_gt_vis),
-        ("Albedo GT", _tonemap_vis(a_d_gt_vis)),
+        ("Albedo GT", a_d_gt_vis),
         ("Diffuse Shading GT", s_d_gt_vis),
-        ("Diffuse Reconstruction", _tonemap_vis(recon_diffuse)),
+        
+        ("", blank_tile),
+        ("Diffuse Recon Pred", _tonemap_vis(recon_diffuse)),
         ("Gray Shading Pred", s_g_pred_vis),
         ("Colorful Shading Pred", s_c_pred_vis),
-        ("Albedo Pred", _tonemap_vis(a_d_pred_vis)),
+        ("Albedo Pred", a_d_pred_vis),
         ("Diffuse Shading Pred", s_d_pred_vis),
+
+        ("", blank_tile),
+        ("", blank_tile),
+        ("Derived A_g = I/S_g", a_g_derived_vis),
+        ("Derived A_c = I/S_c", a_c_derived_vis),
+        ("", blank_tile),
+        ("Derived A_d = I/S_d", a_d_derived_vis),
     ]
 
     tiles = []
@@ -498,7 +521,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         tile_labeled = torch.from_numpy(np.array(img).astype(np.float32) / 255.0).permute(2, 0, 1)
         tiles.append(tile_labeled)
 
-    grid = vutils.make_grid(tiles, nrow=5, padding=4, pad_value=1.0)
+    grid = vutils.make_grid(tiles, nrow=6, padding=4, pad_value=1.0)
     out_dir = os.path.dirname(out_png)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)

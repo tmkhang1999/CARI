@@ -29,6 +29,8 @@ class MixedDataloader:
                 num_workers=num_workers,
                 pin_memory=pin_memory,
                 drop_last=True,
+            persistent_workers=(num_workers > 0),
+            prefetch_factor=4 if num_workers > 0 else None,
             )
             for name, dataset in valid_datasets.items()
         }
@@ -95,6 +97,8 @@ def build_mixed_dataloaders(datasets, batch_size=8, num_workers=4):
             num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
+            persistent_workers=(num_workers > 0),
+            prefetch_factor=4 if num_workers > 0 else None,
         )
         for name, dataset in valid_datasets.items()
     }

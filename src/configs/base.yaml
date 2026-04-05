@@ -49,7 +49,7 @@ data:
   #   Bounded per-worker decode cache (LRU). 0 disables caching.
   #   Cache only stores decoded arrays; dataloader indices are never replayed.
   cache_max_items: 256
-  mid_cache_max_items: 512
+  mid_cache_max_items: 256
   val_cache_max_items: 256      # validation: use same as training for better cache hit rate
   val_num_workers: 6            # validation: increased from 2 to reduce data loading bottleneck
   crop_mode_train: 'random'   # random|center|hybrid

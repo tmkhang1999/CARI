@@ -7,6 +7,7 @@ import inspect
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -33,6 +34,8 @@ from models import (
     IntrinsicDecompositionV4,
     IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
+    IntrinsicDecompositionV7,
+    IntrinsicDecompositionV8,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -269,20 +272,20 @@ def _loss_seg(model, seg):
 def train_one_step(model, batch, criterion, optimizer, device):
     model.train()
 
-    rgb = batch['rgb'].to(device)
-    albedo_raw = batch['albedo_raw'].to(device)
+    rgb = batch['rgb'].to(device, non_blocking=True)
+    albedo_raw = batch['albedo_raw'].to(device, non_blocking=True)
     illum_raw = batch.get('illum_raw', None)
     if illum_raw is not None:
-        illum_raw = illum_raw.to(device)
-    valid_mask = batch['valid_mask'].to(device)
-    m_diffuse = batch['M_diffuse'].float().to(device)
-    m_albedo = batch['M_albedo'].float().to(device)
+        illum_raw = illum_raw.to(device, non_blocking=True)
+    valid_mask = batch['valid_mask'].to(device, non_blocking=True)
+    m_diffuse = batch['M_diffuse'].float().to(device, non_blocking=True)
+    m_albedo = batch['M_albedo'].float().to(device, non_blocking=True)
     seg = batch.get('seg', None)
     if seg is not None:
-        seg = seg.to(device)
+        seg = seg.to(device, non_blocking=True)
     normals = batch.get('normals', None)
     if normals is not None:
-        normals = normals.to(device)
+        normals = normals.to(device, non_blocking=True)
 
     predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
     predictions = _apply_diffuse_detach(predictions, m_diffuse)
@@ -333,7 +336,7 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     unfold = torch.nn.Unfold(kernel_size=window_size, stride=stride)
     p_u = unfold(pred)        # (B, C*K*K, L)
     t_u = unfold(target)      # (B, C*K*K, L)
-    m_u = unfold(valid_mask)  # (B, 1*K*K, L)
+    m_u = unfold(valid_mask.float())  # (B, 1*K*K, L)
 
     # 3. Identify valid patches (at least 50% valid pixels)
     # Note: mask is single channel, valid for all channels
@@ -575,15 +578,23 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
 
     layout_names = [
         'Tonemapped RGB',
+        'Diffuse Recon GT',
         'Gray Shading GT',
-        'Colorized Shading GT',
+        'Colorful Shading GT',
         'Albedo GT',
         'Diffuse Shading GT',
-        'Diffuse Reconstruction',
+        '',
+        'Diffuse Recon Pred',
         'Gray Shading Pred',
-        'Colorized Shading Pred',
+        'Colorful Shading Pred',
         'Albedo Pred',
         'Diffuse Shading Pred',
+        '',
+        '',
+        'Derived A_g = I/S_g',
+        'Derived A_c = I/S_c',
+        '',
+        'Derived A_d = I/S_d',
     ]
 
     # Set TensorBoard tag based on sample_index
@@ -599,23 +610,24 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
     )
 
     def _gamma_correct(x):
-        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 2.2)
+        # Match inference visualization for direct comparability.
+        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3.0)
     
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
         named_tiles = []
 
-        # 1. Diffuse Albedo: Gamma Correction
+        # 1. Albedo via gamma correction (same as inference script)
         a_d_pred_vis = _gamma_correct(predictions['a_d'][i:i+1])
         a_d_gt_vis = _gamma_correct(targets['A_d_star'][i:i+1])
 
-        # 2. Shading: Tonemapping via Inverse Domain (1 - D)
+        # 2. Shading via inverse-domain visualization (1 - D)
         s_g_pred_vis = 1.0 - predictions['d_g'][i:i+1]
         s_g_gt_vis = 1.0 - targets['D_g_star'][i:i+1]
         s_d_pred_vis = 1.0 - predictions['pi'][i:i+1]
         s_d_gt_vis = 1.0 - targets['pi_star'][i:i+1]
 
-        # 3. Colorized Shading (S_c) GT and Pred via Inverse Domain
+        # 3. Colorful shading GT/pred via inverse-domain route
         s_g_gt_linear = 1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0
         c_rg_gt = 1.0 / (targets['xi_star'][i:i+1, 0:1] + 1e-6) - 1.0
         c_bg_gt = 1.0 / (targets['xi_star'][i:i+1, 1:2] + 1e-6) - 1.0
@@ -634,22 +646,40 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             
         s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
 
-        # Reconstruction used in row-2 tile: (a_d_pred x s_d_pred_linear)
-        a_d_pred = predictions['a_d'][i:i+1]
+        # Diffuse reconstruction tiles for GT and prediction rows.
         s_d_pred_linear = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
-        recon_pred_vis = _vis_tonemap(a_d_pred * s_d_pred_linear)
+        recon_diffuse = predictions['a_d'][i:i+1] * s_d_pred_linear
+
+        s_d_gt_linear = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
+        recon_diffuse_gt = targets['A_d_star'][i:i+1] * s_d_gt_linear
+
+        # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
+        a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6)))
+        a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6)))
+        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6)))
+        blank_tile = torch.ones_like(a_g_derived_vis)
 
         sample_tiles = [
             ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1])),
+            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt)),
             ('Gray Shading GT', s_g_gt_vis),
-            ('Colorized Shading GT', s_c_gt_vis),
-            ('Albedo GT', _vis_tonemap(a_d_gt_vis)),
+            ('Colorful Shading GT', s_c_gt_vis),
+            ('Albedo GT', a_d_gt_vis),
             ('Diffuse Shading GT', s_d_gt_vis),
-            ('Diffuse Reconstruction', recon_pred_vis),
+
+            ('', blank_tile),
+            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse)),
             ('Gray Shading Pred', s_g_pred_vis),
-            ('Colorized Shading Pred', s_c_pred_vis),
-            ('Albedo Pred', _vis_tonemap(a_d_pred_vis)),
+            ('Colorful Shading Pred', s_c_pred_vis),
+            ('Albedo Pred', a_d_pred_vis),
             ('Diffuse Shading Pred', s_d_pred_vis),
+
+            ('', blank_tile),
+            ('', blank_tile),
+            ('Derived A_g = I/S_g', a_g_derived_vis),
+            ('Derived A_c = I/S_c', a_c_derived_vis),
+            ('', blank_tile),
+            ('Derived A_d = I/S_d', a_d_derived_vis),
         ]
 
         final_target_hw = None
@@ -720,7 +750,12 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
             continue
 
         tiles = [t for _, t in named_tiles]
-        if len(tiles) >= 10:
+        if len(tiles) >= 18:
+            row1_img = torch.cat(tiles[:6], dim=2)
+            row2_img = torch.cat(tiles[6:12], dim=2)
+            row3_img = torch.cat(tiles[12:18], dim=2)
+            strip = torch.cat([row1_img, row2_img, row3_img], dim=1)
+        elif len(tiles) >= 10:
             row1_img = torch.cat(tiles[:5], dim=2)
             row2_img = torch.cat(tiles[5:10], dim=2)
             strip = torch.cat([row1_img, row2_img], dim=1)
@@ -813,20 +848,20 @@ def validate(
             if metric_budget_reached and not need_more_index_samples:
                 break
 
-            rgb = batch['rgb'].to(device)
-            albedo_raw = batch['albedo_raw'].to(device)
+            rgb = batch['rgb'].to(device, non_blocking=True)
+            albedo_raw = batch['albedo_raw'].to(device, non_blocking=True)
             illum_raw = batch.get('illum_raw', None)
             if illum_raw is not None:
-                illum_raw = illum_raw.to(device)
-            valid_mask = batch['valid_mask'].to(device)
-            m_diffuse = batch['M_diffuse'].float().to(device)
-            m_albedo = batch['M_albedo'].float().to(device)
+                illum_raw = illum_raw.to(device, non_blocking=True)
+            valid_mask = batch['valid_mask'].to(device, non_blocking=True)
+            m_diffuse = batch['M_diffuse'].float().to(device, non_blocking=True)
+            m_albedo = batch['M_albedo'].float().to(device, non_blocking=True)
             seg = batch.get('seg', None)
             if seg is not None:
-                seg = seg.to(device)
+                seg = seg.to(device, non_blocking=True)
             normals = batch.get('normals', None)
             if normals is not None:
-                normals = normals.to(device)
+                normals = normals.to(device, non_blocking=True)
 
             predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
@@ -1023,6 +1058,8 @@ def build_stage1_model(config):
         4.0: IntrinsicDecompositionV4,
         5.0: IntrinsicDecompositionV5,
         6.0: IntrinsicDecompositionV6,
+        7.0: IntrinsicDecompositionV7,
+        8.0: IntrinsicDecompositionV8,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -1222,6 +1259,10 @@ def main():
         dynamic_ncols=True,
     )
 
+    t_start = time.time()
+    io_time_total = 0.0
+    compute_time_total = 0.0
+
     for step in train_pbar:
         phase, weights = _phase_schedule(config['train'], step)
         if phase != last_phase:
@@ -1229,18 +1270,33 @@ def main():
             print(f"[{step}] switch -> {phase}, weights={weights}")
             last_phase = phase
 
+        t0 = time.time()
         batch, dataset_name = mixed_loader.next_batch()  # homogeneous per-batch dataset
+        t1 = time.time()
         losses = train_one_step(model, batch, criterion, optimizer, device)
+        t2 = time.time()
+        
+        io_time_total += (t1 - t0)
+        compute_time_total += (t2 - t1)
 
         train_pbar.set_postfix({
             'phase': phase,
             'ds': dataset_name,
             'hyp_cap': (str(hypersim_train_max_images) if hypersim_train_max_images > 0 else 'all'),
             'loss': f"{losses['loss_total'].item():.4f}",
+            'io_ms': f"{(t1-t0)*1000:.1f}",
+            'gpu_ms': f"{(t2-t1)*1000:.1f}",
         })
 
         for k in running:
             running[k] += losses[k].item()
+
+        if step > start_step and step % 10 == 0:
+            avg_io = (io_time_total / 10) * 1000
+            avg_gpu = (compute_time_total / 10) * 1000
+            print(f"\n[Profiler Step {step}] Avg IO Wait: {avg_io:.1f} ms/batch | Avg GPU Compute: {avg_gpu:.1f} ms/batch")
+            io_time_total = 0.0
+            compute_time_total = 0.0
 
         if step % int(config['train']['log_interval']) == 0:
             _log_ordered_scalars(writer, losses, step)
