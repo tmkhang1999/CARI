@@ -33,6 +33,7 @@ from models import (
     IntrinsicDecompositionV6,
     IntrinsicDecompositionV7,
     IntrinsicDecompositionV8,
+    IntrinsicDecompositionV9,
 )
 
 
@@ -228,6 +229,7 @@ def build_stage1_model(model_cfg):
         6: IntrinsicDecompositionV6,
         7: IntrinsicDecompositionV7,
         8: IntrinsicDecompositionV8,
+        9: IntrinsicDecompositionV9,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")

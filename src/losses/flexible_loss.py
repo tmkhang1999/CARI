@@ -45,8 +45,14 @@ class FlexibleLoss(nn.Module):
         self.semantic_tv_loss = SemanticTVLoss(target_classes=self.tv_target_classes)
         self.normal_tv_loss = NormalGuidedTVLoss()
 
-        # Cache Gaussian DSSIM windows by channel/device/dtype/size.
-        self._dssim_window_cache = {}
+        # Base Gaussian DSSIM window registered as buffer for safe device moves.
+        window_size = 11
+        sigma = 1.5
+        coords = torch.arange(window_size, dtype=torch.float32)
+        gauss = torch.exp(-((coords - window_size // 2) ** 2) / (2.0 * sigma ** 2))
+        gauss = gauss / gauss.sum()
+        window_2d = (gauss.unsqueeze(1) @ gauss.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
+        self.register_buffer('dssim_base_window', window_2d, persistent=False)
 
     @staticmethod
     def _normalize_tv_type(tv_type):
@@ -78,29 +84,17 @@ class FlexibleLoss(nn.Module):
         """MSG loss scaled by the fraction of valid samples."""
         return self.msg_loss(pred, target) * mask_ratio
 
-    def _get_dssim_window(self, channels, device, dtype, window_size):
-        key = (int(channels), str(device), str(dtype), int(window_size))
-        window = self._dssim_window_cache.get(key)
-        if window is not None:
-            return window
-
-        sigma = 1.5
-        coords = torch.arange(window_size, dtype=dtype, device=device)
-        gauss = torch.exp(-((coords - window_size // 2) ** 2) / (2.0 * sigma ** 2))
-        gauss = gauss / gauss.sum()
-
-        window_1d = gauss.unsqueeze(1)
-        window_2d = (window_1d @ window_1d.t()).unsqueeze(0).unsqueeze(0)
-        window = window_2d.expand(channels, 1, window_size, window_size).contiguous()
-        self._dssim_window_cache[key] = window
-        return window
+    def _get_dssim_window(self, channels):
+        return self.dssim_base_window.expand(channels, 1, -1, -1).contiguous()
 
     def _compute_dssim(self, pred, target, window_size=11):
         """DSSIM = (1 - SSIM) / 2."""
+        pred = pred.to(torch.float32)
+        target = target.to(torch.float32)
         C1 = 0.01 ** 2
         C2 = 0.03 ** 2
         C = pred.shape[1]
-        window = self._get_dssim_window(C, pred.device, pred.dtype, window_size)
+        window = self._get_dssim_window(C).to(device=pred.device, dtype=pred.dtype)
 
         pad = window_size // 2
         mu1 = F.conv2d(pred, window, padding=pad, groups=C)
@@ -155,7 +149,7 @@ class FlexibleLoss(nn.Module):
 
     def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
         """Dec C loss with per-term details for logging/debugging."""
-        zero = a_d_pred.new_tensor(0.0)
+        zero = (a_d_pred * 0.0).sum()
         if m_albedo.sum() == 0:
             return zero, {
                 'loss_c_l1': zero,
@@ -180,8 +174,16 @@ class FlexibleLoss(nn.Module):
         else:
             tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
 
-        perceptual = self.perceptual_loss(a_d_pred, A_d_star)
-        dssim = self._compute_dssim(a_d_pred, A_d_star)
+        route_idx = (m_albedo > 0.5)
+        if route_idx.any():
+            route_mask = valid_mask[route_idx].float()
+            route_pred = a_d_pred[route_idx] * route_mask
+            route_tgt = A_d_star[route_idx] * route_mask
+            perceptual = self.perceptual_loss(route_pred, route_tgt)
+            dssim = self._compute_dssim(route_pred, route_tgt)
+        else:
+            perceptual = zero
+            dssim = zero
 
         total = mask_ratio * (
             l1
@@ -210,11 +212,11 @@ class FlexibleLoss(nn.Module):
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
-            return torch.tensor(0.0, device=pi_pred.device)
+            return (pi_pred * 0.0).sum()
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
-        mask_ratio = m_diffuse.sum() / m_diffuse.numel()
+        mask_ratio = (m_diffuse.sum() / m_diffuse.numel()).to(pi_pred.dtype)
 
         mse = self._masked_mse(pi_pred, pi_star, mask)
         msg = self._masked_msg(pi_pred, pi_star, mask_ratio)

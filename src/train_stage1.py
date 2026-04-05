@@ -5,6 +5,7 @@ Training script for Stage 1 intrinsic decomposition.
 import argparse
 import inspect
 import os
+import random
 import re
 import sys
 import time
@@ -36,6 +37,7 @@ from models import (
     IntrinsicDecompositionV6,
     IntrinsicDecompositionV7,
     IntrinsicDecompositionV8,
+    IntrinsicDecompositionV9,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -1060,6 +1062,7 @@ def build_stage1_model(config):
         6.0: IntrinsicDecompositionV6,
         7.0: IntrinsicDecompositionV7,
         8.0: IntrinsicDecompositionV8,
+        9.0: IntrinsicDecompositionV9,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -1097,6 +1100,16 @@ def main():
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+
+    seed = int(config['train'].get('seed', config['train'].get('dataloader_seed', 42)))
+    deterministic = bool(config['train'].get('deterministic', False))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
 
     version = config['model']['version']
     ckpt_dir = os.path.join(config['paths']['checkpoint_dir'], f'v{version}')
@@ -1203,7 +1216,8 @@ def main():
 
     phase1_iters = int(config['train'].get('phase1_iterations', 20000))
     phase2_iters = int(config['train'].get('phase2_iterations', 50000))
-    max_iters = phase2_iters
+    extend_iters = int(config['train'].get('extend_iterations', phase2_iters))
+    max_iters = max(phase2_iters, extend_iters)
     val_interval_iters = int(config['train'].get('val_interval_iters', 2000))
     ckpt_interval_iters = int(config['train'].get('checkpoint_interval_iters', 5000))
     val_example_images = int(config['train'].get('val_example_images', 2))

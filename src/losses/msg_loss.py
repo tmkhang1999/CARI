@@ -34,19 +34,12 @@ class MultiScaleGradientLoss(nn.Module):
                                  [ 0,  0,  0],
                                  [ 1,  2,  1]], dtype=x.dtype, device=x.device).view(1, 1, 3, 3)
 
-        # Apply per channel
+        # Apply per-channel gradients in one grouped convolution pass.
         C = x.shape[1]
-        grad_x = []
-        grad_y = []
-
-        for c in range(C):
-            gx = F.conv2d(x[:, c:c+1, :, :], kernel_x, padding=1)
-            gy = F.conv2d(x[:, c:c+1, :, :], kernel_y, padding=1)
-            grad_x.append(gx)
-            grad_y.append(gy)
-
-        grad_x = torch.cat(grad_x, dim=1)
-        grad_y = torch.cat(grad_y, dim=1)
+        weight_x = kernel_x.repeat(C, 1, 1, 1)
+        weight_y = kernel_y.repeat(C, 1, 1, 1)
+        grad_x = F.conv2d(x, weight_x, padding=1, groups=C)
+        grad_y = F.conv2d(x, weight_y, padding=1, groups=C)
 
         return grad_x, grad_y
 

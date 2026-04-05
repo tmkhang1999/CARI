@@ -11,20 +11,19 @@ from .modules.residual_attention import ResidualAttention
 def compute_ccr(img, eps=1e-7):
     """Build 6-channel CCR descriptor: [log edges(3), normalized rgb(3)]."""
     log_img = torch.log(img + eps)
-    r, g, b = log_img[:, 0:1], log_img[:, 1:2], log_img[:, 2:3]
 
-    kernel = torch.tensor(
+    base_kernel = torch.tensor(
         [[0, 1, 0], [1, 0, -1], [0, -1, 0]],
         dtype=img.dtype,
         device=img.device,
-    ).view(1, 1, 3, 3)
+    )
+    kernel = base_kernel.view(1, 1, 3, 3).repeat(3, 1, 1, 1)
+    diffs = F.conv2d(log_img, kernel, padding=1, groups=3)
 
-    def diff(ch):
-        return F.conv2d(ch, kernel, padding=1)
-
-    m_rg = torch.clamp(diff(r) - diff(g), -1.0, 1.0)
-    m_rb = torch.clamp(diff(r) - diff(b), -1.0, 1.0)
-    m_gb = torch.clamp(diff(g) - diff(b), -1.0, 1.0)
+    diff_r, diff_g, diff_b = diffs[:, 0:1], diffs[:, 1:2], diffs[:, 2:3]
+    m_rg = torch.clamp(diff_r - diff_g, -1.0, 1.0)
+    m_rb = torch.clamp(diff_r - diff_b, -1.0, 1.0)
+    m_gb = torch.clamp(diff_g - diff_b, -1.0, 1.0)
 
     intensity = img[:, 0:1] + img[:, 1:2] + img[:, 2:3] + eps
     norm_rgb = img / intensity
