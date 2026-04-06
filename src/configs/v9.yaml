@@ -35,6 +35,10 @@ data:
   midintrinsic_train_max_images: 0
 
 loss:
+  lambda_branch_a: 2.0
+  lambda_branch_b: 1.0
+  lambda_branch_c: 1.0
+  lambda_branch_d: 1.0
   lambda_msg: 0.5
   lambda_tv: 0.1
   lambda_perceptual: 0.05

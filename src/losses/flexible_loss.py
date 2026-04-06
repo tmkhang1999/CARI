@@ -31,6 +31,12 @@ class FlexibleLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        # Branch weights
+        self.w_a = config.get('lambda_branch_a', 1.0)
+        self.w_b = config.get('lambda_branch_b', 1.0)
+        self.w_c = config.get('lambda_branch_c', 1.0)
+        self.w_d = config.get('lambda_branch_d', 1.0)
+
         # Loss weights (plan Section 3.3)
         self.lambda_msg = config.get('lambda_msg', 0.5)
         self.lambda_tv = config.get('lambda_tv', 0.1)
@@ -119,9 +125,11 @@ class FlexibleLoss(nn.Module):
         """
         mask = valid_mask.float()
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
-        # MSG is global by construction; weight by valid-pixel fraction.
-        msg = self.msg_loss(D_g_pred, D_g_star) * mask.mean()
-        return l1 + self.lambda_msg * msg
+        msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
+        dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+        
+        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
+        return total, {'loss_a_dssim': dssim.detach()}
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
         """
@@ -131,8 +139,7 @@ class FlexibleLoss(nn.Module):
         mask = valid_mask.float()
 
         mse = self._masked_mse(xi_pred, xi_star, mask)
-        # Match Dec A behavior so invalid regions do not drive MSG gradients.
-        msg = self.msg_loss(xi_pred, xi_star) * mask.mean()
+        msg = self.msg_loss(xi_pred * mask, xi_star * mask)
         return mse + self.lambda_msg * msg
 
     def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
@@ -165,7 +172,7 @@ class FlexibleLoss(nn.Module):
         mask_ratio = (m_albedo.sum() / m_albedo.numel()).to(a_d_pred.dtype)
 
         l1 = self._masked_l1(a_d_pred, A_d_star, mask)
-        msg = self._masked_msg(a_d_pred, A_d_star, mask_ratio)
+        msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
 
         if self.tv_type is None:
             tv = zero
@@ -185,7 +192,7 @@ class FlexibleLoss(nn.Module):
             perceptual = zero
             dssim = zero
 
-        total = mask_ratio * (
+        total = (
             l1
             + self.lambda_msg * msg
             + self.lambda_tv * tv
@@ -219,8 +226,11 @@ class FlexibleLoss(nn.Module):
         mask_ratio = (m_diffuse.sum() / m_diffuse.numel()).to(pi_pred.dtype)
 
         mse = self._masked_mse(pi_pred, pi_star, mask)
-        msg = self._masked_msg(pi_pred, pi_star, mask_ratio)
-        return mse + self.lambda_msg * msg
+        msg = self.msg_loss(pi_pred * mask, pi_star * mask)
+        dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
+        
+        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
+        return total, {'loss_d_dssim': dssim.detach()}
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -244,8 +254,10 @@ class FlexibleLoss(nn.Module):
         """
         zero = predictions['d_g'].new_tensor(0.0)
 
-        la = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask) \
-            if targets.get('D_g_star') is not None else zero
+        if targets.get('D_g_star') is not None:
+            la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
+        else:
+            la, la_details = zero, {'loss_a_dssim': zero}
 
         lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask) \
             if targets.get('xi_star') is not None else zero
@@ -270,18 +282,28 @@ class FlexibleLoss(nn.Module):
                 'loss_c_mask_ratio': zero,
             }
 
-        ld = self.loss_d(predictions['pi'], targets['pi_star'],
-                         valid_mask, m_diffuse) \
-            if targets.get('pi_star') is not None else zero
+        if targets.get('pi_star') is not None:
+            ld, ld_details = self.loss_d(predictions['pi'], targets['pi_star'], valid_mask, m_diffuse)
+        else:
+            ld, ld_details = zero, {'loss_d_dssim': zero}
+
+        loss_total = (
+            self.w_a * la +
+            self.w_b * lb +
+            self.w_c * lc +
+            self.w_d * ld
+        )
 
         out = {
             'loss_a': la,
             'loss_b': lb,
             'loss_c': lc,
             'loss_d': ld,
-            'loss_total': la + lb + lc + ld,
+            'loss_total': loss_total,
         }
+        out.update(la_details)
         out.update(lc_details)
+        out.update(ld_details)
         return out
 
 
