@@ -46,16 +46,18 @@ from data.mixed_dataloader import MixedDataloader
 
 
 TB_TAGS = {
-    'loss_a': '01_Losses/1_a',
-    'loss_b': '01_Losses/2_b',
-    'loss_c': '01_Losses/3_c_total',
-    'loss_d': '01_Losses/4_d',
-    'loss_total': '01_Losses/5_total',
-    'loss_c_l1': '01_Losses/3_c_L1',
-    'loss_c_msg': '01_Losses/3_c_MSG',
-    'loss_c_perceptual': '01_Losses/3_c_Perceptual',
-    'loss_c_tv': '01_Losses/3_c_TV',
-    'loss_c_dssim': '01_Losses/3_c_dssim',
+    'loss_total': '01_Losses/0_Total',
+    'loss_a': '01_Losses/A_1_Total',
+    'loss_a_dssim': '01_Losses/A_2_DSSIM',
+    'loss_b': '01_Losses/B_1_Total',
+    'loss_c': '01_Losses/C_1_Total',
+    'loss_c_l1': '01_Losses/C_2_L1',
+    'loss_c_msg': '01_Losses/C_3_MSG',
+    'loss_c_perceptual': '01_Losses/C_4_Perceptual',
+    'loss_c_tv': '01_Losses/C_5_TV',
+    'loss_c_dssim': '01_Losses/C_6_DSSIM',
+    'loss_d': '01_Losses/D_1_Total',
+    'loss_d_dssim': '01_Losses/D_2_DSSIM',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
     'a_d_rmse': '02_Albedo_Ad/2_rmse',
     'a_d_ssim': '02_Albedo_Ad/3_ssim',
@@ -72,8 +74,11 @@ TB_TAGS = {
 def _log_ordered_scalars(writer, values, global_step):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
-        'loss_a', 'loss_b', 'loss_c', 'loss_d', 'loss_total',
-        'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
+        'loss_total',
+        'loss_a', 'loss_a_dssim',
+        'loss_b',
+        'loss_c', 'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
+        'loss_d', 'loss_d_dssim',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
