@@ -57,6 +57,12 @@ def parse_args():
     )
     parser.add_argument("--device", type=str, default="cuda", help="Device to run inference on")
     parser.add_argument(
+        "--cuda_index",
+        type=int,
+        default=0,
+        help="CUDA device index used when --device is 'cuda' (e.g., 0 or 1)",
+    )
+    parser.add_argument(
         "--max_side",
         type=int,
         default=0,
@@ -78,6 +84,34 @@ def _resolve_hypersim_root(args, config):
     if not os.path.isabs(root):
         root = str(ROOT_DIR / root)
     return root
+
+
+def _resolve_device(device_arg, cuda_index):
+    if not str(device_arg).startswith("cuda"):
+        return torch.device(device_arg)
+
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+
+    # If user passes plain 'cuda', pick explicit index via --cuda_index.
+    if str(device_arg) == "cuda":
+        if cuda_index < 0 or cuda_index >= torch.cuda.device_count():
+            raise ValueError(
+                f"Invalid --cuda_index={cuda_index}. Available CUDA devices: 0..{torch.cuda.device_count() - 1}"
+            )
+        return torch.device(f"cuda:{cuda_index}")
+
+    # If user passes 'cuda:N', validate N when possible.
+    if str(device_arg).startswith("cuda:"):
+        try:
+            idx = int(str(device_arg).split(":", 1)[1])
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid CUDA device format: {device_arg}. Use 'cuda' or 'cuda:N'.")
+        if idx < 0 or idx >= torch.cuda.device_count():
+            raise ValueError(
+                f"Invalid CUDA device '{device_arg}'. Available CUDA devices: 0..{torch.cuda.device_count() - 1}"
+            )
+    return torch.device(device_arg)
 
 
 def _build_stage1_model(model_cfg):
@@ -153,7 +187,7 @@ def _prepare_one_sample(sample):
         "rgb": _to_chw_tensor(rgb_tm).unsqueeze(0),
         "albedo_raw": _to_chw_tensor(alb).unsqueeze(0),
         "illum_raw": _to_chw_tensor(illum_norm.astype(np.float32)).unsqueeze(0),
-        "normals": _to_chw_tensor(norm).unsqueeze(0),
+        "normals": _to_chw_tensor(np.nan_to_num(norm, nan=0.0)).unsqueeze(0),
         "seg": torch.from_numpy(seg.astype(np.int64)).unsqueeze(0).unsqueeze(0),
         "valid_mask": torch.from_numpy(valid).unsqueeze(0).unsqueeze(0).bool(),
         "M_diffuse": torch.tensor([1.0], dtype=torch.float32),
@@ -535,7 +569,7 @@ def main():
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
     config = checkpoint.get("config", {})
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = _resolve_device(args.device, args.cuda_index)
 
     model = _build_stage1_model(config.get("model", {})).to(device)
     model.load_state_dict(checkpoint["model_state_dict"], strict=False)
