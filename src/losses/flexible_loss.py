@@ -127,8 +127,17 @@ class FlexibleLoss(nn.Module):
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
         msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
         
-        total = l1 + self.lambda_msg * msg
-        return total, {}
+        # Restore DSSIM for sharp cast shadows
+        dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+        
+        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
+        
+        details = {
+            'loss_a_l1': l1.detach(),
+            'loss_a_msg': msg.detach(),
+            'loss_a_dssim': dssim.detach(),
+        }
+        return total, details
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
         """
@@ -163,12 +172,10 @@ class FlexibleLoss(nn.Module):
                 'loss_c_tv': zero,
                 'loss_c_perceptual': zero,
                 'loss_c_dssim': zero,
-                'loss_c_mask_ratio': zero,
             }
 
         route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
-        mask_ratio = (m_albedo.sum() / m_albedo.numel()).to(a_d_pred.dtype)
 
         l1 = self._masked_l1(a_d_pred, A_d_star, mask)
         msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
@@ -205,31 +212,36 @@ class FlexibleLoss(nn.Module):
             'loss_c_tv': tv.detach(),
             'loss_c_perceptual': perceptual.detach(),
             'loss_c_dssim': dssim.detach(),
-            'loss_c_mask_ratio': mask_ratio.detach(),
         }
         return total, details
 
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
-        L_D = M_diffuse * ( ||π − π*||₂² + λ_msg * L_MSG(π, π*) )
+        L_D = M_diffuse * ( ||π − π*||₂² + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
         Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
         with no additional conversion.
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
             zero = (pi_pred * 0.0).sum()
-            return zero, {}
+            return zero, {'loss_d_mse': zero, 'loss_d_msg': zero, 'loss_d_dssim': zero}
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
-        mask_ratio = (m_diffuse.sum() / m_diffuse.numel()).to(pi_pred.dtype)
 
         mse = self._masked_mse(pi_pred, pi_star, mask)
         msg = self.msg_loss(pi_pred * mask, pi_star * mask)
+        dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
         
-        total = mse + self.lambda_msg * msg
-        return total, {}
+        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
+        
+        details = {
+            'loss_d_mse': mse.detach(),
+            'loss_d_msg': msg.detach(),
+            'loss_d_dssim': dssim.detach(),
+        }
+        return total, details
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -278,7 +290,6 @@ class FlexibleLoss(nn.Module):
                 'loss_c_tv': zero,
                 'loss_c_perceptual': zero,
                 'loss_c_dssim': zero,
-                'loss_c_mask_ratio': zero,
             }
 
         if targets.get('pi_star') is not None:

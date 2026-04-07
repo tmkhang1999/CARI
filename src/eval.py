@@ -34,6 +34,7 @@ from models import (
     IntrinsicDecompositionV7,
     IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
+    IntrinsicDecompositionV10,
 )
 
 
@@ -137,7 +138,6 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     t_u = unfold(target)      # (B, C*K*K, L)
     m_u = unfold(valid_mask.float())  # (B, 1*K*K, L)
 
-    # 3. Identify valid patches (at least 50% valid pixels)
     k2 = window_size * window_size
     valid_count = m_u.sum(dim=1)  # (B, L)
     valid_patch_mask = (valid_count > (min_valid_ratio * k2))  # (B, L)
@@ -230,6 +230,7 @@ def build_stage1_model(model_cfg):
         7: IntrinsicDecompositionV7,
         8: IntrinsicDecompositionV8,
         9: IntrinsicDecompositionV9,
+        10: IntrinsicDecompositionV10,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")

@@ -14,7 +14,7 @@ train:
   val_interval_iters: 2000
   checkpoint_interval_iters: 5000
   val_example_images: 2  # ignored if val_example_indices is set
-  val_example_indices: [120, 200, 300]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
+  val_example_indices: [120, 200, 250]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
   max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
   fast_val_metrics: false # false=exact skimage SSIM, true=faster proxy SSIM
   input_size: 384

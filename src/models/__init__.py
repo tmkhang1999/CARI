@@ -21,5 +21,7 @@ __all__ = [
     "IntrinsicDecompositionV7",
     "IntrinsicDecompositionV8",
     "IntrinsicDecompositionV9",
+    "IntrinsicDecompositionV10",
     "IntrinsicDecompositionV2_5"
 ]
+from .stage1_v10 import IntrinsicDecompositionV10
