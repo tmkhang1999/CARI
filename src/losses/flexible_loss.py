@@ -38,10 +38,10 @@ class FlexibleLoss(nn.Module):
         self.w_d = config.get('lambda_branch_d', 1.0)
 
         # Loss weights (plan Section 3.3)
-        self.lambda_msg = config.get('lambda_msg', 0.5)
-        self.lambda_tv = config.get('lambda_tv', 0.1)
+        self.lambda_msg = config.get('lambda_msg', 0.8)
+        self.lambda_tv = config.get('lambda_tv', 0.05)
         self.lambda_perceptual = config.get('lambda_perceptual', 0.05)
-        self.lambda_dssim = config.get('lambda_dssim', 0.1)
+        self.lambda_dssim = config.get('lambda_dssim', 0.4)
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
 
@@ -126,10 +126,9 @@ class FlexibleLoss(nn.Module):
         mask = valid_mask.float()
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
         msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
-        dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
         
-        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
-        return total, {'loss_a_dssim': dssim.detach()}
+        total = l1 + self.lambda_msg * msg
+        return total, {}
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
         """
@@ -219,7 +218,8 @@ class FlexibleLoss(nn.Module):
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
-            return (pi_pred * 0.0).sum()
+            zero = (pi_pred * 0.0).sum()
+            return zero, {}
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
@@ -227,10 +227,9 @@ class FlexibleLoss(nn.Module):
 
         mse = self._masked_mse(pi_pred, pi_star, mask)
         msg = self.msg_loss(pi_pred * mask, pi_star * mask)
-        dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
         
-        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
-        return total, {'loss_d_dssim': dssim.detach()}
+        total = mse + self.lambda_msg * msg
+        return total, {}
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -257,7 +256,7 @@ class FlexibleLoss(nn.Module):
         if targets.get('D_g_star') is not None:
             la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
         else:
-            la, la_details = zero, {'loss_a_dssim': zero}
+            la, la_details = zero, {}
 
         lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask) \
             if targets.get('xi_star') is not None else zero
@@ -285,7 +284,7 @@ class FlexibleLoss(nn.Module):
         if targets.get('pi_star') is not None:
             ld, ld_details = self.loss_d(predictions['pi'], targets['pi_star'], valid_mask, m_diffuse)
         else:
-            ld, ld_details = zero, {'loss_d_dssim': zero}
+            ld, ld_details = zero, {}
 
         loss_total = (
             self.w_a * la +
@@ -309,10 +308,10 @@ class FlexibleLoss(nn.Module):
 
 if __name__ == '__main__':
     config = {
-        'lambda_msg': 0.5,
-        'lambda_tv': 0.1,
+        'lambda_msg': 0.8,
+        'lambda_tv': 0.05,
         'lambda_perceptual': 0.05,
-        'lambda_dssim': 0.1,
+        'lambda_dssim': 0.4,
     }
     loss_fn = FlexibleLoss(config)
 

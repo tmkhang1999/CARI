@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .encoders.image_encoder import ImageEncoder
 from .encoders.normal_encoder import NormalEncoder
@@ -100,6 +101,11 @@ class IntrinsicDecompositionV9(nn.Module):
         self.spade_c1 = SPADE(num_channels=192, num_classes=num_seg_classes)
         self.sfm_c_g1 = SpatialFeatureModulation(192, 128)
 
+        # Direct raw-CCR projections preserve sharper boundary evidence at each stage.
+        self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1, bias=False)
+        self.ccr_prior_proj2 = nn.Conv2d(6, 256, kernel_size=1, bias=False)
+        self.ccr_prior_proj1 = nn.Conv2d(6, 128, kernel_size=1, bias=False)
+
         # Dec D: Normals + Guidance_D via SFM
         self.sfm_d_n3 = SpatialFeatureModulation(768, 512)
         self.sfm_d_g3 = SpatialFeatureModulation(768, 512)
@@ -139,6 +145,14 @@ class IntrinsicDecompositionV9(nn.Module):
             ccr = compute_ccr(rgb)
         ccr_feats = self.ccr_encoder(ccr)
 
+        # Inject raw CCR at decoder stage resolutions to avoid over-smoothed priors.
+        ccr_raw3 = self.ccr_prior_proj3(F.interpolate(ccr, size=ccr_feats[3].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_raw2 = self.ccr_prior_proj2(F.interpolate(ccr, size=ccr_feats[2].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_raw1 = self.ccr_prior_proj1(F.interpolate(ccr, size=ccr_feats[1].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_prior3 = ccr_feats[3] + ccr_raw3
+        ccr_prior2 = ccr_feats[2] + ccr_raw2
+        ccr_prior1 = ccr_feats[1] + ccr_raw1
+
         gamma, beta = self.illuminant_descriptor(rgb, valid_mask)
         z_b = z_global * (1.0 + gamma) + beta
         film_global = torch.cat([gamma, beta], dim=1)
@@ -147,9 +161,9 @@ class IntrinsicDecompositionV9(nn.Module):
             z_global,
             skip_features,
             stage_ops=[
-                lambda x: self.sfm_a_ccr3(self.sfm_a_n3(x, normal_feats[3]), ccr_feats[3]),
-                lambda x: self.sfm_a_ccr2(self.sfm_a_n2(x, normal_feats[2]), ccr_feats[2]),
-                lambda x: self.sfm_a_ccr1(self.sfm_a_n1(x, normal_feats[1]), ccr_feats[1]),
+                lambda x: self.sfm_a_ccr3(self.sfm_a_n3(x, normal_feats[3]), ccr_prior3),
+                lambda x: self.sfm_a_ccr2(self.sfm_a_n2(x, normal_feats[2]), ccr_prior2),
+                lambda x: self.sfm_a_ccr1(self.sfm_a_n1(x, normal_feats[1]), ccr_prior1),
             ],
         )
         s_g = 1.0 / (d_g + 1e-6) - 1.0
@@ -177,9 +191,9 @@ class IntrinsicDecompositionV9(nn.Module):
             z_global,
             skip_features,
             stage_ops=[
-                lambda x: self.sfm_c_g3(self.sfm_c_ccr3(x, ccr_feats[3]), g_c[3]),
-                lambda x: self.sfm_c_g2(self.spade_c2(self.sfm_c_ccr2(x, ccr_feats[2]), seg), g_c[2]),
-                lambda x: self.sfm_c_g1(self.spade_c1(self.sfm_c_ccr1(x, ccr_feats[1]), seg), g_c[1]),
+                lambda x: self.sfm_c_g3(self.sfm_c_ccr3(x, ccr_prior3), g_c[3]),
+                lambda x: self.sfm_c_g2(self.spade_c2(self.sfm_c_ccr2(x, ccr_prior2), seg), g_c[2]),
+                lambda x: self.sfm_c_g1(self.spade_c1(self.sfm_c_ccr1(x, ccr_prior1), seg), g_c[1]),
             ],
         )
 

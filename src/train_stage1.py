@@ -3,6 +3,7 @@ Training script for Stage 1 intrinsic decomposition.
 """
 
 import argparse
+import math
 import inspect
 import os
 import random
@@ -48,7 +49,6 @@ from data.mixed_dataloader import MixedDataloader
 TB_TAGS = {
     'loss_total': '01_Losses/0_Total',
     'loss_a': '01_Losses/A_1_Total',
-    'loss_a_dssim': '01_Losses/A_2_DSSIM',
     'loss_b': '01_Losses/B_1_Total',
     'loss_c': '01_Losses/C_1_Total',
     'loss_c_l1': '01_Losses/C_2_L1',
@@ -57,7 +57,6 @@ TB_TAGS = {
     'loss_c_tv': '01_Losses/C_5_TV',
     'loss_c_dssim': '01_Losses/C_6_DSSIM',
     'loss_d': '01_Losses/D_1_Total',
-    'loss_d_dssim': '01_Losses/D_2_DSSIM',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
     'a_d_rmse': '02_Albedo_Ad/2_rmse',
     'a_d_ssim': '02_Albedo_Ad/3_ssim',
@@ -75,10 +74,10 @@ def _log_ordered_scalars(writer, values, global_step):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
         'loss_total',
-        'loss_a', 'loss_a_dssim',
+        'loss_a',
         'loss_b',
         'loss_c', 'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
-        'loss_d', 'loss_d_dssim',
+        'loss_d',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
@@ -276,7 +275,7 @@ def _loss_seg(model, seg):
     return seg
 
 
-def train_one_step(model, batch, criterion, optimizer, device):
+def train_one_step(model, batch, criterion, device):
     model.train()
 
     rgb = batch['rgb'].to(device, non_blocking=True)
@@ -315,9 +314,6 @@ def train_one_step(model, batch, criterion, optimizer, device):
         normals=normals,
     )
 
-    optimizer.zero_grad()
-    losses['loss_total'].backward()
-    optimizer.step()
     return losses
 
 
@@ -1223,6 +1219,10 @@ def main():
     phase2_iters = int(config['train'].get('phase2_iterations', 50000))
     extend_iters = int(config['train'].get('extend_iterations', phase2_iters))
     max_iters = max(phase2_iters, extend_iters)
+    grad_accum_steps = max(1, int(config['train'].get('grad_accum_steps', 1)))
+    grad_clip_max_norm = float(config['train'].get('grad_clip_max_norm', 1.0))
+    use_cosine_lr = bool(config['train'].get('use_cosine_lr', True))
+    lr_eta_min = float(config['train'].get('lr_eta_min', 1.0e-7))
     val_interval_iters = int(config['train'].get('val_interval_iters', 2000))
     ckpt_interval_iters = int(config['train'].get('checkpoint_interval_iters', 5000))
     val_example_images = int(config['train'].get('val_example_images', 2))
@@ -1242,8 +1242,20 @@ def main():
         start_step, _ = load_checkpoint(model, optimizer, resume_path, map_location=device)
         start_step += 1
 
+    scheduler = None
+    if use_cosine_lr:
+        total_opt_steps = max(1, math.ceil(max_iters / grad_accum_steps))
+        completed_opt_steps = max(0, start_step // grad_accum_steps)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=total_opt_steps,
+            eta_min=lr_eta_min,
+            last_epoch=completed_opt_steps - 1,
+        )
+
     print(f"Curriculum: phase1 [0,{phase1_iters}), phase2 [{phase1_iters},{phase2_iters})")
     print(f"Start step: {start_step}, max step: {max_iters}")
+    print(f"Optimizer controls: grad_accum_steps={grad_accum_steps}, grad_clip_max_norm={grad_clip_max_norm}, cosine_lr={use_cosine_lr}, lr_eta_min={lr_eta_min}")
 
     running = {'loss_a': 0.0, 'loss_b': 0.0, 'loss_c': 0.0, 'loss_d': 0.0, 'loss_total': 0.0}
     last_phase = None
@@ -1281,6 +1293,7 @@ def main():
     t_start = time.time()
     io_time_total = 0.0
     compute_time_total = 0.0
+    optimizer.zero_grad(set_to_none=True)
 
     for step in train_pbar:
         phase, weights = _phase_schedule(config['train'], step)
@@ -1292,7 +1305,17 @@ def main():
         t0 = time.time()
         batch, dataset_name = mixed_loader.next_batch()  # homogeneous per-batch dataset
         t1 = time.time()
-        losses = train_one_step(model, batch, criterion, optimizer, device)
+        losses = train_one_step(model, batch, criterion, device)
+        loss_scaled = losses['loss_total'] / float(grad_accum_steps)
+        loss_scaled.backward()
+
+        should_step = ((step - start_step + 1) % grad_accum_steps == 0) or (step == max_iters - 1)
+        if should_step:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            if scheduler is not None:
+                scheduler.step()
         t2 = time.time()
         
         io_time_total += (t1 - t0)
@@ -1319,6 +1342,7 @@ def main():
 
         if step % int(config['train']['log_interval']) == 0:
             _log_ordered_scalars(writer, losses, step)
+            writer.add_scalar('00_Train/lr', float(optimizer.param_groups[0]['lr']), step)
 
         if (step + 1) % val_interval_iters == 0:
             torch.cuda.empty_cache()
