@@ -20,11 +20,9 @@ class FlexibleLoss(nn.Module):
     Flexible loss that routes gradients based on available ground truth.
     Handles mixed datasets with different supervision signals.
 
-    Expected inputs (computed in training loop after forward pass):
-        D_g_star:  (N,1,H,W) inverse gray shading GT  = 1/(S_g_star+1)
-        xi_star:   (N,2,H,W) bounded chroma GT
+    Expected V11 inputs (computed in training loop after forward pass):
         A_d_star:  (N,3,H,W) scale-matched albedo GT
-        pi_star:   (N,3,H,W) inverse colorful shading GT = 1/(S_star+1)
+        pi_star:   (N,3,H,W) inverse diffuse shading GT = 1/(S_star+1)
         valid_mask:(N,1,H,W) bool — excludes sky, mirrors, glass
     """
 
@@ -42,8 +40,11 @@ class FlexibleLoss(nn.Module):
         self.lambda_tv = config.get('lambda_tv', 0.05)
         self.lambda_perceptual = config.get('lambda_perceptual', 0.05)
         self.lambda_dssim = config.get('lambda_dssim', 0.4)
+        self.lambda_semvar = config.get('lambda_semvar', 0.0)
+        self.lambda_recon = config.get('lambda_recon', 0.2)
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
+        self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22])
 
         # Loss modules
         self.msg_loss = MultiScaleGradientLoss(num_scales=4)
@@ -172,6 +173,7 @@ class FlexibleLoss(nn.Module):
                 'loss_c_tv': zero,
                 'loss_c_perceptual': zero,
                 'loss_c_dssim': zero,
+                'loss_c_semvar': zero,
             }
 
         route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
@@ -212,8 +214,42 @@ class FlexibleLoss(nn.Module):
             'loss_c_tv': tv.detach(),
             'loss_c_perceptual': perceptual.detach(),
             'loss_c_dssim': dssim.detach(),
+            'loss_c_semvar': zero.detach(),
         }
         return total, details
+
+    def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask):
+        """Encourage piece-wise constant albedo within selected semantic regions."""
+        if seg_map is None:
+            return (a_d_pred * 0.0).sum()
+
+        if seg_map.ndim == 4 and seg_map.shape[1] == 1:
+            seg_map = seg_map[:, 0]
+        valid = valid_mask.bool()
+
+        total = (a_d_pred * 0.0).sum()
+        count = 0
+        target_set = set(int(x) for x in self.semantic_var_classes)
+
+        for b in range(a_d_pred.shape[0]):
+            seg_b = seg_map[b]
+            valid_b = valid[b, 0]
+            for label in torch.unique(seg_b):
+                label_i = int(label.item())
+                if target_set and label_i not in target_set:
+                    continue
+                pix = (seg_b == label) & valid_b
+                n = int(pix.sum().item())
+                if n < 10:
+                    continue
+                vals = a_d_pred[b, :, pix]
+                mu = vals.mean(dim=1, keepdim=True)
+                total = total + ((vals - mu) ** 2).mean()
+                count += 1
+
+        if count == 0:
+            return (a_d_pred * 0.0).sum()
+        return total / float(count)
 
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
@@ -246,33 +282,11 @@ class FlexibleLoss(nn.Module):
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
-    def forward(self, predictions, targets, m_diffuse, m_albedo,
-                valid_mask, seg_map=None, normals=None):
-        """
-        Args:
-            predictions: dict with required keys [d_g, xi, a_d, pi].
-                         Optional keys like [c, s_c] may be present for
-                         visualization/debug but are not used by this loss.
-            targets: dict with keys [D_g_star, xi_star, A_d_star, pi_star]
-                     computed in training loop via scale_match → target-space conversion.
-            m_diffuse: (N,) float routing mask for diffuse shading GT availability.
-            m_albedo:  (N,) float routing mask for albedo GT availability.
-            valid_mask: (N, 1, H, W) bool pixel mask (sky, mirrors excluded).
-            seg_map: (N, H, W) integer seg labels, optional.
+    def forward(self, predictions, targets, m_diffuse, m_albedo, valid_mask, seg_map=None, normals=None, rgb=None):
+        # V11 supervision uses only albedo (a_d) and diffuse shading (pi).
+        zero = predictions['a_d'].new_tensor(0.0)
 
-        Returns:
-            dict with individual losses and total loss.
-        """
-        zero = predictions['d_g'].new_tensor(0.0)
-
-        if targets.get('D_g_star') is not None:
-            la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
-        else:
-            la, la_details = zero, {}
-
-        lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask) \
-            if targets.get('xi_star') is not None else zero
-
+        # 1. Albedo Loss (L1, MSG, DSSIM, and Semantic Variance)
         if targets.get('A_d_star') is not None:
             lc, lc_details = self.loss_c_with_details(
                 predictions['a_d'],
@@ -282,70 +296,62 @@ class FlexibleLoss(nn.Module):
                 seg_map,
                 normals,
             )
+            
+            # Add the new Physics Prior!
+            if self.lambda_semvar > 0.0 and seg_map is not None:
+                lc_var = self._loss_semantic_variance(predictions['a_d'], seg_map, valid_mask)
+                lc = lc + self.lambda_semvar * lc_var
+                lc_details['loss_c_semvar'] = lc_var.detach()
+            else:
+                lc_details['loss_c_semvar'] = zero.detach()
+                
+            # LNorm is intentionally disabled for V11 because it can leak colored illumination into albedo.
         else:
             lc = zero
-            lc_details = {
-                'loss_c_l1': zero,
-                'loss_c_msg': zero,
-                'loss_c_tv': zero,
-                'loss_c_perceptual': zero,
-                'loss_c_dssim': zero,
-            }
+            lc_details = {}
 
+        # 2. Shading Loss (MSE, MSG, DSSIM)
         if targets.get('pi_star') is not None:
             ld, ld_details = self.loss_d(predictions['pi'], targets['pi_star'], valid_mask, m_diffuse)
         else:
-            ld, ld_details = zero, {}
+            ld = zero
+            ld_details = {}
+            
+        # 3. Diffuse Reconstruction Loss (Anchor using GT product, NOT I)
+        if targets.get('A_d_star') is not None and targets.get('pi_star') is not None:
+            s_d_pred = (1.0 / (predictions['pi'] + 1e-6)) - 1.0
+            s_d_star = (1.0 / (targets['pi_star'] + 1e-6)) - 1.0
+            recon_pred = predictions['a_d'] * s_d_pred
+            # Reconstruct the true latent diffuse RGB rather than forcing inclusion of specular residuals.
+            recon_target = targets['A_d_star'] * s_d_star
+            l_recon = self._masked_l1(recon_pred, recon_target, valid_mask.float())
+        else:
+            l_recon = zero
 
-        loss_total = (
-            self.w_a * la +
-            self.w_b * lb +
-            self.w_c * lc +
-            self.w_d * ld
-        )
+        la, la_details = zero, {}
+        lb = zero
+        
+        if self.w_a > 0.0 and 'd_g' in predictions and targets.get('D_g_star') is not None:
+            la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
+            la = self.w_a * la
 
+        if self.w_b > 0.0 and 'xi' in predictions and targets.get('xi_star') is not None:
+            lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask)
+            lb = self.w_b * lb
+
+        loss_total = la + lb + lc + ld + (self.lambda_recon * l_recon)
+        
         out = {
+            # Keep both keys for compatibility with old and new callers.
+            'loss': loss_total,
+            'loss_total': loss_total,
             'loss_a': la,
             'loss_b': lb,
             'loss_c': lc,
             'loss_d': ld,
-            'loss_total': loss_total,
+            'loss_recon': l_recon,
         }
         out.update(la_details)
         out.update(lc_details)
         out.update(ld_details)
         return out
-
-
-if __name__ == '__main__':
-    config = {
-        'lambda_msg': 0.8,
-        'lambda_tv': 0.05,
-        'lambda_perceptual': 0.05,
-        'lambda_dssim': 0.4,
-    }
-    loss_fn = FlexibleLoss(config)
-
-    predictions = {
-        'd_g': torch.rand(2, 1, 64, 64),
-        'xi': torch.rand(2, 2, 64, 64),
-        'c': torch.rand(2, 3, 64, 64),
-        's_c': torch.rand(2, 3, 64, 64),
-        'a_d': torch.rand(2, 3, 64, 64),
-        'pi': torch.rand(2, 3, 64, 64),
-    }
-    targets = {
-        'D_g_star': torch.rand(2, 1, 64, 64),
-        'xi_star': torch.rand(2, 2, 64, 64),
-        'A_d_star': torch.rand(2, 3, 64, 64),
-        'pi_star': torch.rand(2, 3, 64, 64),
-    }
-    m_diffuse = torch.tensor([1.0, 0.0])
-    m_albedo = torch.tensor([1.0, 1.0])
-    valid_mask = torch.ones(2, 1, 64, 64).bool()
-    seg = torch.randint(0, 40, (2, 64, 64))
-
-    losses = loss_fn(predictions, targets, m_diffuse, m_albedo, valid_mask, seg)
-    print("Losses:")
-    for k, v in losses.items():
-        print(f"  {k}: {v.item():.4f}")
