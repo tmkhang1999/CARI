@@ -41,6 +41,7 @@ from models import (
     IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11,
 )
 
 
@@ -138,6 +139,7 @@ def _build_stage1_model(model_cfg):
         8: IntrinsicDecompositionV8,
         9: IntrinsicDecompositionV9,
         10: IntrinsicDecompositionV10,
+        11: IntrinsicDecompositionV11,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -462,29 +464,8 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     a_d_gt_vis = gamma_correct(gts["A_d_star"])
 
     # 2. Shading via Inverse Domain Tonemapping (1 - D)
-    s_g_pred_vis = 1.0 - preds["d_g"]
-    s_g_gt_vis = 1.0 - gts["D_g_star"]
     s_d_pred_vis = 1.0 - preds["pi"]
     s_d_gt_vis = 1.0 - gts["pi_star"]
-
-    # 3. Colorful Shading (S_c) GT and Pred via Inverse Domain
-    s_g_gt_linear = 1.0 / (gts["D_g_star"] + 1e-6) - 1.0
-    c_rg_gt = 1.0 / (gts["xi_star"][:, 0:1] + 1e-6) - 1.0
-    c_bg_gt = 1.0 / (gts["xi_star"][:, 1:2] + 1e-6) - 1.0
-    s_c_gt_linear = torch.cat([c_rg_gt * s_g_gt_linear, s_g_gt_linear, c_bg_gt * s_g_gt_linear], dim=1)
-    s_c_gt_vis = 1.0 - (1.0 / (s_c_gt_linear + 1.0))
-
-    s_g_pred_linear = 1.0 / (preds["d_g"] + 1e-6) - 1.0
-    if "s_c" in preds:
-        s_c_pred_linear = preds["s_c"]
-    elif "xi" in preds:
-        c_rg_pred = 1.0 / (preds["xi"][:, 0:1] + 1e-6) - 1.0
-        c_bg_pred = 1.0 / (preds["xi"][:, 1:2] + 1e-6) - 1.0
-        s_c_pred_linear = torch.cat([c_rg_pred * s_g_pred_linear, s_g_pred_linear, c_bg_pred * s_g_pred_linear], dim=1)
-    else:
-        s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
-
-    s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
 
     # Reconstruction tile for row 2: (a_d_pred x s_d_pred)
     s_d_pred_linear = 1.0 / (preds["pi"] + 1e-6) - 1.0
@@ -494,33 +475,23 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     recon_diffuse_gt = gts["A_d_star"] * s_d_gt_linear
 
     # 4. Derived Albedos for row 3 (I / S_* pred)
-    a_g_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_g_pred_linear + 1e-6)))
-    a_c_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_c_pred_linear + 1e-6)))
     a_d_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_d_pred_linear + 1e-6)))
-    blank_tile = torch.ones_like(a_g_derived_vis)
+    blank_tile = torch.ones_like(a_d_derived_vis)
 
-    # 3-row order layout
     titled_tiles = [
         ("Tonemapped RGB", _tonemap_vis(rgb)),
         ("Diffuse Recon GT", _tonemap_vis(recon_diffuse_gt)),
-        ("Gray Shading GT", s_g_gt_vis),
-        ("Colorful Shading GT", s_c_gt_vis),
         ("Albedo GT", a_d_gt_vis),
         ("Diffuse Shading GT", s_d_gt_vis),
-        
         ("", blank_tile),
+        ("", blank_tile),
+        
         ("Diffuse Recon Pred", _tonemap_vis(recon_diffuse)),
-        ("Gray Shading Pred", s_g_pred_vis),
-        ("Colorful Shading Pred", s_c_pred_vis),
         ("Albedo Pred", a_d_pred_vis),
         ("Diffuse Shading Pred", s_d_pred_vis),
-
-        ("", blank_tile),
-        ("", blank_tile),
-        ("Derived A_g = I/S_g", a_g_derived_vis),
-        ("Derived A_c = I/S_c", a_c_derived_vis),
-        ("", blank_tile),
         ("Derived A_d = I/S_d", a_d_derived_vis),
+        ("", blank_tile),
+        ("", blank_tile),
     ]
 
     tiles = []
@@ -547,7 +518,6 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         canvas = torch.ones((c, h + footer_h, w), dtype=tile.dtype, device=tile.device)
         canvas[:, :h, :] = tile
 
-        # Render title text onto footer using PIL for reliable text drawing.
         canvas_np = (canvas.clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
         img = Image.fromarray(canvas_np)
         draw = ImageDraw.Draw(img)
@@ -665,25 +635,20 @@ def main():
         )
 
     # Compute metrics in inverse shading space (bounded).
-    d_g_pred = predictions["d_g"]
     pi_pred = predictions["pi"]
-    d_g_gt = targets["D_g_star"]
     pi_gt = targets["pi_star"]
 
     valid_mask = batch["valid_mask"]
 
     metrics = {
-        "s_g_lmse": float(_compute_lmse(d_g_pred, d_g_gt, valid_mask).item()),
-        "s_g_rmse": _masked_scale_invariant_rmse(d_g_pred, d_g_gt, valid_mask),
-        "s_g_ssim": compute_ssim_bounded(d_g_pred[0], d_g_gt[0], valid_mask[0]),
         "a_d_lmse": float(_compute_lmse(predictions["a_d"], targets["A_d_star"], valid_mask).item()),
         "a_d_rmse": _masked_scale_invariant_rmse(predictions["a_d"], targets["A_d_star"], valid_mask),
         "a_d_ssim": compute_ssim_bounded(predictions["a_d"][0], targets["A_d_star"][0], valid_mask[0]),
         "s_d_lmse": float(_compute_lmse(pi_pred, pi_gt, valid_mask).item()),
         "s_d_rmse": _masked_scale_invariant_rmse(pi_pred, pi_gt, valid_mask),
         "s_d_ssim": compute_ssim_bounded(pi_pred[0], pi_gt[0], valid_mask[0]),
-        "xi_mse": float((((predictions["xi"] - targets["xi_star"]) ** 2) * valid_mask.expand_as(predictions["xi"]).float()).sum().item() / (valid_mask.expand_as(predictions["xi"]).float().sum().item() + 1e-7)),
     }
+
 
     out_dir = os.path.abspath(args.output_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -707,10 +672,8 @@ def main():
         print(f"High-res model resize: {model_highres_resize_msg}")
     print("Metrics:")
     for k in [
-        "s_g_lmse", "s_g_rmse", "s_g_ssim",
         "a_d_lmse", "a_d_rmse", "a_d_ssim",
         "s_d_lmse", "s_d_rmse", "s_d_ssim",
-        "xi_mse",
     ]:
         print(f"  {k}: {metrics[k]:.6f}")
 

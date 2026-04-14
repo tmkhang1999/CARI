@@ -35,6 +35,7 @@ from models import (
     IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11,
 )
 
 
@@ -231,6 +232,7 @@ def build_stage1_model(model_cfg):
         8: IntrinsicDecompositionV8,
         9: IntrinsicDecompositionV9,
         10: IntrinsicDecompositionV10,
+        11: IntrinsicDecompositionV11,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -241,16 +243,12 @@ def evaluate_model(model, dataloader, device, max_batches=0):
     model.eval()
 
     metrics = {
-        's_g_lmse': [],
-        's_g_rmse': [],
-        's_g_ssim': [],
         'a_d_lmse': [],
         'a_d_rmse': [],
         'a_d_ssim': [],
         's_d_lmse': [],
         's_d_rmse': [],
         's_d_ssim': [],
-        'xi_mse': [],
     }
 
     with torch.no_grad():
@@ -284,12 +282,18 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             )
 
             # Evaluate shading in inverse space (bounded).
-            d_g_pred = predictions['d_g']
             pi_pred = predictions['pi']
-            d_g_gt = targets['D_g_star']
             pi_gt = targets['pi_star']
 
-            if batch_idx == 0:
+            has_dg = 'd_g' in predictions
+            has_xi = 'xi' in predictions
+            if has_dg and 's_g_lmse' not in metrics:
+                metrics.update({'s_g_lmse': [], 's_g_rmse': [], 's_g_ssim': []})
+            if has_xi and 'xi_mse' not in metrics:
+                metrics.update({'xi_mse': []})
+
+            if batch_idx == 0 and has_dg:
+                d_g_gt = targets['D_g_star']
                 print(f"Sanity Check [Batch 0]:")
                 print(f"D_g_gt range: {d_g_gt.min().item():.4f} to {d_g_gt.max().item():.4f}")
                 print(f"D_g_star range: {targets['D_g_star'].min().item():.4f} to {targets['D_g_star'].max().item():.4f}")
@@ -297,14 +301,16 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             for i in range(rgb.shape[0]):
                 vm = valid_mask[i:i+1] # (1, 1, H, W)
 
-                # Gray Shading (inverse D_g)
-                metrics['s_g_lmse'].append(_compute_lmse(d_g_pred[i:i+1], d_g_gt[i:i+1], vm))
-                metrics['s_g_rmse'].append(_masked_scale_invariant_rmse(
-                    d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                ))
-                metrics['s_g_ssim'].append(compute_ssim_bounded(
-                    d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                ))
+                if has_dg:
+                    d_g_pred = predictions['d_g']
+                    d_g_gt = targets['D_g_star']
+                    metrics['s_g_lmse'].append(_compute_lmse(d_g_pred[i:i+1], d_g_gt[i:i+1], vm))
+                    metrics['s_g_rmse'].append(_masked_scale_invariant_rmse(
+                        d_g_pred[i:i+1], d_g_gt[i:i+1], vm
+                    ))
+                    metrics['s_g_ssim'].append(compute_ssim_bounded(
+                        d_g_pred[i:i+1], d_g_gt[i:i+1], vm
+                    ))
 
                 # Albedo (A_d)
                 metrics['a_d_lmse'].append(_compute_lmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
@@ -324,9 +330,10 @@ def evaluate_model(model, dataloader, device, max_batches=0):
                     pi_pred[i:i+1], pi_gt[i:i+1], vm
                 ))
 
-                xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
-                xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
-                metrics['xi_mse'].append(float(xi_err.item()))
+                if has_xi:
+                    xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
+                    xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
+                    metrics['xi_mse'].append(float(xi_err.item()))
 
     avg_metrics = {}
     for key, values in metrics.items():
@@ -401,11 +408,11 @@ def main():
     print("=" * 80)
 
     # Get sample count from first metric
-    sample_count = metrics.get('s_g_lmse_count', 0)
+    sample_count = int(metrics.get('a_d_lmse_count', 0))
     print(f"\nTotal samples evaluated: {sample_count}\n")
 
-    print("Gray Shading (inverse D_g):")
     if 's_g_lmse' in metrics:
+        print("Gray Shading (inverse D_g):")
         print(f"  LMSE: {metrics['s_g_lmse']:.6f} (mean) | {metrics.get('s_g_lmse_min', 0):.6f} (min) | {metrics.get('s_g_lmse_max', 0):.6f} (max) ± {metrics.get('s_g_lmse_std', 0):.6f}")
         print(f"  RMSE: {metrics['s_g_rmse']:.6f} (mean) | {metrics.get('s_g_rmse_min', 0):.6f} (min) | {metrics.get('s_g_rmse_max', 0):.6f} (max) ± {metrics.get('s_g_rmse_std', 0):.6f}")
         print(f"  SSIM: {metrics['s_g_ssim']:.4f} (mean) | {metrics.get('s_g_ssim_min', 0):.4f} (min) | {metrics.get('s_g_ssim_max', 0):.4f} (max) ± {metrics.get('s_g_ssim_std', 0):.4f}")
@@ -422,23 +429,25 @@ def main():
         print(f"  RMSE: {metrics['s_d_rmse']:.6f} (mean) | {metrics.get('s_d_rmse_min', 0):.6f} (min) | {metrics.get('s_d_rmse_max', 0):.6f} (max) ± {metrics.get('s_d_rmse_std', 0):.6f}")
         print(f"  SSIM: {metrics['s_d_ssim']:.4f} (mean) | {metrics.get('s_d_ssim_min', 0):.4f} (min) | {metrics.get('s_d_ssim_max', 0):.4f} (max) ± {metrics.get('s_d_ssim_std', 0):.4f}")
 
-    print("\nChroma (xi):")
     if 'xi_mse' in metrics:
+        print("\nChroma (xi):")
         print(f"  MSE:  {metrics['xi_mse']:.6f} (mean) | {metrics.get('xi_mse_min', 0):.6f} (min) | {metrics.get('xi_mse_max', 0):.6f} (max) ± {metrics.get('xi_mse_std', 0):.6f}")
 
     print("\n" + "=" * 80)
     print("SUMMARY - Mean Values Only")
     print("=" * 80)
-    print(f"Gray Shading LMSE:   {metrics['s_g_lmse']:.6f}")
-    print(f"Gray Shading RMSE:   {metrics['s_g_rmse']:.6f}")
-    print(f"Gray Shading SSIM:   {metrics['s_g_ssim']:.4f}")
+    if 's_g_lmse' in metrics:
+        print(f"Gray Shading LMSE:   {metrics['s_g_lmse']:.6f}")
+        print(f"Gray Shading RMSE:   {metrics['s_g_rmse']:.6f}")
+        print(f"Gray Shading SSIM:   {metrics['s_g_ssim']:.4f}")
     print(f"Albedo LMSE:         {metrics['a_d_lmse']:.6f}")
     print(f"Albedo RMSE:         {metrics['a_d_rmse']:.6f}")
     print(f"Albedo SSIM:         {metrics['a_d_ssim']:.4f}")
     print(f"Diffuse Shading LMSE: {metrics['s_d_lmse']:.6f}")
     print(f"Diffuse Shading RMSE: {metrics['s_d_rmse']:.6f}")
     print(f"Diffuse Shading SSIM: {metrics['s_d_ssim']:.4f}")
-    print(f"Chroma MSE:          {metrics['xi_mse']:.6f}")
+    if 'xi_mse' in metrics:
+        print(f"Chroma MSE:          {metrics['xi_mse']:.6f}")
     print("=" * 80)
 
 
