@@ -17,6 +17,7 @@ train:
   val_example_indices: [120, 200, 250]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
   max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
   fast_val_metrics: false # false=exact skimage SSIM, true=faster proxy SSIM
+  compute_val_losses: true # true=compute full criterion losses in val; false=metrics-only faster validation
   input_size: 384
 
   # Two-phase curriculum (global-iteration based)

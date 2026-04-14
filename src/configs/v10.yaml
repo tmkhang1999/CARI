@@ -11,6 +11,7 @@ model:
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
+  backbone_lr_multiplier: 1.0 #0.1
   pretrained: true
   num_seg_classes: 41
 
@@ -25,6 +26,7 @@ train:
   val_interval_iters: 1000
   checkpoint_interval_iters: 1000
   val_example_images: 3
+  compute_val_losses: true
   seed: 42
   deterministic: false
 
@@ -46,13 +48,16 @@ data:
   midintrinsic_train_max_images: 0
 
 loss:
-  lambda_branch_a: 1.0
+  lambda_branch_a: 2.0
   lambda_branch_b: 1.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
   lambda_msg: 0.8 #0.5
   lambda_tv: 0.05 #0.3
-  lambda_perceptual: 0.1 #0.05
+  lambda_perceptual: 0.05
   lambda_dssim: 0.4
+  lambda_semvar: 0.4
+  lambda_recon: 0
   tv_type: 'segmentation'
   tv_target_classes: [1, 2, 22]
+  semantic_var_classes: [1, 2, 22]

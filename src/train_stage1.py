@@ -40,6 +40,7 @@ from models import (
     IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -60,10 +61,12 @@ TB_TAGS = {
     'loss_c_perceptual': '01_Losses/C_4_Perceptual',
     'loss_c_tv': '01_Losses/C_5_TV',
     'loss_c_dssim': '01_Losses/C_6_DSSIM',
+    'loss_c_semvar': '01_Losses/C_8_SemVar',
     'loss_d': '01_Losses/D_1_Total',
     'loss_d_mse': '01_Losses/D_2_MSE',
     'loss_d_msg': '01_Losses/D_3_MSG',
     'loss_d_dssim': '01_Losses/D_4_DSSIM',
+    'loss_recon': '01_Losses/R_1_Recon',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
     'a_d_rmse': '02_Albedo_Ad/2_rmse',
     'a_d_ssim': '02_Albedo_Ad/3_ssim',
@@ -84,7 +87,9 @@ def _log_ordered_scalars(writer, values, global_step):
         'loss_a', 'loss_a_l1', 'loss_a_msg', 'loss_a_dssim',
         'loss_b',
         'loss_c', 'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
+        'loss_c_semvar',
         'loss_d', 'loss_d_mse', 'loss_d_msg', 'loss_d_dssim',
+        'loss_recon',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
@@ -207,7 +212,13 @@ def save_checkpoint(model, optimizer, losses, config, filename, global_step):
 def load_checkpoint(model, optimizer, checkpoint_path, map_location=None):
     ckpt = torch.load(checkpoint_path, map_location=map_location)
     model.load_state_dict(ckpt['model_state_dict'], strict=False)
-    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    try:
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    except Exception as exc:
+        print(
+            "[warn] optimizer state not loaded (param-group mismatch). "
+            f"Continuing with freshly initialized optimizer: {exc}"
+        )
     global_step = int(ckpt.get('global_step', 0))
     losses = ckpt.get('losses', {})
     print(f"Loaded checkpoint at global_step={global_step}: {checkpoint_path}")
@@ -319,6 +330,7 @@ def train_one_step(model, batch, criterion, device):
         valid_mask,
         _loss_seg(model, seg),
         normals=normals,
+        rgb=rgb,
     )
 
     return losses
@@ -531,10 +543,10 @@ def _compute_ssim_bounded(pred, target, valid_mask, fast_mode=False):
     return float(ssim(tgt_np, pred_np, data_range=1.0))
 
 
-def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=1.0):
+def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
     """Inference-style tonemap to [0,1] per sample with NaN/Inf guards.
-    Defaults to scale=1.0 because train-loop RGB is already globally tonemapped
-    by the dataloader. Dynamic tonemapping on generic crops washes out colors."""
+    Use scale=1.0 for already-tonemapped RGB inputs; keep scale=None for
+    diagnostic tensors (reconstruction/derived albedo) that need auto exposure."""
     if img.ndim == 4:
         img = img[0]
     if img.shape[0] == 1:
@@ -666,21 +678,21 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         recon_diffuse_gt = targets['A_d_star'][i:i+1] * s_d_gt_linear
 
         # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
-        a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6)))
-        a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6)))
-        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6)))
+        a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6), scale=None))
+        a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6), scale=None))
+        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6), scale=None))
         blank_tile = torch.ones_like(a_g_derived_vis)
 
         sample_tiles = [
-            ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1])),
-            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt)),
+            ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1], scale=1.0)),
+            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None)),
             ('Gray Shading GT', s_g_gt_vis),
             ('Colorful Shading GT', s_c_gt_vis),
             ('Albedo GT', a_d_gt_vis),
             ('Diffuse Shading GT', s_d_gt_vis),
 
             ('', blank_tile),
-            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse)),
+            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None)),
             ('Gray Shading Pred', s_g_pred_vis),
             ('Colorful Shading Pred', s_c_pred_vis),
             ('Albedo Pred', a_d_pred_vis),
@@ -793,6 +805,7 @@ def validate(
     val_example_indices=None,
     max_val_batches=None,
     fast_val_metrics=False,
+    compute_val_losses=True,
 ):
     """
     Validation for ablation comparison on fixed Hypersim val split.
@@ -806,19 +819,24 @@ def validate(
                 may still be scanned to collect requested visualization samples.
         fast_val_metrics: bool. If True, uses proxy SSIM metric for speed.
                   If False (default), uses exact skimage SSIM.
+        compute_val_losses: bool. If False, skip criterion loss computation in validation
+                    and log only metrics for faster val runs.
     """
     model.eval()
-    total_loss = {
-        'loss_a': 0.0,
-        'loss_b': 0.0,
-        'loss_c': 0.0,
-        'loss_d': 0.0,
-        'loss_total': 0.0,
-        'loss_c_l1': 0.0,
-        'loss_c_msg': 0.0,
-        'loss_c_perceptual': 0.0,
-        'loss_c_tv': 0.0,
-    }
+    total_loss = {}
+    if compute_val_losses:
+        total_loss = {
+            'loss_a': 0.0,
+            'loss_b': 0.0,
+            'loss_c': 0.0,
+            'loss_d': 0.0,
+            'loss_total': 0.0,
+            'loss_c_l1': 0.0,
+            'loss_c_msg': 0.0,
+            'loss_c_perceptual': 0.0,
+            'loss_c_tv': 0.0,
+            'loss_c_semvar': 0.0,
+        }
     total_metric = {
         's_g_lmse': 0.0,
         's_g_rmse': 0.0,
@@ -923,10 +941,20 @@ def validate(
 
             processed_batches += 1
 
-            losses = criterion(predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg), normals=normals)
-            for k in total_loss:
-                if k in losses:
-                    total_loss[k] += losses[k].item()
+            if compute_val_losses:
+                losses = criterion(
+                    predictions,
+                    targets,
+                    m_diffuse,
+                    m_albedo,
+                    valid_mask,
+                    _loss_seg(model, seg),
+                    normals=normals,
+                    rgb=rgb,
+                )
+                for k in total_loss:
+                    if k in losses:
+                        total_loss[k] += losses[k].item()
 
             # Evaluate in inverse shading space (bounded) to match decoder outputs.
             d_g_star = targets['D_g_star']
@@ -953,9 +981,10 @@ def validate(
                 # vm is (1,1,H,W); expand_as makes it (1,2,H,W) to match xi channels.
                 # Numerator and denominator both sum over channel and spatial dims,
                 # so this computes mean squared error per xi element.
-                xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
-                xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
-                total_metric['xi_mse'] += xi_err.item()
+                if 'xi' in predictions:
+                    xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
+                    xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
+                    total_metric['xi_mse'] += xi_err.item()
 
                 # Dec C metrics on A_d
                 total_metric['a_d_lmse'] += _compute_lmse(
@@ -1017,9 +1046,10 @@ def validate(
             )
 
     # Losses are averaged over batches because criterion returns batch-level scalars.
-    denom_loss = max(processed_batches, 1)
-    for k in total_loss:
-        total_loss[k] /= denom_loss
+    if compute_val_losses:
+        denom_loss = max(processed_batches, 1)
+        for k in total_loss:
+            total_loss[k] /= denom_loss
 
     # Metrics are accumulated per sample in the inner loop, so normalize by sample count.
     denom_metric = max(n_samples, 1)
@@ -1030,14 +1060,16 @@ def validate(
             total_metric[k] /= denom_metric
 
     val_out = {}
-    val_out.update(total_loss)
+    if compute_val_losses:
+        val_out.update(total_loss)
     val_out.update(total_metric)
     _log_ordered_scalars(writer, val_out, global_step)
 
 
     # Return combined dict for terminal reporting.
     out = {}
-    out.update(total_loss)
+    if compute_val_losses:
+        out.update(total_loss)
     out.update(total_metric)
     return out
 
@@ -1074,6 +1106,7 @@ def build_stage1_model(config):
         8.0: IntrinsicDecompositionV8,
         9.0: IntrinsicDecompositionV9,
         10.0: IntrinsicDecompositionV10,
+        11.0: IntrinsicDecompositionV11,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
@@ -1104,6 +1137,36 @@ def _subset_dataset(dataset, dataset_name, max_images, seed):
     return subset, total, len(subset)
 
 
+def build_optimizer_stage1(model, train_cfg, model_cfg):
+    """Build Adam optimizer with optional lower LR for image encoder."""
+    base_lr = float(train_cfg['lr'])
+    multiplier = float(model_cfg.get('backbone_lr_multiplier', 1.0))
+
+    if multiplier <= 0.0:
+        raise ValueError(f"backbone_lr_multiplier must be > 0, got {multiplier}")
+
+    backbone_params = []
+    other_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if name.startswith('image_encoder.'):
+            backbone_params.append(param)
+        else:
+            other_params.append(param)
+
+    if not backbone_params or not other_params or abs(multiplier - 1.0) < 1e-12:
+        params = (p for p in model.parameters() if p.requires_grad)
+        return torch.optim.Adam(params, lr=base_lr)
+
+    return torch.optim.Adam(
+        [
+            {'params': backbone_params, 'lr': base_lr * multiplier},
+            {'params': other_params, 'lr': base_lr},
+        ]
+    )
+
+
 def main():
     args = parse_args()
     config = load_config(args.config, args.version)
@@ -1131,7 +1194,7 @@ def main():
     writer = SummaryWriter(log_dir=log_dir)
     model = build_stage1_model(config).to(device)
     criterion = FlexibleLoss(config['loss']).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(config['train']['lr']))
+    optimizer = build_optimizer_stage1(model, config['train'], config['model'])
 
     hypersim_root = config['data']['hypersim_root']
     mid_root = config['data'].get('midintrinsic_root', '../datasets/MIDIntrinsics')
@@ -1243,6 +1306,7 @@ def main():
         if max_val_batches <= 0:
             max_val_batches = None
     fast_val_metrics = bool(config['train'].get('fast_val_metrics', False))
+    compute_val_losses = bool(config['train'].get('compute_val_losses', True))
 
     start_step = 0
     resume_path = _resolve_resume_path(args.resume, args.auto_resume, ckpt_dir)
@@ -1256,6 +1320,10 @@ def main():
     if use_cosine_lr:
         total_opt_steps = max(1, math.ceil(max_iters / grad_accum_steps))
         completed_opt_steps = max(0, start_step // grad_accum_steps)
+        # When optimizer state cannot be restored (e.g., param-group mismatch),
+        # PyTorch requires `initial_lr` to exist for last_epoch >= 0.
+        for pg in optimizer.param_groups:
+            pg.setdefault('initial_lr', pg['lr'])
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=total_opt_steps,
@@ -1352,9 +1420,29 @@ def main():
 
         if step % int(config['train']['log_interval']) == 0:
             _log_ordered_scalars(writer, losses, step)
-            writer.add_scalar('00_Train/lr', float(optimizer.param_groups[0]['lr']), step)
+            if len(optimizer.param_groups) > 1:
+                writer.add_scalar('00_Train/lr_backbone', float(optimizer.param_groups[0]['lr']), step)
+                writer.add_scalar('00_Train/lr_heads', float(optimizer.param_groups[1]['lr']), step)
+                writer.add_scalar('00_Train/lr', float(optimizer.param_groups[1]['lr']), step)
+            else:
+                writer.add_scalar('00_Train/lr', float(optimizer.param_groups[0]['lr']), step)
 
-        if (step + 1) % val_interval_iters == 0:
+        should_validate = ((step + 1) % val_interval_iters == 0)
+        should_checkpoint = ((step + 1) % ckpt_interval_iters == 0)
+
+        # If both triggers coincide, save checkpoint first so validation runs
+        # against exactly the persisted model state.
+        if should_checkpoint:
+            avg = {k: running[k] / ckpt_interval_iters for k in running}
+            for k in running:
+                running[k] = 0.0
+            ckpt_path = os.path.join(ckpt_dir, f'checkpoint_iter_{step+1}.pth')
+            save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
+            latest_path = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
+            save_checkpoint(model, optimizer, avg, config, latest_path, global_step=step)
+            print(f"[{step+1}] train(avg): " + ", ".join([f"{k}={v:.4f}" for k, v in avg.items()]))
+
+        if should_validate:
             torch.cuda.empty_cache()
             vloss = validate(
                 model,
@@ -1367,18 +1455,9 @@ def main():
                 val_example_indices=val_example_indices,
                 max_val_batches=max_val_batches,
                 fast_val_metrics=fast_val_metrics,
+                compute_val_losses=compute_val_losses,
             )
             print(f"[{step+1}] val: " + ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()]))
-
-        if (step + 1) % ckpt_interval_iters == 0:
-            avg = {k: running[k] / ckpt_interval_iters for k in running}
-            for k in running:
-                running[k] = 0.0
-            ckpt_path = os.path.join(ckpt_dir, f'checkpoint_iter_{step+1}.pth')
-            save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
-            latest_path = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
-            save_checkpoint(model, optimizer, avg, config, latest_path, global_step=step)
-            print(f"[{step+1}] train(avg): " + ", ".join([f"{k}={v:.4f}" for k, v in avg.items()]))
 
     print('Training completed')
     writer.close()

@@ -9,6 +9,8 @@ from .stage1_v6 import IntrinsicDecompositionV6
 from .stage1_v7 import IntrinsicDecompositionV7
 from .stage1_v8 import IntrinsicDecompositionV8
 from .stage1_v9 import IntrinsicDecompositionV9
+from .stage1_v10 import IntrinsicDecompositionV10
+from .stage1_v11 import IntrinsicDecompositionV11
 from .stage1_v2_5 import IntrinsicDecompositionV2_5
 
 __all__ = [
@@ -22,6 +24,6 @@ __all__ = [
     "IntrinsicDecompositionV8",
     "IntrinsicDecompositionV9",
     "IntrinsicDecompositionV10",
+    "IntrinsicDecompositionV11",
     "IntrinsicDecompositionV2_5"
 ]
-from .stage1_v10 import IntrinsicDecompositionV10

@@ -26,24 +26,41 @@ EXTRA_ARGS=()
 RESUME_MODE=""            # forwarded as --resume <path|latest>
 AUTO_RESUME=0             # forwarded as --auto-resume
 
+require_value() {
+    local flag="$1"
+    if [[ $# -lt 2 || -z "${2:-}" || "${2}" == --* ]]; then
+        echo "ERROR: ${flag} requires a value."
+        exit 2
+    fi
+}
+
 # Parse script-owned flags; pass unknown flags through unchanged.
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)
+            require_value "$1" "${2:-}"
             VERSION="$2"
             shift 2
             ;;
         --cuda|--gpus|--cuda-visible-devices)
+            require_value "$1" "${2:-}"
             CUDA_IDS="$2"
             shift 2
             ;;
         --device)
+            require_value "$1" "${2:-}"
             RUN_DEVICE="$2"
             shift 2
             ;;
         --resume)
-            RESUME_MODE="$2"
-            shift 2
+            # Allow bare --resume to mean --resume latest.
+            if [[ $# -ge 2 && -n "${2:-}" && "${2}" != --* ]]; then
+                RESUME_MODE="$2"
+                shift 2
+            else
+                RESUME_MODE="latest"
+                shift 1
+            fi
             ;;
         --auto-resume)
             AUTO_RESUME=1
@@ -95,8 +112,13 @@ elif [[ -n "$RESUME_MODE" ]]; then
 fi
 echo "========================================"
 
+TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"
+if [[ "${VERSION}" == "11" ]]; then
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1_11.py"
+fi
+
 CMD=(
-    python "${ROOT_DIR}/src/train_stage1.py"
+    python "${TRAIN_SCRIPT}"
     --version "${VERSION}"
     --config "${CONFIG}"
     --device "${RUN_DEVICE}"

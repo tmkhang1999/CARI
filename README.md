@@ -133,6 +133,11 @@ python tests/test_losses.py
 bash scripts/train_stage1.sh
 ```
 
+**Train V11 (dual-branch `a_d` + `pi`)**:
+```bash
+bash scripts/train_stage1_11.sh
+```
+
 **4. Evaluate a checkpoint**:
 ```bash
 torchrun src/eval_hypersim.py --checkpoint checkpoints/checkpoint_epoch_10.pth
