@@ -20,17 +20,29 @@ def visualize_predictions(rgb, predictions, save_path=None):
 
     Args:
         rgb: (N, 3, H, W) input RGB
-        predictions: Dict with keys ['d_g', 'xi', 'c', 's_c', 'a_d', 'pi']
+        predictions: Dict with required keys ['d_g', 'xi', 'a_d', 'pi'].
+                     Optional keys ['c', 's_c'] are derived on-the-fly when absent.
         save_path: Optional path to save image
     """
     batch_size = rgb.shape[0]
+
+    c_pred = predictions.get('c', None)
+    s_c_pred = predictions.get('s_c', None)
+    if c_pred is None or s_c_pred is None:
+        eps = 1e-7
+        xi = predictions['xi']
+        c_rg = (1.0 - xi[:, 0:1]) / (xi[:, 0:1] + eps)
+        c_bg = (1.0 - xi[:, 1:2]) / (xi[:, 1:2] + eps)
+        c_pred = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
+        s_g_linear = 1.0 / (predictions['d_g'] + 1e-6) - 1.0
+        s_c_pred = s_g_linear * c_pred
 
     for i in range(batch_size):
         # Apply gamma for visualization
         rgb_vis = apply_gamma(rgb[i].cpu())
         s_g_vis = apply_gamma(predictions['d_g'][i].cpu()).repeat(3, 1, 1)
-        c_vis = torch.clamp(predictions['c'][i].cpu() / 2.0, 0, 1)  # Normalize chroma for vis
-        s_c_vis = apply_gamma(predictions['s_c'][i].cpu())
+        c_vis = torch.clamp(c_pred[i].cpu() / 2.0, 0, 1)  # Normalize chroma for vis
+        s_c_vis = apply_gamma(s_c_pred[i].cpu())
         a_d_vis = apply_gamma(predictions['a_d'][i].cpu())
         s_d_vis = apply_gamma(predictions['pi'][i].cpu())
 
