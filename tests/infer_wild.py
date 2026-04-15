@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 
 from src.models.stage1_v10 import IntrinsicDecompositionV10
-from src.models.stage1_v11 import IntrinsicDecompositionV11
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
 from preprocessor.infer_m2f_ins import run_segmentation
@@ -332,38 +331,25 @@ def resolve_device(device: str, cuda_index: int | None = None) -> str:
 
 def _infer_model_version(model_state: dict, checkpoint_path: str, model_version: str) -> str:
     requested = str(model_version).lower()
-    if requested in {"10", "11"}:
+    if requested == "10":
         return requested
 
     keys = list(model_state.keys())
 
-    # V10 has decoder_a/decoder_b (gray/chroma branches). V11 does not.
+    # V10 has decoder_a/decoder_b (gray/chroma branches).
     if any(k.startswith("decoder_a.") or k.startswith("decoder_b.") for k in keys):
         return "10"
-
-    if any(k.startswith("decoder_c.") or k.startswith("decoder_d.") for k in keys):
-        ckpt_name = os.path.basename(str(checkpoint_path)).lower()
-        ckpt_dir = str(checkpoint_path).lower()
-        if "v10" in ckpt_name or "/v10/" in ckpt_dir:
-            return "10"
-        if "v11" in ckpt_name or "/v11/" in ckpt_dir:
-            return "11"
-        return "11"
 
     ckpt_name = os.path.basename(str(checkpoint_path)).lower()
     ckpt_dir = str(checkpoint_path).lower()
     if "v10" in ckpt_name or "/v10/" in ckpt_dir:
         return "10"
-    if "v11" in ckpt_name or "/v11/" in ckpt_dir:
-        return "11"
-    return "11"
+    return "10"
 
 
 def _build_model(model_config: dict, version: str, device: str):
     if version == "10":
         model = IntrinsicDecompositionV10(model_config).to(device)
-    elif version == "11":
-        model = IntrinsicDecompositionV11(model_config).to(device)
     else:
         raise ValueError(f"Unsupported model version: {version}")
     return model
@@ -452,19 +438,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     pred_ad = to_np(preds['a_d'])                 # Albedo
     pred_pi_inv = to_np(preds['pi'])              # Inverse Diffuse Shading
 
-    if 'd_g' in preds:
-        pred_dg_inv = to_np(preds['d_g']).squeeze(-1)  # Inverse Gray Shading
-    else:
-        # V11 has no explicit gray shading branch. Derive gray shading from
-        # predicted diffuse shading using luminance on linear S_d.
-        pred_pi_linear = 1.0 / (np.clip(pred_pi_inv, 1e-6, 1.0)) - 1.0
-        pred_dg = (
-            0.2126 * pred_pi_linear[..., 0]
-            + 0.7152 * pred_pi_linear[..., 1]
-            + 0.0722 * pred_pi_linear[..., 2]
-        )
-        pred_dg = np.clip(pred_dg, 0.0, None)
-        pred_dg_inv = 1.0 / (pred_dg + 1.0)
+    pred_dg_inv = to_np(preds['d_g']).squeeze(-1)  # Inverse Gray Shading
     
     # Convert from inverse space to real linear shading: S = (1 / S_inv) - 1
     # We add a small epsilon to prevent division by zero.
@@ -536,7 +510,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_version",
         default="auto",
-        choices=["auto", "10", "11"],
+        choices=["auto", "10"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     parser.add_argument("--device", default="cuda", type=str, help="Device string, e.g. cpu, cuda, cuda:1")

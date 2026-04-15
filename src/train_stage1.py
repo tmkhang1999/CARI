@@ -40,7 +40,6 @@ from models import (
     IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
-    IntrinsicDecompositionV11,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -1106,7 +1105,6 @@ def build_stage1_model(config):
         8.0: IntrinsicDecompositionV8,
         9.0: IntrinsicDecompositionV9,
         10.0: IntrinsicDecompositionV10,
-        11.0: IntrinsicDecompositionV11,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")
