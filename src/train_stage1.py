@@ -53,6 +53,7 @@ TB_TAGS = {
     'loss_a_l1': '01_Losses/A_2_L1',
     'loss_a_msg': '01_Losses/A_3_MSG',
     'loss_a_dssim': '01_Losses/A_4_DSSIM',
+    'loss_a_range': '01_Losses/A_5_Range',
     'loss_b': '01_Losses/B_1_Total',
     'loss_c': '01_Losses/C_1_Total',
     'loss_c_l1': '01_Losses/C_2_L1',
@@ -60,12 +61,13 @@ TB_TAGS = {
     'loss_c_perceptual': '01_Losses/C_4_Perceptual',
     'loss_c_tv': '01_Losses/C_5_TV',
     'loss_c_dssim': '01_Losses/C_6_DSSIM',
-    'loss_c_semvar': '01_Losses/C_8_SemVar',
+    'loss_c_semvar': '01_Losses/C_7_SemVar',
     'loss_d': '01_Losses/D_1_Total',
     'loss_d_mse': '01_Losses/D_2_MSE',
     'loss_d_msg': '01_Losses/D_3_MSG',
     'loss_d_dssim': '01_Losses/D_4_DSSIM',
-    'loss_recon': '01_Losses/R_1_Recon',
+    'loss_recon': '01_Losses/R_1_Recon_Diffuse',
+    'loss_recon_l1': '01_Losses/R_2_Recon_Color',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
     'a_d_rmse': '02_Albedo_Ad/2_rmse',
     'a_d_ssim': '02_Albedo_Ad/3_ssim',
@@ -83,12 +85,12 @@ def _log_ordered_scalars(writer, values, global_step):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
         'loss_total',
-        'loss_a', 'loss_a_l1', 'loss_a_msg', 'loss_a_dssim',
+        'loss_a', 'loss_a_l1', 'loss_a_msg', 'loss_a_dssim', 'loss_a_range',
         'loss_b',
         'loss_c', 'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
         'loss_c_semvar',
         'loss_d', 'loss_d_mse', 'loss_d_msg', 'loss_d_dssim',
-        'loss_recon',
+        'loss_recon', 'loss_recon_l1',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
@@ -114,48 +116,65 @@ def scale_match(A_raw, A_pred, valid):
     return c.view(-1, 1, 1, 1)
 
 
-def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_diffuse=None):
-    """Compute training targets with per-sample routing for diffuse GT availability."""
+def compute_targets(predictions, batch):
     eps = 1e-6
+    device = predictions['a_d'].device
+    rgb = batch['rgb'].to(device)
+    albedo_raw = batch['albedo_raw'].to(device)
+    valid_mask = batch['valid_mask'].to(device)
+    
+    # Scale matching parameter C is computed between predictions and truth
     c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
 
     A_star = c * albedo_raw
     A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-    # Fallback shading estimate used by datasets without diffuse shading GT.
-    S_star_fallback = rgb / (A_star + eps)
+    
+    # Get pre-computed targets from batch if available (from MIDIntrinsics etc)
+    d_g_raw = batch.get('d_g_raw', None)
+    xi_raw = batch.get('xi_raw', None)
+    
+    if d_g_raw is not None and xi_raw is not None:
+        D_g_star = d_g_raw.to(device)
+        xi_star = xi_raw.to(device)
+        pi_star = torch.ones_like(rgb) # Decoder D is mostly skipped for MIDIntrinsic
+    else:
+        # Fallback shading for legacy hypersim that doesn't have precomputed targets
+        S_star_fallback = rgb / (A_star + eps)
+        
+        S_star = S_star_fallback
+        illum_raw = batch.get('illum_raw', None)
+        m_diffuse = batch.get('M_diffuse', None)
+        
+        if illum_raw is not None and m_diffuse is not None:
+            route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
+            illum = torch.nan_to_num(illum_raw.to(device), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+            S_star = route * illum + (1.0 - route) * S_star_fallback
+            
+        S_star = torch.nan_to_num(S_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
 
-    # If diffuse illumination GT exists (e.g., Hypersim), use it for Dec-A/B/D
-    # on routed samples and keep fallback on the rest (e.g., MIDIntrinsics).
-    S_star = S_star_fallback
-    if illum_raw is not None and m_diffuse is not None:
-        route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
-        illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-        S_star = route * illum + (1.0 - route) * S_star_fallback
-    S_star = torch.nan_to_num(S_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        S_g_star = (
+            0.2126 * S_star[:, 0:1]
+            + 0.7152 * S_star[:, 1:2]
+            + 0.0722 * S_star[:, 2:3]
+        )
+        D_g_star = 1.0 / (S_g_star + 1.0)
+        
+        C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
+        C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
+        xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+        xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
-    S_g_star = (
-        0.2126 * S_star[:, 0:1]
-        + 0.7152 * S_star[:, 1:2]
-        + 0.0722 * S_star[:, 2:3]
-    )
-    D_g_star = 1.0 / (S_g_star + 1.0)
-
-    C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
-    C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
-    xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
-    xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-
-    A_d_star = A_star
-    D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-    pi_star = 1.0 / (S_star + 1.0)
-    pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-
+        pi_star = 1.0 / (S_star + 1.0)
+        pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+        D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+        
     return {
         'D_g_star': D_g_star,
         'xi_star': xi_star,
-        'A_d_star': A_d_star,
+        'A_d_star': A_star,
         'pi_star': pi_star,
     }
+
 
 
 def parse_args():
@@ -312,14 +331,7 @@ def train_one_step(model, batch, criterion, device):
 
     predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
     predictions = _apply_diffuse_detach(predictions, m_diffuse)
-    targets = compute_targets(
-        predictions,
-        rgb,
-        albedo_raw,
-        valid_mask,
-        illum_raw=illum_raw,
-        m_diffuse=m_diffuse,
-    )
+    targets = compute_targets(predictions, batch)
 
     losses = criterion(
         predictions,
@@ -894,14 +906,7 @@ def validate(
 
             predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
-            targets = compute_targets(
-                predictions,
-                rgb,
-                albedo_raw,
-                valid_mask,
-                illum_raw=illum_raw,
-                m_diffuse=m_diffuse,
-            )
+            targets = compute_targets(predictions, batch)
 
             # Collect samples at specified indices.
             # Prefer true dataset sample indices when available so logging is robust to

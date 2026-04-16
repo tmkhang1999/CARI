@@ -43,9 +43,12 @@ loss:
   lambda_branch_b: 1.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
-  lambda_msg: 0.8 #0.5
-  lambda_tv: 0.05 #0.3
+
+  lambda_msg: 0.8 
   lambda_perceptual: 0.05
   lambda_dssim: 0.4
+
+  lambda_tv: 0.05
+  
   tv_type: 'segmentation'
   tv_target_classes: [1, 2, 22]

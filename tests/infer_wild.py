@@ -13,9 +13,24 @@ sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(ROOT_DIR / "src"))
 sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 
-from src.models.stage1_v10 import IntrinsicDecompositionV10
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
+from src.models import (
+    IntrinsicDecompositionV1,
+    IntrinsicDecompositionV2,
+    IntrinsicDecompositionV2_5,
+    IntrinsicDecompositionV3,
+    IntrinsicDecompositionV4,
+    IntrinsicDecompositionV5,
+    IntrinsicDecompositionV6,
+    IntrinsicDecompositionV7,
+    IntrinsicDecompositionV8,
+    IntrinsicDecompositionV9,
+    IntrinsicDecompositionV10,
+)
+try:
+    from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
+except ImportError:
+    from visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
 from preprocessor.infer_m2f_ins import run_segmentation
 from preprocessor.colors import M2F_CLASSES
 from preprocessor.compute_ccr import compute_ccr
@@ -329,29 +344,40 @@ def resolve_device(device: str, cuda_index: int | None = None) -> str:
     return device
 
 
-def _infer_model_version(model_state: dict, checkpoint_path: str, model_version: str) -> str:
+def _infer_model_version(config: dict, checkpoint_path: str, model_version: str) -> str:
     requested = str(model_version).lower()
-    if requested == "10":
+    if requested != "auto":
         return requested
 
-    keys = list(model_state.keys())
+    # Check config
+    if config and "model" in config and "version" in config["model"]:
+        return str(float(config["model"]["version"]))
 
-    # V10 has decoder_a/decoder_b (gray/chroma branches).
-    if any(k.startswith("decoder_a.") or k.startswith("decoder_b.") for k in keys):
-        return "10"
-
+    # Fallback to checkpoint path
     ckpt_name = os.path.basename(str(checkpoint_path)).lower()
     ckpt_dir = str(checkpoint_path).lower()
-    if "v10" in ckpt_name or "/v10/" in ckpt_dir:
-        return "10"
+    
+    for v in ["10", "9", "8", "7", "6", "5", "4", "3", "2.5", "2", "1"]:
+        if f"v{v}" in ckpt_name or f"/v{v}/" in ckpt_dir:
+            return v
+            
     return "10"
 
 
 def _build_model(model_config: dict, version: str, device: str):
-    if version == "10":
-        model = IntrinsicDecompositionV10(model_config).to(device)
-    else:
+    version = float(version)
+    model_map = {
+        1: IntrinsicDecompositionV1, 2: IntrinsicDecompositionV2,
+        2.5: IntrinsicDecompositionV2_5, 3: IntrinsicDecompositionV3,
+        4: IntrinsicDecompositionV4, 5: IntrinsicDecompositionV5,
+        6: IntrinsicDecompositionV6, 7: IntrinsicDecompositionV7,
+        8: IntrinsicDecompositionV8, 9: IntrinsicDecompositionV9,
+        10: IntrinsicDecompositionV10,
+    }
+    if version not in model_map:
         raise ValueError(f"Unsupported model version: {version}")
+    
+    model = model_map[version](model_config).to(device)
     return model
 
 # ====================================================================
@@ -368,11 +394,13 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     # 1. Load Model
     state_dict = torch.load(checkpoint_path, map_location=device)
+    config = state_dict.get("config", {})
     model_state = state_dict['model_state_dict'] if 'model_state_dict' in state_dict else state_dict
-    inferred_version = _infer_model_version(model_state, checkpoint_path, model_version)
+    inferred_version = _infer_model_version(config, checkpoint_path, model_version)
+    
     print(f"Loading V{inferred_version} Checkpoint...")
     model = _build_model(model_config, inferred_version, device)
-    model.load_state_dict(model_state)
+    model.load_state_dict(model_state, strict=False)
     model.eval()
 
     # 2. Extract Data
@@ -395,6 +423,8 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST)
 
     ccr = compute_ccr(rgb_tm_tensor).squeeze(0).permute(1, 2, 0).cpu().numpy()
+    # CCR Normalization across domains to match V10/V11 training
+    ccr = ccr / (np.std(ccr, axis=(0, 1), keepdims=True) + 1e-6)
 
     # 4. To Tensors
     t_rgb = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float().to(device)

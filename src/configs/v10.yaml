@@ -31,7 +31,7 @@ train:
   deterministic: false
 
   phase1_iterations: 10000
-  phase2_iterations: 20000
+  phase2_iterations: 15000
   extend_iterations: 20000
 
   sampling_weights_phase1:
@@ -52,12 +52,19 @@ loss:
   lambda_branch_b: 1.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
-  lambda_msg: 0.8 #0.5
-  lambda_tv: 0.05 #0.3
-  lambda_perceptual: 0.05
-  lambda_dssim: 0.4
-  lambda_semvar: 0.4
-  lambda_recon: 0
+
+  enable_dssim_a_d: false # Toggle to true to restore DSSIM on Dec A & D
+  lambda_msg: 0.5 #0.8
+  lambda_perceptual: 0.1 #0.05
+  lambda_dssim: 0.2 #0.4
+
+  lambda_tv: 0.05
+  lambda_semvar: 0.5
+  lambda_range: 0.1
+
+  lambda_recon: 0.5  
+  lambda_recon_color: 0
+
   tv_type: 'segmentation'
   tv_target_classes: [1, 2, 22]
   semantic_var_classes: [1, 2, 22]

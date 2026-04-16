@@ -42,6 +42,9 @@ class FlexibleLoss(nn.Module):
         self.lambda_dssim = config.get('lambda_dssim', 0.4)
         self.lambda_semvar = config.get('lambda_semvar', 0.0)
         self.lambda_recon = config.get('lambda_recon', 0.2)
+        self.lambda_recon_color = config.get('lambda_recon_color', 1.0)
+        self.lambda_range = config.get('lambda_range', 0.1)
+        self.enable_dssim_a_d = config.get('enable_dssim_a_d', True)
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
         self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22])
@@ -119,6 +122,26 @@ class FlexibleLoss(nn.Module):
     # ------------------------------------------------------------------
     # Per-decoder losses
     # ------------------------------------------------------------------
+
+    def loss_reconstruction_sc(self, a_d_pred, d_g_pred, xi_pred, rgb, valid_mask, m_albedo):
+        if m_albedo.sum() == 0:
+            return (a_d_pred * 0.0).sum(), {}
+            
+        route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
+        mask = valid_mask.float() * route
+
+        # Reconstruct S_c from Dec A and Dec B
+        s_g = (1.0 / (d_g_pred.clamp(1e-6) + 1e-6)) - 1.0
+        c_rg = (1.0 - xi_pred[:, 0:1]) / (xi_pred[:, 0:1].clamp(1e-6) + 1e-6)
+        c_bg = (1.0 - xi_pred[:, 1:2]) / (xi_pred[:, 1:2].clamp(1e-6) + 1e-6)
+        c = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
+        
+        s_c_linear = (s_g * c).clamp(0.0, 20.0)
+        recon = a_d_pred * s_c_linear
+        
+        l1 = self._masked_l1(recon, rgb, mask)
+        return l1, {'loss_recon_l1': l1.detach()}
+
     def loss_a(self, D_g_pred, D_g_star, valid_mask):
         """
         Dec A loss: Gray shading in inverse space.
@@ -128,17 +151,39 @@ class FlexibleLoss(nn.Module):
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
         msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
         
-        # Restore DSSIM for sharp cast shadows
-        dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+
+        # Conditionally restore DSSIM for sharp cast shadows
+        if self.enable_dssim_a_d:
+            dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+        else:
+            dssim = D_g_pred.new_tensor(0.0)
         
-        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
+        # Dynamic Range Supervision (masked std) instead of max-min
+        valid_pixels_pred = D_g_pred[valid_mask.bool()]
+        valid_pixels_star = D_g_star[valid_mask.bool()]
+        
+        if valid_pixels_pred.numel() < 2:
+            pred_std = D_g_pred.new_tensor(0.0)
+            gt_std = D_g_star.new_tensor(0.0)
+        else:
+            pred_std = valid_pixels_pred.std()
+            gt_std = valid_pixels_star.std()
+            
+        import torch.nn.functional as F
+        range_loss = F.mse_loss(pred_std, gt_std.detach())
+        
+        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim + self.lambda_range * range_loss
         
         details = {
             'loss_a_l1': l1.detach(),
             'loss_a_msg': msg.detach(),
-            'loss_a_dssim': dssim.detach(),
+            'loss_a_range': range_loss.detach(),
         }
+        if self.enable_dssim_a_d:
+            details['loss_a_dssim'] = dssim.detach()
+            
         return total, details
+
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
         """
@@ -268,15 +313,21 @@ class FlexibleLoss(nn.Module):
 
         mse = self._masked_mse(pi_pred, pi_star, mask)
         msg = self.msg_loss(pi_pred * mask, pi_star * mask)
-        dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
+        
+        if self.enable_dssim_a_d:
+            dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
+        else:
+            dssim = pi_pred.new_tensor(0.0)
         
         total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
         
         details = {
             'loss_d_mse': mse.detach(),
             'loss_d_msg': msg.detach(),
-            'loss_d_dssim': dssim.detach(),
         }
+        if self.enable_dssim_a_d:
+            details['loss_d_dssim'] = dssim.detach()
+            
         return total, details
 
     # ------------------------------------------------------------------
@@ -341,6 +392,19 @@ class FlexibleLoss(nn.Module):
 
         loss_total = la + lb + lc + ld + (self.lambda_recon * l_recon)
         
+        
+        if 'd_g' in predictions and 'xi' in predictions and rgb is not None:
+            la_s, da_s = self.loss_reconstruction_sc(
+                predictions['a_d'],
+                predictions['d_g'],
+                predictions['xi'],
+                rgb,
+                valid_mask,
+                m_albedo
+            )
+            loss_total = loss_total + self.lambda_recon_color * la_s
+            ld_details.update(da_s)
+
         out = {
             # Keep both keys for compatibility with old and new callers.
             'loss': loss_total,

@@ -132,6 +132,11 @@ class IntrinsicDecompositionV10(nn.Module):
 
         if ccr is None:
             ccr = compute_ccr(rgb)
+        
+        # Normalize per-image to close HDR/sRGB distribution gap
+        ccr_std = ccr.std(dim=(2, 3), keepdim=True).clamp_min(1e-6)
+        ccr = ccr / ccr_std
+        
         ccr_feats = self.ccr_encoder(ccr)
 
         # Inject raw CCR at decoder stage resolutions to avoid over-smoothed priors.
