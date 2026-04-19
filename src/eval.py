@@ -24,15 +24,7 @@ if str(SRC_DIR) not in sys.path:
 
 from data.hypersim_dataset import get_hypersim_loader
 from models import (
-    IntrinsicDecompositionV1,
-    IntrinsicDecompositionV2,
-    IntrinsicDecompositionV2_5,
-    IntrinsicDecompositionV3,
-    IntrinsicDecompositionV4,
-    IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
-    IntrinsicDecompositionV7,
-    IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
 )
@@ -66,25 +58,36 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     eps = 1e-6
     c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
     A_star = c * albedo_raw
-    S_star_fallback = rgb / (A_star + eps)
-    S_star = S_star_fallback
+    A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+    # Dec-A/Dec-B targets always come from colorful shading S_c = I / A*
+    S_c_star = rgb / (A_star + eps)
+    S_c_star = torch.nan_to_num(S_c_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+    # Dec-D target can route to diffuse illumination GT when available.
+    S_d_star = S_c_star
     if illum_raw is not None and m_diffuse is not None:
         route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
         illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-        S_star = route * illum + (1.0 - route) * S_star_fallback
+        S_d_star = route * illum + (1.0 - route) * S_c_star
 
-    S_g_star = 0.2126 * S_star[:, 0:1] + 0.7152 * S_star[:, 1:2] + 0.0722 * S_star[:, 2:3]
+    S_g_star = 0.2126 * S_c_star[:, 0:1] + 0.7152 * S_c_star[:, 1:2] + 0.0722 * S_c_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
+    D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
-    C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
-    C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
+    C_RG = S_c_star[:, 0:1] / (S_c_star[:, 1:2] + eps)
+    C_BG = S_c_star[:, 2:3] / (S_c_star[:, 1:2] + eps)
     xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+    xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+
+    pi_star = 1.0 / (S_d_star + 1.0)
+    pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
     return {
         'D_g_star': D_g_star,
         'xi_star': xi_star,
         'A_d_star': A_star,
-        'pi_star': 1.0 / (S_star + 1.0),
+        'pi_star': pi_star,
     }
 
 
@@ -210,7 +213,7 @@ def compute_ssim_bounded(pred, target, valid_mask):
 
 
 def build_stage1_model(model_cfg):
-    version = float(model_cfg.get("version", 1))
+    version = float(model_cfg.get("version", 10))
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -220,15 +223,7 @@ def build_stage1_model(model_cfg):
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
     model_map = {
-        1: IntrinsicDecompositionV1,
-        2: IntrinsicDecompositionV2,
-        2.5: IntrinsicDecompositionV2_5,
-        3: IntrinsicDecompositionV3,
-        4: IntrinsicDecompositionV4,
-        5: IntrinsicDecompositionV5,
         6: IntrinsicDecompositionV6,
-        7: IntrinsicDecompositionV7,
-        8: IntrinsicDecompositionV8,
         9: IntrinsicDecompositionV9,
         10: IntrinsicDecompositionV10,
     }

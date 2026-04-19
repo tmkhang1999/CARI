@@ -113,6 +113,8 @@ class FlexibleLoss(nn.Module):
         mu1_sq, mu2_sq, mu1_mu2 = mu1 ** 2, mu2 ** 2, mu1 * mu2
         sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C) - mu1_sq
         sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C) - mu2_sq
+        sigma1_sq = sigma1_sq.clamp_min(0.0)
+        sigma2_sq = sigma2_sq.clamp_min(0.0)
         sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C) - mu1_mu2
 
         ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
@@ -134,9 +136,14 @@ class FlexibleLoss(nn.Module):
         s_g = (1.0 / (d_g_pred.clamp(1e-6) + 1e-6)) - 1.0
         c_rg = (1.0 - xi_pred[:, 0:1]) / (xi_pred[:, 0:1].clamp(1e-6) + 1e-6)
         c_bg = (1.0 - xi_pred[:, 1:2]) / (xi_pred[:, 1:2].clamp(1e-6) + 1e-6)
-        c = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
         
-        s_c_linear = (s_g * c).clamp(0.0, 20.0)
+        # Invert the luminance formula: S_g = 0.2126 * S_R + 0.7152 * S_G + 0.0722 * S_B
+        denom = (0.2126 * c_rg + 0.7152 + 0.0722 * c_bg).clamp(1e-6)
+        s_green = s_g / denom
+        
+        c = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
+        s_c_linear = (s_green * c).clamp(0.0, 20.0)
+        
         recon = a_d_pred * s_c_linear
         
         l1 = self._masked_l1(recon, rgb, mask)
@@ -371,6 +378,7 @@ class FlexibleLoss(nn.Module):
         # 3. Diffuse Reconstruction Loss (Anchor using GT product, NOT I)
         if targets.get('A_d_star') is not None and targets.get('pi_star') is not None:
             s_d_pred = (1.0 / (predictions['pi'] + 1e-6)) - 1.0
+            s_d_pred = s_d_pred.clamp(0.0, 20.0)
             s_d_star = (1.0 / (targets['pi_star'] + 1e-6)) - 1.0
             recon_pred = predictions['a_d'] * s_d_pred
             # Reconstruct the true latent diffuse RGB rather than forcing inclusion of specular residuals.

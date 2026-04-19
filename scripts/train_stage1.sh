@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train Stage 1  —  works for ALL versions (V1 / V2 / V3 / V4)
+# Train Stage 1  —  supported versions: V6 / V9 / V10
 #
 # Usage:
-#   bash scripts/train_stage1.sh                                 # V1 (default), CUDA auto
-#   bash scripts/train_stage1.sh --version 2                    # V2
-#   bash scripts/train_stage1.sh --version 3 --cuda 1           # use GPU 1 (CUDA_VISIBLE_DEVICES=1)
-#   bash scripts/train_stage1.sh --version 4 --device cpu       # force CPU
-#   bash scripts/train_stage1.sh --version 2 --cuda 0,1         # expose multiple GPUs
-#   bash scripts/train_stage1.sh --config src/configs/v2.yaml   # explicit config
-#   bash scripts/train_stage1.sh --version 3 --resume checkpoints/v3/checkpoint_iter_20000.pth
-#   bash scripts/train_stage1.sh --version 3 --auto-resume
+#   bash scripts/train_stage1.sh                                  # V10 (default), CUDA auto
+#   bash scripts/train_stage1.sh --version 6 --cuda 1            # use GPU 1
+#   bash scripts/train_stage1.sh --version 9 --device cpu        # force CPU
+#   bash scripts/train_stage1.sh --version 10 --resume checkpoints/v10/checkpoint_latest.pth
+#   bash scripts/train_stage1.sh --version 9 --auto-resume
 #
 # All extra flags are forwarded directly to train_stage1.py (e.g. --device cpu).
 # ──────────────────────────────────────────────────────────────────────────────
@@ -18,8 +15,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Default to version 1 if no --version or --config flag is given
-VERSION=1
+# Default to version 10 if no --version or --config flag is given
+VERSION=10
 RUN_DEVICE="cuda"          # forwarded to train_stage1.py --device
 CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
@@ -73,14 +70,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-# Handle versions like 2.5 which are stored as v2_5.yaml
-if [[ ! -f "$CONFIG" ]]; then
-    ALT_CONFIG="${ROOT_DIR}/src/configs/v${VERSION//./_}.yaml"
-    if [[ -f "$ALT_CONFIG" ]]; then
-        CONFIG="$ALT_CONFIG"
-    fi
+if [[ "${VERSION}" != "6" && "${VERSION}" != "9" && "${VERSION}" != "10" ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 6, 9, 10"
+    exit 1
 fi
+
+CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "ERROR: Config not found: $CONFIG"
@@ -113,9 +108,6 @@ fi
 echo "========================================"
 
 TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"
-if [[ "${VERSION}" == "11" ]]; then
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1_11.py"
-fi
 
 CMD=(
     python "${TRAIN_SCRIPT}"

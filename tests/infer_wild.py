@@ -15,15 +15,7 @@ sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 from src.models import (
-    IntrinsicDecompositionV1,
-    IntrinsicDecompositionV2,
-    IntrinsicDecompositionV2_5,
-    IntrinsicDecompositionV3,
-    IntrinsicDecompositionV4,
-    IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
-    IntrinsicDecompositionV7,
-    IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
 )
@@ -367,11 +359,8 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
 def _build_model(model_config: dict, version: str, device: str):
     version = float(version)
     model_map = {
-        1: IntrinsicDecompositionV1, 2: IntrinsicDecompositionV2,
-        2.5: IntrinsicDecompositionV2_5, 3: IntrinsicDecompositionV3,
-        4: IntrinsicDecompositionV4, 5: IntrinsicDecompositionV5,
-        6: IntrinsicDecompositionV6, 7: IntrinsicDecompositionV7,
-        8: IntrinsicDecompositionV8, 9: IntrinsicDecompositionV9,
+        6: IntrinsicDecompositionV6,
+        9: IntrinsicDecompositionV9,
         10: IntrinsicDecompositionV10,
     }
     if version not in model_map:
@@ -464,33 +453,53 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     def to_np(t): return t.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
-    # Get predictions (Network outputs are inverse shading maps: S_inv = 1 / (S + 1))
+    # Get predictions
     pred_ad = to_np(preds['a_d'])                 # Albedo
+    if pred_ad.shape[-1] == 1:
+        pred_ad = np.repeat(pred_ad, 3, axis=-1)
+        
     pred_pi_inv = to_np(preds['pi'])              # Inverse Diffuse Shading
+    if pred_pi_inv.shape[-1] == 1:
+        pred_pi_inv = np.repeat(pred_pi_inv, 3, axis=-1)
 
-    pred_dg_inv = to_np(preds['d_g']).squeeze(-1)  # Inverse Gray Shading
+    pred_dg_inv = to_np(preds['d_g'])
+    if pred_dg_inv.shape[-1] == 1:
+        pred_dg_inv = np.repeat(pred_dg_inv, 3, axis=-1)
     
-    # Convert from inverse space to real linear shading: S = (1 / S_inv) - 1
-    # We add a small epsilon to prevent division by zero.
-    pred_dg = 1.0 / (np.clip(pred_dg_inv, 1e-6, 1.0)) - 1.0
-    pred_pi = 1.0 / (np.clip(pred_pi_inv, 1e-6, 1.0)) - 1.0
+    # Linear shading: S = 1/D - 1
+    pred_sg = 1.0 / np.clip(pred_dg_inv, 1e-6, 1.0) - 1.0
+    pred_sd = 1.0 / np.clip(pred_pi_inv, 1e-6, 1.0) - 1.0
     
+    if 's_c' in preds:
+        pred_sc = to_np(preds['s_c']) 
+    elif 'xi' in preds:
+        xi_np = to_np(preds['xi'])
+        c_rg = (1.0 - xi_np[..., 0:1]) / (xi_np[..., 0:1] + 1e-6)
+        c_bg = (1.0 - xi_np[..., 1:2]) / (xi_np[..., 1:2] + 1e-6)
+        denom_np = np.clip(0.2126 * c_rg + 0.7152 + 0.0722 * c_bg, 1e-6, None)
+        sg_1c = pred_sg[..., 0:1]
+        s_green = sg_1c / denom_np
+        pred_sc = np.concatenate([c_rg * s_green, s_green, c_bg * s_green], axis=-1)
+    else:
+        pred_sc = pred_sg.copy()
+        
     # Reconstruct Diffuse = Albedo * Real Diffuse Shading
-    pred_recon = np.clip(pred_ad * pred_pi, 0.0, None)
+    pred_recon = np.clip(pred_ad * pred_sd, 0.0, None)
     
-    # Scale match pred_recon to the input rgb_tm to fix arbitrary scaling
-    c_recon = np.sum(rgb_tm * pred_recon) / (np.sum(pred_recon * pred_recon) + 1e-6)
-    pred_recon_scaled = pred_recon * c_recon
+    # Derived Albedos
+    deriv_ag = np.clip(rgb_tm / np.clip(pred_sg, 1e-6, None), 0.0, None)
+    deriv_ac = np.clip(rgb_tm / np.clip(pred_sc, 1e-6, None), 0.0, None)
+    deriv_ad = np.clip(rgb_tm / np.clip(pred_sd, 1e-6, None), 0.0, None)
     
-    # Residual map in model input domain: Input - Diffuse Recon
-    pred_residual = np.clip(rgb_tm - pred_recon_scaled, 0.0, None)
-    
-    # 6. Visualization Setup (2 Rows)
+    # 6. Visualization Setup (3 Rows)
     print("Generating Visualizations...")
-    fig, axes = plt.subplots(2, 4, figsize=(16, 9), constrained_layout=True, facecolor="#111111")
+    fig, axes = plt.subplots(3, 5, figsize=(20, 12), constrained_layout=True, facecolor="#111111")
     fig.suptitle(f'In-the-Wild V{inferred_version} Pipeline', fontsize=16, color='white', fontweight='bold')
     
     def _show(ax, img, title, cmap=None, vmin=0, vmax=1):
+        if img is None:
+            ax.axis('off')
+            return
         if len(img.shape) == 2:
             ax.imshow(img, cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest')
         else:
@@ -499,33 +508,44 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         ax.axis('off')
 
     def _auto_expose_rgb(img):
-        img_vis = np.clip(img, 0.0, None)
+        img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+        img_vis = np.clip(img_vis, 0.0, None)
         scale = float(np.percentile(img_vis, 99.0)) + 1e-6
-        return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/2.2) # Gamma correction for display
+        return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/2.2)
+
+    def _gamma_correct(img):
+        img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.power(np.clip(img_vis, 0.0, 1.0), 1.0/2.2)
 
     # Colorize maps
     seg_rgb = NYU40_COLORS[seg_nyu40.flatten()].reshape(H, W, 3) / 255.0
     normals_rgb = np.clip((normals + 1.0) / 2.0, 0.0, 1.0)
     ccr_mag = np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
+    ccr_vmax = float(np.percentile(ccr_mag, 99.0)) + 1e-6
     
+    # Hide all axes initially
+    for r in range(3):
+        for c in range(5):
+            axes[r,c].axis('off')
+            
     # ROW 1: Raw Image | Normals | Segmentation | CCR
-    _show(axes[0,0], np.power(np.clip(rgb_tm, 0, 1), 1.0/2.2), "Input RGB (Linear & Tonemapped)")
-    _show(axes[0,1], normals_rgb, "Normals (Metric3D v2)")
-    _show(axes[0,2], seg_rgb, f"NYU40 Segmentation")
-    _show(
-        axes[0,3],
-        ccr_mag,
-        "CCR Magnitude",
-        cmap="magma",
-        vmin=0.0,
-        vmax=float(np.percentile(ccr_mag, 99.0)) + 1e-6,
-    )
+    _show(axes[0,0], _gamma_correct(rgb_tm), "Input RGB")
+    _show(axes[0,1], normals_rgb, "Normals (Metric3D)")
+    _show(axes[0,2], seg_rgb, "Segmentation (NYU40)")
+    _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
+    # axes[0,4] is left empty
 
-    # ROW 2: Diffuse Recon | Albedo Pred | Diffuse Shading Pred | Residual Pred
-    _show(axes[1,0], np.power(np.clip(pred_recon_scaled, 0.0, 1.0), 1.0/2.2), "Diffuse Recon (Scale Matched)")
-    _show(axes[1,1], _auto_expose_rgb(pred_ad), "Albedo Pred (auto-exposed)")
-    _show(axes[1,2], _auto_expose_rgb(pred_pi), "Diffuse Shading Pred (auto-exposed)")
-    _show(axes[1,3], np.power(np.clip(pred_residual, 0.0, 1.0), 1.0/2.2), "Residual Pred (Input - Diffuse Recon)")
+    # ROW 2: S_g_pred, S_c_Pred, S_d_pred, A_d_pred, Diffuse_recon_pred
+    _show(axes[1,0], _auto_expose_rgb(pred_sg), "Gray Shading Pred")
+    _show(axes[1,1], _auto_expose_rgb(pred_sc), "Colorful Shading Pred")
+    _show(axes[1,2], _auto_expose_rgb(pred_sd), "Diffuse Shading Pred")
+    _show(axes[1,3], _auto_expose_rgb(pred_ad), "Albedo Pred (auto-exposed)")
+    _show(axes[1,4], _auto_expose_rgb(pred_recon), "Diffuse Recon Pred")
+
+    # ROW 3: A_g=I/S_g_pred, A_c=I/S_c_pred, A_d=I/S_d_pred
+    _show(axes[2,0], _auto_expose_rgb(deriv_ag), "Derived A_g = I / S_g_pred")
+    _show(axes[2,1], _auto_expose_rgb(deriv_ac), "Derived A_c = I / S_c_pred")
+    _show(axes[2,2], _auto_expose_rgb(deriv_ad), "Derived A_d = I / S_d_pred")
 
     os.makedirs("outputs", exist_ok=True)
     out_path = "outputs/wild_inference.png"

@@ -12,7 +12,7 @@ from .decoders.progressive_decoder import ProgressiveDecoder
 from .modules.spatial_feature_modulation import SpatialFeatureModulation
 from .modules.spade import SPADE
 from .modules.illuminant_descriptor import IlluminantDescriptor
-from .stage1_v5 import compute_ccr
+from .ccr_utils import compute_ccr
 
 
 class IntrinsicDecompositionV9(nn.Module):

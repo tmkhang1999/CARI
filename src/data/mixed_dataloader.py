@@ -10,7 +10,16 @@ class MixedDataloader:
     Each yielded batch is homogeneous (single dataset).
     """
 
-    def __init__(self, datasets, weights, batch_size=8, num_workers=4, pin_memory=True, seed=42):
+    def __init__(
+        self,
+        datasets,
+        weights,
+        batch_size=8,
+        num_workers=4,
+        pin_memory=True,
+        seed=42,
+        prefetch_factor=4,
+    ):
         valid_datasets = {
             name: ds for name, ds in datasets.items()
             if hasattr(ds, '__len__') and len(ds) > 0
@@ -21,23 +30,37 @@ class MixedDataloader:
         if not valid_datasets:
             raise ValueError("MixedDataloader requires at least one non-empty dataset.")
 
-        self.loaders = {
-            name: DataLoader(
+        self.loaders = {}
+        for name, dataset in valid_datasets.items():
+            ds_workers = self._resolve_per_dataset_int(num_workers, name, default=4)
+            ds_prefetch = self._resolve_per_dataset_int(prefetch_factor, name, default=4)
+            self.loaders[name] = DataLoader(
                 dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                num_workers=num_workers,
+                num_workers=ds_workers,
                 pin_memory=pin_memory,
                 drop_last=True,
-            persistent_workers=(num_workers > 0),
-            prefetch_factor=4 if num_workers > 0 else None,
+                persistent_workers=(ds_workers > 0),
+                prefetch_factor=ds_prefetch if ds_workers > 0 else None,
             )
-            for name, dataset in valid_datasets.items()
-        }
-        self._iterators = {name: iter(loader) for name, loader in self.loaders.items()}
+
+        # Lazily create iterators so disabled/zero-weight datasets do not spawn workers.
+        self._iterators = {}
         self.rng = np.random.default_rng(seed)
         self.sample_counts = {name: 0 for name in self.loaders}
         self.set_weights(weights)
+
+    @staticmethod
+    def _resolve_per_dataset_int(value, name, default):
+        if isinstance(value, dict):
+            raw = value.get(name, default)
+        else:
+            raw = value
+        out = int(raw)
+        if out < 0:
+            raise ValueError(f"Expected non-negative value for '{name}', got {out}")
+        return out
 
     def set_weights(self, weights):
         names, probs = [], []
@@ -61,6 +84,8 @@ class MixedDataloader:
         return dict(self.sample_counts)
 
     def _next_from(self, name):
+        if name not in self._iterators:
+            self._iterators[name] = iter(self.loaders[name])
         try:
             return next(self._iterators[name])
         except StopIteration:

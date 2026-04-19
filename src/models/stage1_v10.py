@@ -1,4 +1,4 @@
-"""Stage 1 V9: Unified SFM-guided decoders with CCR, normals, SPADE, and FiLM."""
+"""Stage 1 V10: Unified SFM-guided decoders with CCR, normals, SPADE, and FiLM."""
 
 import torch
 import torch.nn as nn
@@ -12,7 +12,7 @@ from .decoders.progressive_decoder import ProgressiveDecoder
 from .modules.spatial_feature_modulation import SpatialFeatureModulation
 from .modules.spade import SPADE
 from .modules.illuminant_descriptor import IlluminantDescriptor
-from .stage1_v5 import compute_ccr
+from .ccr_utils import compute_ccr
 
 
 class IntrinsicDecompositionV10(nn.Module):

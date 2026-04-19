@@ -51,19 +51,19 @@ class PerceptualLoss(nn.Module):
         Returns:
             Perceptual loss (scalar)
         """
-        # Normalize
-        pred = self.normalize(pred)
-        target = self.normalize(target)
+        # Normalize once; then propagate feature tensors through VGG blocks.
+        pred_feat = self.normalize(pred)
+        target_feat = self.normalize(target)
 
         loss = 0.0
 
         # Extract features from each block
         for block in self.blocks:
-            pred = block(pred)
-            target = block(target)
+            pred_feat = block(pred_feat)
+            target_feat = block(target_feat)
 
-            # L2 loss on features
-            loss += nn.functional.mse_loss(pred, target)
+            # L1 is more robust than MSE for OOD feature activations in albedo space.
+            loss += nn.functional.l1_loss(pred_feat, target_feat)
 
         return loss
 

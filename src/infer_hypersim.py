@@ -30,15 +30,7 @@ if str(SRC_DIR) not in sys.path:
 
 from data.hypersim_dataset import HypersimDataset, _compute_tonemap_scale, _load_hdf5, _tonemap_linear
 from models import (
-    IntrinsicDecompositionV1,
-    IntrinsicDecompositionV2,
-    IntrinsicDecompositionV2_5,
-    IntrinsicDecompositionV3,
-    IntrinsicDecompositionV4,
-    IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
-    IntrinsicDecompositionV7,
-    IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
 )
@@ -116,7 +108,7 @@ def _resolve_device(device_arg, cuda_index):
 
 
 def _build_stage1_model(model_cfg):
-    version = float(model_cfg.get("version", 1))
+    version = float(model_cfg.get("version", 10))
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -127,15 +119,7 @@ def _build_stage1_model(model_cfg):
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
     model_map = {
-        1: IntrinsicDecompositionV1,
-        2: IntrinsicDecompositionV2,
-        2.5: IntrinsicDecompositionV2_5,
-        3: IntrinsicDecompositionV3,
-        4: IntrinsicDecompositionV4,
-        5: IntrinsicDecompositionV5,
         6: IntrinsicDecompositionV6,
-        7: IntrinsicDecompositionV7,
-        8: IntrinsicDecompositionV8,
         9: IntrinsicDecompositionV9,
         10: IntrinsicDecompositionV10,
     }
@@ -289,25 +273,36 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     c = scale_match(albedo_raw, predictions["a_d"].detach(), valid_mask)
 
     A_star = c * albedo_raw
-    S_star_fallback = rgb / (A_star + eps)
-    S_star = S_star_fallback
+    A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+    # Dec-A/Dec-B targets always come from colorful shading S_c = I / A*
+    S_c_star = rgb / (A_star + eps)
+    S_c_star = torch.nan_to_num(S_c_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+    # Dec-D target can route to diffuse illumination GT when available.
+    S_d_star = S_c_star
     if illum_raw is not None and m_diffuse is not None:
         route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
         illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-        S_star = route * illum + (1.0 - route) * S_star_fallback
+        S_d_star = route * illum + (1.0 - route) * S_c_star
 
-    S_g_star = 0.2126 * S_star[:, 0:1] + 0.7152 * S_star[:, 1:2] + 0.0722 * S_star[:, 2:3]
+    S_g_star = 0.2126 * S_c_star[:, 0:1] + 0.7152 * S_c_star[:, 1:2] + 0.0722 * S_c_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
+    D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
-    C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
-    C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
+    C_RG = S_c_star[:, 0:1] / (S_c_star[:, 1:2] + eps)
+    C_BG = S_c_star[:, 2:3] / (S_c_star[:, 1:2] + eps)
     xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+    xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+
+    pi_star = 1.0 / (S_d_star + 1.0)
+    pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
     return {
         "D_g_star": D_g_star,
         "xi_star": xi_star,
         "A_d_star": A_star,
-        "pi_star": 1.0 / (S_star + 1.0),
+        "pi_star": pi_star,
     }
 
 
@@ -441,13 +436,16 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
 
 
 
-def _tonemap_vis(x):
-    if x.ndim == 4:
-        x = x[0]
-    if x.shape[0] == 1:
-        x = x.repeat(3, 1, 1)
-    scale = torch.quantile(torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1), 0.99).clamp_min(1e-6)
-    return torch.clamp(x / scale, 0.0, 1.0)
+def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
+    if img.ndim == 4:
+        img = img[0]
+    if img.shape[0] == 1:
+        img = img.repeat(3, 1, 1)
+    img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    if scale is None:
+        scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+    scale = torch.as_tensor(scale, device=img.device, dtype=img.dtype).clamp_min(eps)
+    return torch.clamp(img / scale, 0.0, 1.0)
 
 
 def _save_visual_strip(rgb, preds, gts, out_png):
@@ -455,41 +453,76 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     from PIL import Image, ImageDraw, ImageFont
 
     def gamma_correct(x):
-        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3)
+        return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3.0)
 
-    # 1. Albedo via Gamma Correction
-    a_d_pred_vis = gamma_correct(preds["a_d"])
-    a_d_gt_vis = gamma_correct(gts["A_d_star"])
+    # 1. Albedo via gamma correction (same as inference script)
+    a_d_pred_vis = gamma_correct(preds['a_d'])
+    a_d_gt_vis = gamma_correct(gts['A_d_star'])
 
-    # 2. Shading via Inverse Domain Tonemapping (1 - D)
-    s_d_pred_vis = 1.0 - preds["pi"]
-    s_d_gt_vis = 1.0 - gts["pi_star"]
+    # 2. Linear shading components
+    s_g_pred_linear = 1.0 / (preds['d_g'] + 1e-6) - 1.0
+    s_g_gt_linear = 1.0 / (gts['D_g_star'] + 1e-6) - 1.0
+    s_d_pred_linear = 1.0 / (preds['pi'] + 1e-6) - 1.0
+    s_d_gt_linear = 1.0 / (gts['pi_star'] + 1e-6) - 1.0
 
-    # Reconstruction tile for row 2: (a_d_pred x s_d_pred)
-    s_d_pred_linear = 1.0 / (preds["pi"] + 1e-6) - 1.0
-    recon_diffuse = preds["a_d"] * s_d_pred_linear
-
-    s_d_gt_linear = 1.0 / (gts["pi_star"] + 1e-6) - 1.0
-    recon_diffuse_gt = gts["A_d_star"] * s_d_gt_linear
-
-    # 4. Derived Albedos for row 3 (I / S_* pred)
-    a_d_derived_vis = gamma_correct(_tonemap_vis(rgb / (s_d_pred_linear + 1e-6)))
-    blank_tile = torch.ones_like(a_d_derived_vis)
-
-    titled_tiles = [
-        ("Tonemapped RGB", _tonemap_vis(rgb)),
-        ("Diffuse Recon GT", _tonemap_vis(recon_diffuse_gt)),
-        ("Albedo GT", a_d_gt_vis),
-        ("Diffuse Shading GT", s_d_gt_vis),
-        ("", blank_tile),
-        ("", blank_tile),
+    # 3. Colorful shading GT/pred via inverse-domain route
+    c_rg_gt = (1.0 - gts['xi_star'][:, 0:1]) / (gts['xi_star'][:, 0:1] + 1e-6)
+    c_bg_gt = (1.0 - gts['xi_star'][:, 1:2]) / (gts['xi_star'][:, 1:2] + 1e-6)
+    
+    # Proper RGB recovery from grayscale (luminance) and chroma ratios
+    denom_gt = (0.2126 * c_rg_gt + 0.7152 + 0.0722 * c_bg_gt).clamp(1e-6)
+    s_green_gt = s_g_gt_linear / denom_gt
+    s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
+    
+    if 's_c' in preds:
+        s_c_pred_linear = preds['s_c']
+    elif 'xi' in preds:
+        c_rg_pred = (1.0 - preds['xi'][:, 0:1]) / (preds['xi'][:, 0:1] + 1e-6)
+        c_bg_pred = (1.0 - preds['xi'][:, 1:2]) / (preds['xi'][:, 1:2] + 1e-6)
+        denom_pred = (0.2126 * c_rg_pred + 0.7152 + 0.0722 * c_bg_pred).clamp(1e-6)
+        s_green_pred = s_g_pred_linear / denom_pred
+        s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
+    else:
+        s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
         
-        ("Diffuse Recon Pred", _tonemap_vis(recon_diffuse)),
-        ("Albedo Pred", a_d_pred_vis),
-        ("Diffuse Shading Pred", s_d_pred_vis),
-        ("Derived A_d = I/S_d", a_d_derived_vis),
-        ("", blank_tile),
-        ("", blank_tile),
+    s_g_pred_vis = _vis_tonemap(s_g_pred_linear)
+    s_g_gt_vis = _vis_tonemap(s_g_gt_linear)
+    s_d_pred_vis = _vis_tonemap(s_d_pred_linear)
+    s_d_gt_vis = _vis_tonemap(s_d_gt_linear)
+    s_c_pred_vis = _vis_tonemap(s_c_pred_linear)
+    s_c_gt_vis = _vis_tonemap(s_c_gt_linear)
+
+    # Diffuse reconstruction tiles for GT and prediction rows.
+    recon_diffuse = preds['a_d'] * s_d_pred_linear
+    recon_diffuse_gt = gts['A_d_star'] * s_d_gt_linear
+
+    # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
+    a_g_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_g_pred_linear + 1e-6), scale=None))
+    a_c_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_c_pred_linear + 1e-6), scale=None))
+    a_d_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_d_pred_linear + 1e-6), scale=None))
+    blank_tile = torch.ones_like(a_g_derived_vis)
+
+    sample_tiles = [
+        ('Tonemapped RGB', _vis_tonemap(rgb, scale=1.0)),
+        ('Gray Shading GT', s_g_gt_vis),
+        ('Colorful Shading GT', s_c_gt_vis),
+        ('Diffuse Shading GT', s_d_gt_vis),
+        ('Albedo GT', a_d_gt_vis),
+        ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None)),
+
+        ('', blank_tile),
+        ('Gray Shading Pred', s_g_pred_vis),
+        ('Colorful Shading Pred', s_c_pred_vis),
+        ('Diffuse Shading Pred', s_d_pred_vis),
+        ('Albedo Pred', a_d_pred_vis),
+        ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None)),
+
+        ('', blank_tile),
+        ('Derived A_g = I/S_g', a_g_derived_vis),
+        ('Derived A_c = I/S_c', a_c_derived_vis),
+        ('Derived A_d = I/S_d', a_d_derived_vis),
+        ('', blank_tile),
+        ('', blank_tile),
     ]
 
     tiles = []
@@ -499,7 +532,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         font = ImageFont.truetype("DejaVuSans.ttf", 60)
     except OSError:
         font = ImageFont.load_default()
-    for title, tile in titled_tiles:
+    for title, tile in sample_tiles:
         tile = tile if tile.ndim == 3 else tile[0]
         c, h, w = tile.shape
         if c == 1:

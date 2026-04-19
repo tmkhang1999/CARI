@@ -35,7 +35,10 @@ def visualize_predictions(rgb, predictions, save_path=None):
         c_bg = (1.0 - xi[:, 1:2]) / (xi[:, 1:2] + eps)
         c_pred = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
         s_g_linear = 1.0 / (predictions['d_g'] + 1e-6) - 1.0
-        s_c_pred = s_g_linear * c_pred
+        
+        denom = (0.2126 * c_rg + 0.7152 + 0.0722 * c_bg).clamp(1e-6)
+        s_green_linear = s_g_linear / denom
+        s_c_pred = s_green_linear * c_pred
 
     for i in range(batch_size):
         # Apply gamma for visualization

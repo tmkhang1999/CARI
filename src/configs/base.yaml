@@ -13,10 +13,9 @@ train:
   log_interval: 50
   val_interval_iters: 2000
   checkpoint_interval_iters: 5000
-  val_example_images: 2  # ignored if val_example_indices is set
+  val_example_images: 3  # ignored if val_example_indices is set
   val_example_indices: [120, 200, 250]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
-  max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
-  fast_val_metrics: false # false=exact skimage SSIM, true=faster proxy SSIM
+  max_val_batches: 10   # null=full val set, set small int (e.g. 10) for faster inline validation
   compute_val_losses: true # true=compute full criterion losses in val; false=metrics-only faster validation
   input_size: 384
 
@@ -47,16 +46,16 @@ data:
   datasets: ['hypersim', 'midintrinsic']
   hypersim_root: '../datasets/hypersim'
   interiornet_root: '../datasets/interiornet'
-  midintrinsic_root: '../datasets/MIDIntrinsics'
+  midintrinsic_root: '../datasets/MID'
 
   # Data pipeline controls
   # cache_max_items / mid_cache_max_items:
   #   Bounded per-worker decode cache (LRU). 0 disables caching.
   #   Cache only stores decoded arrays; dataloader indices are never replayed.
   cache_max_items: 256
-  mid_cache_max_items: 256
-  val_cache_max_items: 256      # validation: use same as training for better cache hit rate
-  val_num_workers: 6            # validation: increased from 2 to reduce data loading bottleneck
+  mid_cache_max_items: 128
+  val_cache_max_items: 128      # validation: use same as training for better cache hit rate
+  val_num_workers: 4            # validation: increased from 2 to reduce data loading bottleneck
   crop_mode_train: 'random'   # random|center|hybrid
   crop_mode_val: 'center'     # random|center
 

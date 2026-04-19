@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 import yaml
 import numpy as np
-from torch.utils.data import Subset
+from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from skimage.metrics import structural_similarity as ssim
@@ -29,15 +29,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from models import (
-    IntrinsicDecompositionV1,
-    IntrinsicDecompositionV2,
-    IntrinsicDecompositionV2_5,
-    IntrinsicDecompositionV3,
-    IntrinsicDecompositionV4,
-    IntrinsicDecompositionV5,
     IntrinsicDecompositionV6,
-    IntrinsicDecompositionV7,
-    IntrinsicDecompositionV8,
     IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
 )
@@ -81,7 +73,7 @@ TB_TAGS = {
 }
 
 
-def _log_ordered_scalars(writer, values, global_step):
+def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
         'loss_total',
@@ -102,7 +94,10 @@ def _log_ordered_scalars(writer, values, global_step):
         val = values[key]
         if isinstance(val, torch.Tensor):
             val = val.item()
-        writer.add_scalar(TB_TAGS[key], float(val), global_step)
+        tag = TB_TAGS[key]
+        if tag_prefix:
+            tag = f"{tag_prefix}/{tag}"
+        writer.add_scalar(tag, float(val), global_step)
 
 
 def scale_match(A_raw, A_pred, valid):
@@ -138,33 +133,34 @@ def compute_targets(predictions, batch):
         xi_star = xi_raw.to(device)
         pi_star = torch.ones_like(rgb) # Decoder D is mostly skipped for MIDIntrinsic
     else:
-        # Fallback shading for legacy hypersim that doesn't have precomputed targets
-        S_star_fallback = rgb / (A_star + eps)
+        # Colorful shading (S_c) is directly derived from RGB and Albedo: I / A*
+        S_c_star = rgb / (A_star + eps)
+        S_c_star = torch.nan_to_num(S_c_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+        # Grayscale and chroma targets depend on colorful shading (contains speculars & gloss)
+        S_g_star = (
+            0.2126 * S_c_star[:, 0:1]
+            + 0.7152 * S_c_star[:, 1:2]
+            + 0.0722 * S_c_star[:, 2:3]
+        )
+        D_g_star = 1.0 / (S_g_star + 1.0)
         
-        S_star = S_star_fallback
+        C_RG = S_c_star[:, 0:1] / (S_c_star[:, 1:2] + eps)
+        C_BG = S_c_star[:, 2:3] / (S_c_star[:, 1:2] + eps)
+        xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+        xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+
+        # Diffuse shading target (pi_star) routes from direct illumination GT if available
+        S_d_star = S_c_star
         illum_raw = batch.get('illum_raw', None)
         m_diffuse = batch.get('M_diffuse', None)
         
         if illum_raw is not None and m_diffuse is not None:
             route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
             illum = torch.nan_to_num(illum_raw.to(device), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-            S_star = route * illum + (1.0 - route) * S_star_fallback
+            S_d_star = route * illum + (1.0 - route) * S_c_star
             
-        S_star = torch.nan_to_num(S_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-
-        S_g_star = (
-            0.2126 * S_star[:, 0:1]
-            + 0.7152 * S_star[:, 1:2]
-            + 0.0722 * S_star[:, 2:3]
-        )
-        D_g_star = 1.0 / (S_g_star + 1.0)
-        
-        C_RG = S_star[:, 0:1] / (S_star[:, 1:2] + eps)
-        C_BG = S_star[:, 2:3] / (S_star[:, 1:2] + eps)
-        xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
-        xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-
-        pi_star = 1.0 / (S_star + 1.0)
+        pi_star = 1.0 / (S_d_star + 1.0)
         pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
         D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
         
@@ -173,6 +169,7 @@ def compute_targets(predictions, batch):
         'xi_star': xi_star,
         'A_d_star': A_star,
         'pi_star': pi_star,
+        'valid_mask': valid_mask,
     }
 
 
@@ -435,11 +432,48 @@ def _ssim_from_dssim(criterion, pred, target):
     return 1.0 - 2.0 * dssim
 
 
-def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
-    """SSIM for unbounded shading with mean + 2*std robust scale from GT.
+def _pytorch_ssim_skimage_approx(pred, target, data_range=1.0, win_size=7):
+    # Ensure batched format
+    if pred.ndim == 3:
+        pred = pred.unsqueeze(0)
+        target = target.unsqueeze(0)
+        
+    B, C, H, W = pred.shape
+    if H < win_size or W < win_size or C == 0:
+        return 0.0
+        
+    pad = win_size // 2
+    p_pad = F.pad(pred, (pad, pad, pad, pad), mode='reflect')
+    t_pad = F.pad(target, (pad, pad, pad, pad), mode='reflect')
     
-    Uses GPU-resident computation to avoid CPU transfers.
-    """
+    weight = torch.ones(C, 1, win_size, win_size, device=pred.device, dtype=pred.dtype) / (win_size ** 2)
+    
+    mu_x = F.conv2d(p_pad, weight, groups=C)
+    mu_y = F.conv2d(t_pad, weight, groups=C)
+    
+    mu_x_sq = mu_x.pow(2)
+    mu_y_sq = mu_y.pow(2)
+    mu_xy = mu_x * mu_y
+    
+    sigma_x_sq = F.conv2d(p_pad * p_pad, weight, groups=C) - mu_x_sq
+    sigma_y_sq = F.conv2d(t_pad * t_pad, weight, groups=C) - mu_y_sq
+    sigma_xy = F.conv2d(p_pad * t_pad, weight, groups=C) - mu_xy
+    
+    # Unbiased variance correction for skimage
+    n = win_size ** 2
+    sigma_x_sq = sigma_x_sq * n / (n - 1)
+    sigma_y_sq = sigma_y_sq * n / (n - 1)
+    sigma_xy = sigma_xy * n / (n - 1)
+    
+    C1 = (0.01 * data_range) ** 2
+    C2 = (0.03 * data_range) ** 2
+    
+    ssim_map = ((2 * mu_xy + C1) * (2 * sigma_xy + C2)) / ((mu_x_sq + mu_y_sq + C1) * (sigma_x_sq + sigma_y_sq + C2))
+    
+    return ssim_map.mean().item()
+
+def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
+    """SSIM for unbounded shading with mean + 2*std robust scale from GT."""
     # Handle batch dim
     if pred.ndim == 4:
         pred = pred[0]
@@ -466,49 +500,12 @@ def _compute_shading_ssim(pred, target, valid_mask, eps=1e-6, shading_cap=None):
     pred_n = pred_n * mask_f
     tgt_n = tgt_n * mask_f
 
-    # Try GPU-resident patch similarity (10× faster than CPU SSIM)
-    if pred_n.ndim == 3:
-        C, H, W = pred_n.shape
-        if H >= 5 and W >= 5 and C > 0:
-            try:
-                unfold = torch.nn.Unfold(kernel_size=5, stride=5)
-                p_n_batch = pred_n.unsqueeze(0)  # (1, C, H, W)
-                t_n_batch = tgt_n.unsqueeze(0)   # (1, C, H, W)
-                m_batch = mask_f.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-                
-                p_p = unfold(p_n_batch)   # (1, C*25, L)
-                t_p = unfold(t_n_batch)   # (1, C*25, L)
-                m_p = unfold(m_batch)     # (1, 1*25, L)
-                
-                p_norm = (p_p ** 2).sum(dim=1, keepdim=True).sqrt()
-                t_norm = (t_p ** 2).sum(dim=1, keepdim=True).sqrt()
-                
-                sim = (p_p * t_p).sum(dim=1) / (p_norm.squeeze(1) * t_norm.squeeze(1) + 1e-7)
-                sim = (sim + 1.0) / 2.0
-                
-                m_valid = (m_p.sum(dim=1) > 1.0).float()
-                if m_valid.sum() > 0:
-                    return float((sim * m_valid).sum() / (m_valid.sum() + 1e-7))
-            except Exception:
-                pass  # fallback to CPU
-
-    # CPU fallback
-    pred_np = pred_n.detach().cpu().numpy()
-    tgt_np = tgt_n.detach().cpu().numpy()
-
-    if pred_np.ndim == 3:
-        vals = []
-        for c in range(pred_np.shape[0]):
-            vals.append(ssim(tgt_np[c], pred_np[c], data_range=1.0))
-        return float(np.mean(vals))
-    return float(ssim(tgt_np, pred_np, data_range=1.0))
+    # Use GPU-resident skimage approx
+    return _pytorch_ssim_skimage_approx(pred_n, tgt_n, data_range=1.0)
 
 
-def _compute_ssim_bounded(pred, target, valid_mask, fast_mode=False):
+def _compute_ssim_bounded(pred, target, valid_mask):
     """SSIM for bounded outputs (e.g., albedo).
-
-    fast_mode=False keeps exact skimage SSIM for metric fidelity.
-    fast_mode=True uses a patch cosine proxy for faster validation.
     """
     pred_n = torch.clamp(pred, 0.0, 1.0)
     tgt_n = torch.clamp(target, 0.0, 1.0)
@@ -516,60 +513,51 @@ def _compute_ssim_bounded(pred, target, valid_mask, fast_mode=False):
     mask_f = valid_mask.float().expand_as(tgt_n)
     pred_n = pred_n * mask_f
     tgt_n = tgt_n * mask_f
-
-    # Optional fast path (metric proxy, not exact SSIM)
-    if fast_mode and pred_n.ndim == 4:
-        B, C, H, W = pred_n.shape
-        if H >= 5 and W >= 5:
-            try:
-                unfold = torch.nn.Unfold(kernel_size=5, stride=5)
-                p_p = unfold(pred_n)   # (B, C*25, L)
-                t_p = unfold(tgt_n)    # (B, C*25, L)
-                m_p = unfold(mask_f)   # (B, 1*25, L)
-                
-                p_norm = (p_p ** 2).sum(dim=1, keepdim=True).sqrt()  # (B, 1, L)
-                t_norm = (t_p ** 2).sum(dim=1, keepdim=True).sqrt()  # (B, 1, L)
-                
-                # Cosine similarity per patch
-                sim = (p_p * t_p).sum(dim=1) / (p_norm.squeeze(1) * t_norm.squeeze(1) + 1e-7)
-                sim = (sim + 1.0) / 2.0  # map [-1,1] to [0,1]
-                
-                # Average over valid patches
-                m_valid = (m_p.sum(dim=1) > 1.0).float()  # (B, L)
-                if m_valid.sum() > 0:
-                    score = (sim * m_valid).sum() / (m_valid.sum() + 1e-7)
-                    return float(score)
-            except Exception:
-                pass  # fallback to exact method
     
-    # CPU fallback for small images or errors
-    pred_np = pred_n.squeeze().detach().cpu().numpy()
-    tgt_np = tgt_n.squeeze().detach().cpu().numpy()
-
-    if pred_np.ndim == 3:
-        vals = []
-        for c in range(pred_np.shape[0]):
-            vals.append(ssim(tgt_np[c], pred_np[c], data_range=1.0))
-        return float(np.mean(vals))
-    return float(ssim(tgt_np, pred_np, data_range=1.0))
+    # Use GPU-resident skimage approx
+    return _pytorch_ssim_skimage_approx(pred_n, tgt_n, data_range=1.0)
 
 
-def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
+def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None, valid_mask=None):
     """Inference-style tonemap to [0,1] per sample with NaN/Inf guards.
     Use scale=1.0 for already-tonemapped RGB inputs; keep scale=None for
-    diagnostic tensors (reconstruction/derived albedo) that need auto exposure."""
+    diagnostic tensors (reconstruction/derived albedo) that need auto exposure.
+    If valid_mask is provided, computes tonemap scale only over valid pixels."""
     if img.ndim == 4:
         img = img[0]
+    if valid_mask is not None and valid_mask.ndim == 4:
+        valid_mask = valid_mask[0]
+        
     if img.shape[0] == 1:
         img = img.repeat(3, 1, 1)
+        
     img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    
     if scale is None:
-        scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+        if valid_mask is not None and valid_mask.any():
+            pixels = img[:, valid_mask.squeeze(0).bool()].reshape(-1)
+            if pixels.numel() > 10:
+                scale = torch.quantile(pixels, percentile / 100.0)
+            else:
+                scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+        else:
+            scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+            
     scale = torch.as_tensor(scale, device=img.device, dtype=img.dtype).clamp_min(eps)
     return torch.clamp(img / scale, 0.0, 1.0)
 
 
-def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=2, full_rgb_list=None, sample_index=None):
+def _log_val_examples(
+    writer,
+    global_step,
+    rgb,
+    predictions,
+    targets,
+    max_items=2,
+    full_rgb_list=None,
+    sample_index=None,
+    example_root='06_Examples',
+):
     """Log qualitative validation examples in the exact requested tile order.
     
     Args:
@@ -613,30 +601,30 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
 
     layout_names = [
         'Tonemapped RGB',
-        'Diffuse Recon GT',
         'Gray Shading GT',
         'Colorful Shading GT',
-        'Albedo GT',
         'Diffuse Shading GT',
+        'Albedo GT',
+        'Diffuse Recon GT',
         '',
-        'Diffuse Recon Pred',
         'Gray Shading Pred',
         'Colorful Shading Pred',
-        'Albedo Pred',
         'Diffuse Shading Pred',
-        '',
+        'Albedo Pred',
+        'Diffuse Recon Pred',
         '',
         'Derived A_g = I/S_g',
         'Derived A_c = I/S_c',
-        '',
         'Derived A_d = I/S_d',
+        '',
+        '',
     ]
 
     # Set TensorBoard tag based on sample_index
     if sample_index is not None:
-        example_tag = f'06_Examples/sample_{sample_index}'
+        example_tag = f'{example_root}/sample_{sample_index}'
     else:
-        example_tag = '06_Examples'
+        example_tag = example_root
     
     writer.add_text(
         f'{example_tag}/layout',
@@ -656,65 +644,72 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         a_d_pred_vis = _gamma_correct(predictions['a_d'][i:i+1])
         a_d_gt_vis = _gamma_correct(targets['A_d_star'][i:i+1])
 
-        # 2. Shading via inverse-domain visualization (1 - D)
-        s_g_pred_vis = 1.0 - predictions['d_g'][i:i+1]
-        s_g_gt_vis = 1.0 - targets['D_g_star'][i:i+1]
-        s_d_pred_vis = 1.0 - predictions['pi'][i:i+1]
-        s_d_gt_vis = 1.0 - targets['pi_star'][i:i+1]
+        # 2. Linear shading components
+        s_g_pred_linear = 1.0 / (predictions['d_g'][i:i+1] + 1e-6) - 1.0
+        s_g_gt_linear = 1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0
+        s_d_pred_linear = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
+        s_d_gt_linear = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
 
         # 3. Colorful shading GT/pred via inverse-domain route
-        s_g_gt_linear = 1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0
-        c_rg_gt = 1.0 / (targets['xi_star'][i:i+1, 0:1] + 1e-6) - 1.0
-        c_bg_gt = 1.0 / (targets['xi_star'][i:i+1, 1:2] + 1e-6) - 1.0
-        s_c_gt_linear = torch.cat([c_rg_gt * s_g_gt_linear, s_g_gt_linear, c_bg_gt * s_g_gt_linear], dim=1)
-        s_c_gt_vis = 1.0 - (1.0 / (s_c_gt_linear + 1.0))
+        c_rg_gt = (1.0 - targets['xi_star'][i:i+1, 0:1]) / (targets['xi_star'][i:i+1, 0:1] + 1e-6)
+        c_bg_gt = (1.0 - targets['xi_star'][i:i+1, 1:2]) / (targets['xi_star'][i:i+1, 1:2] + 1e-6)
         
-        s_g_pred_linear = 1.0 / (predictions['d_g'][i:i+1] + 1e-6) - 1.0
+        # Proper RGB recovery from grayscale (luminance) and chroma ratios
+        denom_gt = (0.2126 * c_rg_gt + 0.7152 + 0.0722 * c_bg_gt).clamp(1e-6)
+        s_green_gt = s_g_gt_linear / denom_gt
+        s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
+        
         if 's_c' in predictions:
             s_c_pred_linear = predictions['s_c'][i:i+1]
         elif 'xi' in predictions:
-            c_rg_pred = 1.0 / (predictions['xi'][i:i+1, 0:1] + 1e-6) - 1.0
-            c_bg_pred = 1.0 / (predictions['xi'][i:i+1, 1:2] + 1e-6) - 1.0
-            s_c_pred_linear = torch.cat([c_rg_pred * s_g_pred_linear, s_g_pred_linear, c_bg_pred * s_g_pred_linear], dim=1)
+            c_rg_pred = (1.0 - predictions['xi'][i:i+1, 0:1]) / (predictions['xi'][i:i+1, 0:1] + 1e-6)
+            c_bg_pred = (1.0 - predictions['xi'][i:i+1, 1:2]) / (predictions['xi'][i:i+1, 1:2] + 1e-6)
+            denom_pred = (0.2126 * c_rg_pred + 0.7152 + 0.0722 * c_bg_pred).clamp(1e-6)
+            s_green_pred = s_g_pred_linear / denom_pred
+            s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
         else:
             s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
             
-        s_c_pred_vis = 1.0 - (1.0 / (s_c_pred_linear + 1.0))
+        v_mask = targets['valid_mask'][i:i+1]
+        
+        s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=v_mask)
+        s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=v_mask)
+        s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=v_mask)
+        s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=v_mask)
+        s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=v_mask)
+        s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=v_mask)
 
         # Diffuse reconstruction tiles for GT and prediction rows.
-        s_d_pred_linear = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
         recon_diffuse = predictions['a_d'][i:i+1] * s_d_pred_linear
-
-        s_d_gt_linear = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
         recon_diffuse_gt = targets['A_d_star'][i:i+1] * s_d_gt_linear
 
         # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
-        a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6), scale=None))
-        a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6), scale=None))
-        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6), scale=None))
+        a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
+        a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
+        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
         blank_tile = torch.ones_like(a_g_derived_vis)
 
         sample_tiles = [
             ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1], scale=1.0)),
-            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None)),
             ('Gray Shading GT', s_g_gt_vis),
             ('Colorful Shading GT', s_c_gt_vis),
-            ('Albedo GT', a_d_gt_vis),
             ('Diffuse Shading GT', s_d_gt_vis),
+            ('Albedo GT', a_d_gt_vis),
+            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None, valid_mask=v_mask)),
 
             ('', blank_tile),
-            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None)),
             ('Gray Shading Pred', s_g_pred_vis),
             ('Colorful Shading Pred', s_c_pred_vis),
-            ('Albedo Pred', a_d_pred_vis),
             ('Diffuse Shading Pred', s_d_pred_vis),
+            ('Albedo Pred', a_d_pred_vis),
+            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None, valid_mask=v_mask)),
 
-            ('', blank_tile),
             ('', blank_tile),
             ('Derived A_g = I/S_g', a_g_derived_vis),
             ('Derived A_c = I/S_c', a_c_derived_vis),
-            ('', blank_tile),
             ('Derived A_d = I/S_d', a_d_derived_vis),
+            ('', blank_tile),
+            ('', blank_tile),
         ]
 
         final_target_hw = None
@@ -815,8 +810,10 @@ def validate(
     val_example_images=2,
     val_example_indices=None,
     max_val_batches=None,
-    fast_val_metrics=False,
     compute_val_losses=True,
+    dataset_name='hypersim',
+    tb_prefix='10_Val',
+    example_root='06_Examples',
 ):
     """
     Validation for ablation comparison on fixed Hypersim val split.
@@ -828,8 +825,6 @@ def validate(
         max_val_batches: int or None. If set, scalar losses/metrics are computed on first N
                 batches for speed. When val_example_indices is provided, extra batches
                 may still be scanned to collect requested visualization samples.
-        fast_val_metrics: bool. If True, uses proxy SSIM metric for speed.
-                  If False (default), uses exact skimage SSIM.
         compute_val_losses: bool. If False, skip criterion loss computation in validation
                     and log only metrics for faster val runs.
     """
@@ -936,6 +931,7 @@ def validate(
                     targets,
                     max_items=val_example_images,
                     full_rgb_list=None,
+                    example_root=f'{example_root}/{dataset_name}',
                 )
 
             # When max_val_batches is set and we are scanning extra batches only to satisfy
@@ -978,7 +974,7 @@ def validate(
                     d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 ).item()
                 total_metric['s_g_ssim'] += _compute_ssim_bounded(
-                    d_g_pred[i:i+1], d_g_star[i:i+1], vm, fast_mode=fast_val_metrics
+                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
                 )
 
                 # Dec B metric on xi.
@@ -998,7 +994,7 @@ def validate(
                     predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
                 ).item()
                 total_metric['a_d_ssim'] += _compute_ssim_bounded(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm, fast_mode=fast_val_metrics
+                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
                 )
 
                 # Dec D metrics on inverse diffuse shading pi (count only when diffuse GT is available)
@@ -1010,7 +1006,7 @@ def validate(
                         pi_pred[i:i+1], pi_star[i:i+1], vm
                     )
                     s_d_ssim = torch.as_tensor(_compute_ssim_bounded(
-                        pi_pred[i:i+1], pi_star[i:i+1], vm, fast_mode=fast_val_metrics
+                        pi_pred[i:i+1], pi_star[i:i+1], vm
                     ), device=rgb.device)
 
                     # Guard against NaN/Inf so TensorBoard tags are always emitted.
@@ -1047,6 +1043,7 @@ def validate(
                 max_items=1,
                 full_rgb_list=None,
                 sample_index=global_idx,
+                example_root=f'{example_root}/{dataset_name}',
             )
 
     # Losses are averaged over batches because criterion returns batch-level scalars.
@@ -1067,7 +1064,12 @@ def validate(
     if compute_val_losses:
         val_out.update(total_loss)
     val_out.update(total_metric)
-    _log_ordered_scalars(writer, val_out, global_step)
+    tag_prefix = f'{tb_prefix}/{dataset_name}'
+    _log_ordered_scalars(writer, val_out, global_step, tag_prefix=tag_prefix)
+    writer.add_scalar(f'{tag_prefix}/00_Meta/n_samples', float(n_samples), global_step)
+    writer.add_scalar(f'{tag_prefix}/00_Meta/n_s_d_samples', float(n_s_d_samples), global_step)
+    if compute_val_losses:
+        writer.add_scalar(f'{tag_prefix}/00_Meta/n_batches', float(processed_batches), global_step)
 
 
     # Return combined dict for terminal reporting.
@@ -1075,6 +1077,9 @@ def validate(
     if compute_val_losses:
         out.update(total_loss)
     out.update(total_metric)
+    out['__n_samples'] = float(n_samples)
+    out['__n_s_d_samples'] = float(n_s_d_samples)
+    out['__n_batches'] = float(processed_batches)
     return out
 
 
@@ -1089,7 +1094,7 @@ def _phase_schedule(train_cfg, global_step):
 
 
 def build_stage1_model(config):
-    version = float(config['model'].get('version', 1))   # float(), not int()
+    version = float(config['model'].get('version', 10))
     model_cfg = {
         'z_channels': config['model'].get('z_channels', 1024),
         'freeze_stages': config['model'].get('freeze_stages', [1, 2]),
@@ -1099,15 +1104,7 @@ def build_stage1_model(config):
         'input_size': int(config['train'].get('input_size', 384)),
     }
     model_map = {
-        1.0: IntrinsicDecompositionV1,
-        2.0: IntrinsicDecompositionV2,
-        2.5: IntrinsicDecompositionV2_5,
-        3.0: IntrinsicDecompositionV3,
-        4.0: IntrinsicDecompositionV4,
-        5.0: IntrinsicDecompositionV5,
         6.0: IntrinsicDecompositionV6,
-        7.0: IntrinsicDecompositionV7,
-        8.0: IntrinsicDecompositionV8,
         9.0: IntrinsicDecompositionV9,
         10.0: IntrinsicDecompositionV10,
     }
@@ -1245,6 +1242,8 @@ def main():
 
     datasets = {'hypersim': train_hypersim}
     train_mid = None
+    mid_total = 0
+    mid_effective = 0
     if 'midintrinsic' in enabled:
         train_mid = MIDIntrinsicDataset(
             root_dir=mid_root,
@@ -1263,20 +1262,32 @@ def main():
         datasets['midintrinsic'] = train_mid
 
     train_num_workers = int(config['train'].get('num_workers', 4))
+    train_prefetch_factor = int(config['train'].get('prefetch_factor', 4))
+    train_num_workers_map = {
+        'hypersim': int(config['data'].get('hypersim_train_num_workers', train_num_workers)),
+        'midintrinsic': int(config['data'].get('midintrinsic_train_num_workers', train_num_workers)),
+    }
+    train_prefetch_factor_map = {
+        'hypersim': int(config['data'].get('hypersim_train_prefetch_factor', train_prefetch_factor)),
+        'midintrinsic': int(config['data'].get('midintrinsic_train_prefetch_factor', train_prefetch_factor)),
+    }
     val_num_workers = max(1, int(config['data'].get('val_num_workers', config['train'].get('val_num_workers', 2))))
     val_cache_max_items = max(0, int(config['data'].get('val_cache_max_items', 64)))
+    val_batch_size = int(config['train']['batch_size'])
 
     mixed_loader = MixedDataloader(
         datasets=datasets,
         weights=config['train'].get('sampling_weights_phase1', {'hypersim': 1.0, 'midintrinsic': 0.0}),
         batch_size=int(config['train']['batch_size']),
-        num_workers=train_num_workers,
+        num_workers=train_num_workers_map,
+        prefetch_factor=train_prefetch_factor_map,
         seed=loader_seed,
     )
 
-    val_loader = get_hypersim_loader(
+    val_loaders = {}
+    val_loaders['hypersim'] = get_hypersim_loader(
         root_dir=hypersim_root,
-        batch_size=int(config['train']['batch_size']),
+        batch_size=val_batch_size,
         split='val',
         num_workers=val_num_workers,
         input_size=int(config['train']['input_size']),
@@ -1290,6 +1301,29 @@ def main():
         max_hdf5_retries=hypersim_max_hdf5_retries,
         skip_corrupt_samples=hypersim_skip_corrupt_samples,
     )
+
+    validate_midintrinsic = bool(config['data'].get('validate_midintrinsic', True))
+    if 'midintrinsic' in enabled and validate_midintrinsic:
+        mid_val_ds = MIDIntrinsicDataset(
+            root_dir=mid_root,
+            split='val',
+            input_size=int(config['train']['input_size']),
+            cache_max_items=int(config['data'].get('mid_val_cache_max_items', val_cache_max_items)),
+            crop_mode_train=crop_mode_train,
+            crop_mode_val=crop_mode_val,
+            geometry_root=config['data'].get('mid_geometry_root', None),
+            require_geometry=bool(config['data'].get('mid_require_geometry', False)),
+        )
+        val_loaders['midintrinsic'] = DataLoader(
+            mid_val_ds,
+            batch_size=val_batch_size,
+            shuffle=False,
+            num_workers=val_num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=(val_num_workers > 0),
+            prefetch_factor=4 if val_num_workers > 0 else None,
+        )
 
     phase1_iters = int(config['train'].get('phase1_iterations', 20000))
     phase2_iters = int(config['train'].get('phase2_iterations', 50000))
@@ -1308,7 +1342,6 @@ def main():
         max_val_batches = int(max_val_batches)
         if max_val_batches <= 0:
             max_val_batches = None
-    fast_val_metrics = bool(config['train'].get('fast_val_metrics', False))
     compute_val_losses = bool(config['train'].get('compute_val_losses', True))
 
     start_step = 0
@@ -1341,16 +1374,20 @@ def main():
     running = {'loss_a': 0.0, 'loss_b': 0.0, 'loss_c': 0.0, 'loss_d': 0.0, 'loss_total': 0.0}
     last_phase = None
 
+    print("Dataset summary:")
+    print(f"  Train samples (hypersim): {hypersim_effective} (base={hypersim_total})")
+    print(f"  Val samples (hypersim): {len(val_loaders['hypersim'].dataset)}")
+
     if train_mid is None:
-        print(
-            f"Train scenes: hypersim={hypersim_effective} "
-            f"(base={hypersim_total}, midintrinsic disabled)"
-        )
+        print("  Train samples (midintrinsic): disabled")
     else:
-        print(
-            f"Train scenes: hypersim={hypersim_effective} (base={hypersim_total}), "
-            f"midintrinsic={mid_effective} (base={mid_total})"
-        )
+        print(f"  Train samples (midintrinsic): {mid_effective} (base={mid_total})")
+
+    if 'midintrinsic' in val_loaders:
+        print(f"  Val samples (midintrinsic): {len(val_loaders['midintrinsic'].dataset)}")
+    else:
+        print("  Val samples (midintrinsic): disabled")
+
     # Explicitly notify dataset-size cap used for this run (0 means full train split).
     if hypersim_train_max_images > 0:
         print(
@@ -1362,7 +1399,6 @@ def main():
             f"Hypersim cap inactive: hypersim_train_max_images=0 "
             f"-> using full train split ({hypersim_effective}/{hypersim_total})"
         )
-    print(f"Val frames (hypersim): {len(val_loader.dataset)}")
 
     train_pbar = tqdm(
         range(start_step, max_iters),
@@ -1443,24 +1479,68 @@ def main():
             save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
             latest_path = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
             save_checkpoint(model, optimizer, avg, config, latest_path, global_step=step)
+            
+            # Keep maximum 2 checkpoints (exclude checkpoint_latest.pth)
+            all_ckpts = [
+                os.path.join(ckpt_dir, f)
+                for f in os.listdir(ckpt_dir)
+                if f.startswith('checkpoint_iter_') and f.endswith('.pth')
+            ]
+            all_ckpts.sort(key=_extract_iter_from_name)
+            while len(all_ckpts) > 2:
+                oldest_ckpt = all_ckpts.pop(0)
+                try:
+                    os.remove(oldest_ckpt)
+                    print(f"Deleted old checkpoint: {oldest_ckpt}")
+                except Exception as e:
+                    print(f"Failed to delete {oldest_ckpt}: {e}")
+
             print(f"[{step+1}] train(avg): " + ", ".join([f"{k}={v:.4f}" for k, v in avg.items()]))
 
         if should_validate:
             torch.cuda.empty_cache()
-            vloss = validate(
-                model,
-                val_loader,
-                criterion,
-                device,
-                step + 1,
-                writer,
-                val_example_images=val_example_images,
-                val_example_indices=val_example_indices,
-                max_val_batches=max_val_batches,
-                fast_val_metrics=fast_val_metrics,
-                compute_val_losses=compute_val_losses,
-            )
-            print(f"[{step+1}] val: " + ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()]))
+            val_reports = {}
+            for ds_name, ds_loader in val_loaders.items():
+                ds_example_indices = val_example_indices
+                if ds_name == 'midintrinsic':
+                    ds_example_indices = config['train'].get('val_example_indices_midintrinsic', [])
+
+                vloss = validate(
+                    model,
+                    ds_loader,
+                    criterion,
+                    device,
+                    step + 1,
+                    writer,
+                    val_example_images=val_example_images,
+                    val_example_indices=ds_example_indices,
+                    max_val_batches=max_val_batches,
+                    compute_val_losses=compute_val_losses,
+                    dataset_name=ds_name,
+                    tb_prefix='10_Val',
+                    example_root='06_Examples',
+                )
+                val_reports[ds_name] = vloss
+                pretty = ", ".join([f"{k}={v:.4f}" for k, v in vloss.items() if not k.startswith('__')])
+                print(f"[{step+1}] val/{ds_name}: {pretty}")
+
+            if len(val_reports) > 1:
+                combined = {}
+                total_weight = sum(max(1.0, rep.get('__n_samples', 0.0)) for rep in val_reports.values())
+                for key in TB_TAGS:
+                    vals = []
+                    for rep in val_reports.values():
+                        if key in rep:
+                            w = max(1.0, rep.get('__n_samples', 0.0))
+                            vals.append((rep[key], w))
+                    if vals:
+                        combined[key] = sum(v * w for v, w in vals) / max(total_weight, 1.0)
+
+                if combined:
+                    _log_ordered_scalars(writer, combined, step + 1, tag_prefix='10_Val/combined')
+                    writer.add_scalar('10_Val/combined/00_Meta/total_n_samples', float(total_weight), step + 1)
+                    pretty_combined = ", ".join([f"{k}={v:.4f}" for k, v in combined.items()])
+                    print(f"[{step+1}] val/combined: {pretty_combined}")
 
     print('Training completed')
     writer.close()
