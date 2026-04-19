@@ -22,8 +22,8 @@ train:
   grad_clip_max_norm: 1.0
   use_cosine_lr: false
   lr_eta_min: 1.0e-7
-  log_interval: 10
-  val_interval_iters: 20
+  log_interval: 500
+  val_interval_iters: 1000
   checkpoint_interval_iters: 500
   val_example_images: 3
   val_example_indices: [120, 200, 250]
@@ -50,8 +50,6 @@ data:
   subset_seed: 42
   hypersim_train_max_images: 0
   midintrinsic_train_max_images: 0
-  midintrinsic_train_num_workers: 2
-  hypersim_train_num_workers: 6
 
 loss:
   lambda_branch_a: 1.0

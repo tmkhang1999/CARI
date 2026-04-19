@@ -293,9 +293,17 @@ class MIDIntrinsicDataset(Dataset):
             if seg_np.ndim == 3:
                 seg_np = seg_np[..., 0]
             if seg_np.shape[:2] != albedo.shape[:2]:
-                seg_np = cv2.resize(seg_np, (albedo.shape[1], albedo.shape[0]), interpolation=cv2.INTER_NEAREST)
+                if cv2 is not None:
+                    seg_np = cv2.resize(seg_np, (albedo.shape[1], albedo.shape[0]), interpolation=cv2.INTER_NEAREST)
+                else:
+                    seg_t = torch.from_numpy(seg_np).unsqueeze(0).unsqueeze(0).float()
+                    seg_np = F.interpolate(seg_t, size=(albedo.shape[0], albedo.shape[1]), mode='nearest').squeeze().numpy().astype(np.int32)
             if normals_np.shape[:2] != albedo.shape[:2]:
-                normals_np = cv2.resize(normals_np, (albedo.shape[1], albedo.shape[0]), interpolation=cv2.INTER_LINEAR)
+                if cv2 is not None:
+                    normals_np = cv2.resize(normals_np, (albedo.shape[1], albedo.shape[0]), interpolation=cv2.INTER_LINEAR)
+                else:
+                    norm_t = torch.from_numpy(normals_np).permute(2, 0, 1).unsqueeze(0).float()
+                    normals_np = F.interpolate(norm_t, size=(albedo.shape[0], albedo.shape[1]), mode='bilinear', align_corners=False).squeeze().permute(1, 2, 0).numpy()
             norm_len = np.linalg.norm(normals_np, axis=-1, keepdims=True)
             normals_np = normals_np / np.clip(norm_len, 1e-6, None)
             normals_np = np.clip(normals_np, -1.0, 1.0).astype(np.float32)
@@ -305,14 +313,15 @@ class MIDIntrinsicDataset(Dataset):
             seg_np = np.zeros((albedo.shape[0], albedo.shape[1]), dtype=np.int32)
 
         eps = 1e-6
+        albedo_tm = self._tonemap_linear(albedo)
 
         # Compute geometric grayscale shading from the neutral branch only.
-        s_neutral = rgb_mix_neutral / (albedo + eps)
+        s_neutral = rgb_mix_neutral / (albedo_tm + eps)
         s_g = 0.2126 * s_neutral[..., 0:1] + 0.7152 * s_neutral[..., 1:2] + 0.0722 * s_neutral[..., 2:3]
         d_g_target = 1.0 / (s_g + 1.0)
 
         # Compute chroma target from the color-shifted branch.
-        s_colorful = rgb_mix_shifted / (albedo + eps)
+        s_colorful = rgb_mix_shifted / (albedo_tm + eps)
         # Use Green channel as denominator to match Hypersim & the training pipeline V10
         c_rg = s_colorful[..., 0:1] / (s_colorful[..., 1:2] + eps)
         c_bg = s_colorful[..., 2:3] / (s_colorful[..., 1:2] + eps)
@@ -354,6 +363,9 @@ class MIDIntrinsicDataset(Dataset):
             mode='bilinear',
             align_corners=False,
         ).squeeze(0)
+
+        norm_len = t_img[6:9].norm(dim=0, keepdim=True).clamp_min(1e-6)
+        t_img = torch.cat([t_img[:6], t_img[6:9] / norm_len, t_img[9:]], dim=0)
 
         t_mask = torch.from_numpy(combined[..., 12:13]).permute(2, 0, 1).unsqueeze(0).float()
         t_mask = F.interpolate(

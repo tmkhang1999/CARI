@@ -274,6 +274,11 @@ def evaluate_model(model, dataloader, device, max_batches=0):
                 m_diffuse=m_diffuse,
             )
 
+            if 'd_g_raw' in batch:
+                targets['D_g_star'] = batch['d_g_raw'].to(device)
+            if 'xi_raw' in batch:
+                targets['xi_star'] = batch['xi_raw'].to(device)
+
             # Evaluate shading in inverse space (bounded).
             pi_pred = predictions['pi']
             pi_gt = targets['pi_star']

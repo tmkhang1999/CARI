@@ -665,6 +665,11 @@ def main():
             m_diffuse=batch.get("M_diffuse", None),
         )
 
+        if "d_g_raw" in batch:
+            targets["D_g_star"] = batch["d_g_raw"].to(device)
+        if "xi_raw" in batch:
+            targets["xi_star"] = batch["xi_raw"].to(device)
+
     # Compute metrics in inverse shading space (bounded).
     pi_pred = predictions["pi"]
     pi_gt = targets["pi_star"]
