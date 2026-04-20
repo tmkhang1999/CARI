@@ -43,7 +43,6 @@ class FlexibleLoss(nn.Module):
         self.lambda_semvar = config.get('lambda_semvar', 0.0)
         self.lambda_recon = config.get('lambda_recon', 0.2)
         self.lambda_recon_color = config.get('lambda_recon_color', 1.0)
-        self.lambda_range = config.get('lambda_range', 0.1)
         self.enable_dssim_a_d = config.get('enable_dssim_a_d', True)
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
@@ -89,10 +88,6 @@ class FlexibleLoss(nn.Module):
         """Element-wise MSE masked by valid * routing mask."""
         diff = F.mse_loss(pred, target, reduction='none')
         return (diff * mask).sum() / (mask.sum() + 1e-7)
-
-    def _masked_msg(self, pred, target, mask_ratio):
-        """MSG loss scaled by the fraction of valid samples."""
-        return self.msg_loss(pred, target) * mask_ratio
 
     def _get_dssim_window(self, channels):
         return self.dssim_base_window.expand(channels, 1, -1, -1).contiguous()
@@ -156,35 +151,23 @@ class FlexibleLoss(nn.Module):
         """
         mask = valid_mask.float()
         l1 = self._masked_l1(D_g_pred, D_g_star, mask)
-        msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
         
+        if self.lambda_msg > 0:
+            msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
+        else:
+            msg = D_g_pred.new_tensor(0.0)
 
         # Conditionally restore DSSIM for sharp cast shadows
-        if self.enable_dssim_a_d:
+        if self.enable_dssim_a_d and self.lambda_dssim > 0:
             dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
         else:
             dssim = D_g_pred.new_tensor(0.0)
         
-        # Dynamic Range Supervision (masked std) instead of max-min
-        valid_pixels_pred = D_g_pred[valid_mask.bool()]
-        valid_pixels_star = D_g_star[valid_mask.bool()]
-        
-        if valid_pixels_pred.numel() < 2:
-            pred_std = D_g_pred.new_tensor(0.0)
-            gt_std = D_g_star.new_tensor(0.0)
-        else:
-            pred_std = valid_pixels_pred.std()
-            gt_std = valid_pixels_star.std()
-            
-        import torch.nn.functional as F
-        range_loss = F.mse_loss(pred_std, gt_std.detach())
-        
-        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim + self.lambda_range * range_loss
+        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
         
         details = {
             'loss_a_l1': l1.detach(),
             'loss_a_msg': msg.detach(),
-            'loss_a_range': range_loss.detach(),
         }
         if self.enable_dssim_a_d:
             details['loss_a_dssim'] = dssim.detach()
@@ -200,20 +183,8 @@ class FlexibleLoss(nn.Module):
         mask = valid_mask.float()
 
         mse = self._masked_mse(xi_pred, xi_star, mask)
-        msg = self.msg_loss(xi_pred * mask, xi_star * mask)
-        return mse + self.lambda_msg * msg
+        return mse
 
-    def loss_c(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
-        """Dec C total loss (kept for backward compatibility)."""
-        total, _ = self.loss_c_with_details(
-            a_d_pred,
-            A_d_star,
-            valid_mask,
-            m_albedo,
-            seg_map,
-            normals,
-        )
-        return total
 
     def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
         """Dec C loss with per-term details for logging/debugging."""
@@ -232,9 +203,13 @@ class FlexibleLoss(nn.Module):
         mask = valid_mask.float() * route
 
         l1 = self._masked_l1(a_d_pred, A_d_star, mask)
-        msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
+        
+        if self.lambda_msg > 0:
+            msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
+        else:
+            msg = zero
 
-        if self.tv_type is None:
+        if self.tv_type is None or self.lambda_tv <= 0:
             tv = zero
         elif self.tv_type == 'normals' and normals is not None:
             tv = self.normal_tv_loss(a_d_pred, normals, valid_mask=mask)
@@ -242,12 +217,20 @@ class FlexibleLoss(nn.Module):
             tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
 
         route_idx = (m_albedo > 0.5)
-        if route_idx.any():
+        if route_idx.any() and (self.lambda_perceptual > 0 or self.lambda_dssim > 0):
             route_mask = valid_mask[route_idx].float()
             route_pred = a_d_pred[route_idx] * route_mask
             route_tgt = A_d_star[route_idx] * route_mask
-            perceptual = self.perceptual_loss(route_pred, route_tgt)
-            dssim = self._compute_dssim(route_pred, route_tgt)
+            
+            if self.lambda_perceptual > 0:
+                perceptual = self.perceptual_loss(route_pred, route_tgt)
+            else:
+                perceptual = zero
+                
+            if self.lambda_dssim > 0:
+                dssim = self._compute_dssim(route_pred, route_tgt)
+            else:
+                dssim = zero
         else:
             perceptual = zero
             dssim = zero
@@ -306,30 +289,34 @@ class FlexibleLoss(nn.Module):
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
-        L_D = M_diffuse * ( ||π − π*||₂² + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
+        L_D = M_diffuse * ( ||π − π*||₁ + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
         Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
         with no additional conversion.
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
             zero = (pi_pred * 0.0).sum()
-            return zero, {'loss_d_mse': zero, 'loss_d_msg': zero, 'loss_d_dssim': zero}
+            return zero, {'loss_d_l1': zero, 'loss_d_msg': zero, 'loss_d_dssim': zero}
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
 
-        mse = self._masked_mse(pi_pred, pi_star, mask)
-        msg = self.msg_loss(pi_pred * mask, pi_star * mask)
+        l1 = self._masked_l1(pi_pred, pi_star, mask)
         
-        if self.enable_dssim_a_d:
+        if self.lambda_msg > 0:
+            msg = self.msg_loss(pi_pred * mask, pi_star * mask)
+        else:
+            msg = zero
+        
+        if self.enable_dssim_a_d and self.lambda_dssim > 0:
             dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
         else:
             dssim = pi_pred.new_tensor(0.0)
         
-        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
+        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
         
         details = {
-            'loss_d_mse': mse.detach(),
+            'loss_d_l1': l1.detach(),
             'loss_d_msg': msg.detach(),
         }
         if self.enable_dssim_a_d:
@@ -376,14 +363,20 @@ class FlexibleLoss(nn.Module):
             ld_details = {}
             
         # 3. Diffuse Reconstruction Loss (Anchor using GT product, NOT I)
-        if targets.get('A_d_star') is not None and targets.get('pi_star') is not None:
-            s_d_pred = (1.0 / (predictions['pi'] + 1e-6)) - 1.0
-            s_d_pred = s_d_pred.clamp(0.0, 20.0)
-            s_d_star = (1.0 / (targets['pi_star'] + 1e-6)) - 1.0
-            recon_pred = predictions['a_d'] * s_d_pred
-            # Reconstruct the true latent diffuse RGB rather than forcing inclusion of specular residuals.
-            recon_target = targets['A_d_star'] * s_d_star
-            l_recon = self._masked_l1(recon_pred, recon_target, valid_mask.float())
+        if targets.get('A_d_star') is not None and targets.get('pi_star') is not None and self.lambda_recon > 0.0:
+            if m_diffuse.sum() > 0:
+                s_d_pred = (1.0 / (predictions['pi'] + 1e-6)) - 1.0
+                s_d_pred = s_d_pred.clamp(0.0, 20.0)
+                s_d_star = (1.0 / (targets['pi_star'] + 1e-6)) - 1.0
+                recon_pred = predictions['a_d'] * s_d_pred
+                # Reconstruct the true latent diffuse RGB rather than forcing inclusion of specular residuals.
+                recon_target = targets['A_d_star'] * s_d_star
+                
+                route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
+                mask = valid_mask.float() * route
+                l_recon = self._masked_l1(recon_pred, recon_target, mask)
+            else:
+                l_recon = zero
         else:
             l_recon = zero
 
@@ -400,8 +393,7 @@ class FlexibleLoss(nn.Module):
 
         loss_total = la + lb + lc + ld + (self.lambda_recon * l_recon)
         
-        
-        if 'd_g' in predictions and 'xi' in predictions and rgb is not None:
+        if 'd_g' in predictions and 'xi' in predictions and rgb is not None and self.lambda_recon_color > 0.0:
             la_s, da_s = self.loss_reconstruction_sc(
                 predictions['a_d'],
                 predictions['d_g'],

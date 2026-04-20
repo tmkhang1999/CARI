@@ -15,7 +15,7 @@ train:
   checkpoint_interval_iters: 5000
   val_example_images: 3  # ignored if val_example_indices is set
   val_example_indices: [120, 200, 250]  # e.g., [100, 110, 120] to log specific samples; empty=use val_example_images count
-  max_val_batches: 10   # null=full val set, set small int (e.g. 10) for faster inline validation
+  max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
   compute_val_losses: true # true=compute full criterion losses in val; false=metrics-only faster validation
   input_size: 384
 

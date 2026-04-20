@@ -27,7 +27,7 @@ train:
   checkpoint_interval_iters: 500
   val_example_images: 3
   val_example_indices: [120, 200, 250]
-  val_example_indices_midintrinsic: [0, 15, 29]
+  val_example_indices_midintrinsic: [0, 5, 10]
   compute_val_losses: false
   seed: 42
   deterministic: false
@@ -52,7 +52,7 @@ data:
   midintrinsic_train_max_images: 0
 
 loss:
-  lambda_branch_a: 1.0
+  lambda_branch_a: 2.0
   lambda_branch_b: 1.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
@@ -64,7 +64,6 @@ loss:
 
   lambda_tv: 0.05
   lambda_semvar: 0.5
-  lambda_range: 0.1
 
   lambda_recon: 0        # Diffuse physics target anchor
   lambda_recon_color: 0  # Enabled! Forces Decoders B & C to represent True Input including specularities
