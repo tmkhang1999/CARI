@@ -37,9 +37,9 @@ class ProgressiveDecoder(nn.Module):
         #     nn.Conv2d(64, out_channels, kernel_size=1),
         # ]
         head_layers = [
-            nn.Conv2d(96, 32, kernel_size=3, padding=1),
+            nn.Conv2d(96, 64, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, out_channels, kernel_size=1),
+            nn.Conv2d(64, out_channels, kernel_size=1),
         ]
         if activation == "softplus":
             head_layers.append(nn.Softplus())

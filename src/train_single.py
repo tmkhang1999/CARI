@@ -326,25 +326,25 @@ def train_one_step(model, batch, criterion, device):
     if normals is not None:
         normals = normals.to(device, non_blocking=True)
 
-    with autocast(device_type='cuda', dtype=torch.bfloat16):
+    with autocast(device_type='cuda', dtype=torch.float16):
         predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
         predictions = _apply_diffuse_detach(predictions, m_diffuse)
         
-    with autocast(device_type='cuda', enabled=False):
-        # Convert predictions to float32 before target computation and loss
-        predictions_f32 = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in predictions.items()}
-        targets = compute_targets(predictions_f32, batch)
+        # Ensure predictions are float32 for stable loss and target computation
+        predictions = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in predictions.items()}
+        
+    targets = compute_targets(predictions, batch)
 
-        losses = criterion(
-            predictions_f32,
-            targets,
-            m_diffuse,
-            m_albedo,
-            valid_mask,
-            _loss_seg(model, seg),
-            normals=normals,
-            rgb=rgb,
-        )
+    losses = criterion(
+        predictions,
+        targets,
+        m_diffuse,
+        m_albedo,
+        valid_mask,
+        _loss_seg(model, seg),
+        normals=normals,
+        rgb=rgb,
+    )
 
     return losses
 
@@ -1196,7 +1196,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = deterministic
-    torch.backends.cudnn.benchmark = not deterministic
+    torch.backends.cudnn.benchmark = False # Force false to avoid FIND engine error
 
     version = config['model']['version']
     ckpt_dir = os.path.join(config['paths']['checkpoint_dir'], f'v{version}')
@@ -1404,7 +1404,9 @@ def main():
     compute_time_total = 0.0
     optimizer.zero_grad(set_to_none=True)
 
-    scaler = GradScaler()
+
+
+    scaler = GradScaler('cuda')
 
     for step in train_pbar:
         t0 = time.time()
@@ -1413,18 +1415,15 @@ def main():
         t1 = time.time()
         
         losses = train_one_step(model, batch, criterion, device)
-        loss_scaled = losses['loss_total'] / float(grad_accum_steps)
+        loss = losses['loss_total'] / float(grad_accum_steps)
         
-        scaler.scale(loss_scaled).backward()
+        scaler.scale(loss).backward()
 
-        should_step = ((step - start_step + 1) % grad_accum_steps == 0) or (step == max_iters - 1)
-        if should_step:
+        if (step + 1) % grad_accum_steps == 0 or step == max_iters - 1:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
-            
             scaler.step(optimizer)
             scaler.update()
-            
             optimizer.zero_grad(set_to_none=True)
             if scheduler is not None:
                 scheduler.step()

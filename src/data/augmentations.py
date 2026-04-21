@@ -19,7 +19,7 @@ def random_color_shift(image, mean=0.5, std=0.05):
 
     gain = torch.from_numpy(temperature.reshape(3, 1, 1)).to(device=image.device, dtype=image.dtype)
 
-    augmented = (image * gain).clamp(0, None).float()
+    augmented = (image * gain).clamp(0, 1).float()
     return augmented, gain
 
 def random_hue_saturation_shifting(albedo):
@@ -43,4 +43,4 @@ def random_scaling_red_blue_channels(albedo, scale_range=(0.8, 1.2)):
     # Normalize to prevent brightness drift
     gain = gain / (gain.mean() + 1e-6)
 
-    return (albedo * gain).clamp(0, None)
+    return (albedo * gain).clamp(0, 1)

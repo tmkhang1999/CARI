@@ -72,6 +72,8 @@ from src.data.augmentations import (
     random_color_shift,
 )
 
+from src.models.ccr_utils import compute_ccr
+
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 
 
@@ -241,35 +243,6 @@ def compute_valid_mask(albedo: np.ndarray, render_id: np.ndarray | None) -> np.n
     sky_mask = np.ones(albedo.shape[:2], dtype=bool) if render_id is None else (render_id != -1)
     alb_mask = albedo.mean(axis=-1) > 0.02
     return (sky_mask & alb_mask).astype(np.float32)
-
-
-def compute_ccr(rgb_hw3: np.ndarray) -> np.ndarray:
-    """
-    6-channel CCR from linear RGB.
-    Input should match the model/dataloader RGB convention, i.e. tonemapped linear [0,1].
-    Returns (H, W, 6): [log_RG, log_RB, log_GB, norm_R, norm_G, norm_B]
-    """
-    img = torch.from_numpy(rgb_hw3).permute(2, 0, 1).unsqueeze(0).float()  # (1,3,H,W)
-    eps = 1e-7
-    log_img = torch.log(img + eps)
-    r, g, b = log_img[:, 0:1], log_img[:, 1:2], log_img[:, 2:3]
-
-    kernel = torch.tensor(
-        [[0, 1, 0], [1, 0, -1], [0, -1, 0]], dtype=torch.float32
-    ).view(1, 1, 3, 3)
-
-    def diff(ch):
-        return F.conv2d(ch, kernel, padding=1)
-
-    log_rg = torch.clamp(diff(r) - diff(g), -1.0, 1.0)
-    log_rb = torch.clamp(diff(r) - diff(b), -1.0, 1.0)
-    log_gb = torch.clamp(diff(g) - diff(b), -1.0, 1.0)
-
-    intensity = img[:, 0:1] + img[:, 1:2] + img[:, 2:3] + eps
-    norm_rgb = img / intensity
-
-    ccr = torch.cat([log_rg, log_rb, log_gb, norm_rgb], dim=1)
-    return ccr.squeeze(0).permute(1, 2, 0).numpy()
 
 
 def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: bool = False, aug_type: str = 'all') -> dict:

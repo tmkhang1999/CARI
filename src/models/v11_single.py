@@ -75,7 +75,6 @@ class IntrinsicDecompositionV11Single(nn.Module):
         self.sfm_a_ccr2 = SpatialFeatureModulation(384, 256)
         self.sfm_a_n1 = SpatialFeatureModulation(192, 128)
         self.sfm_a_ccr1 = SpatialFeatureModulation(192, 128)
-        self.sfm_a_ccr0 = SpatialFeatureModulation(96, 64)
 
         # Dec B: FiLM + Guidance_B via SFM
         self.sfm_b3 = SpatialFeatureModulation(768, 512)
@@ -94,7 +93,6 @@ class IntrinsicDecompositionV11Single(nn.Module):
         self.sfm_c_ccr1 = SpatialFeatureModulation(192, 128)
         self.spade_c1 = SPADE(num_channels=192, num_classes=num_seg_classes)
         self.sfm_c_g1 = SpatialFeatureModulation(192, 128)
-        self.sfm_c_ccr0 = SpatialFeatureModulation(96, 64)
 
         # Direct raw-CCR projections preserve sharper boundary evidence at each stage.
         self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1, bias=False)
@@ -161,12 +159,11 @@ class IntrinsicDecompositionV11Single(nn.Module):
                 lambda x: self.sfm_a_ccr3(self.sfm_a_n3(x, normal_feats[3]), ccr_prior3),
                 lambda x: self.sfm_a_ccr2(self.sfm_a_n2(x, normal_feats[2]), ccr_prior2),
                 lambda x: self.sfm_a_ccr1(self.sfm_a_n1(x, normal_feats[1]), ccr_prior1),
-                lambda x: self.sfm_a_ccr0(x, ccr_feats[0]),
+                None,
             ],
         )
         s_g = 1.0 / (d_g + 1e-6) - 1.0
-        s_g_safe = s_g.detach().clamp(0.0, 20.0)
-        # allow gradient flow to Dec A
+        s_g_safe = s_g.detach().clamp(1e-3, 20.0) 
         a_g = self._derive_albedo(rgb, s_g_safe)
 
         g_b = self.guidance_b(torch.cat([s_g_safe, a_g], dim=1))
@@ -182,7 +179,8 @@ class IntrinsicDecompositionV11Single(nn.Module):
 
         c = self._to_chroma(xi)
         s_c = s_g * c
-        s_c_safe = s_c.detach().clamp(0.0, 20.0)
+
+        s_c_safe = s_c.detach().clamp(1e-3, 20.0)
         a_c = self._derive_albedo(rgb, s_c_safe)
 
         g_c = self.guidance_c(torch.cat([s_c_safe, a_c], dim=1))
@@ -193,7 +191,7 @@ class IntrinsicDecompositionV11Single(nn.Module):
                 lambda x: self.sfm_c_g3(self.spade_c3(self.sfm_c_ccr3(x, ccr_prior3), seg), g_c[3]),
                 lambda x: self.sfm_c_g2(self.spade_c2(self.sfm_c_ccr2(x, ccr_prior2), seg), g_c[2]),
                 lambda x: self.sfm_c_g1(self.spade_c1(self.sfm_c_ccr1(x, ccr_prior1), seg), g_c[1]),
-                lambda x: self.sfm_c_ccr0(x, ccr_feats[0]),
+                None,
             ],
         )
 

@@ -1,32 +1,50 @@
-"""Shared CCR descriptor utility used by Stage-1 model variants."""
-
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 
-# UPDATE compute_ccr IN ccr_utils.py:
-def compute_ccr(img, eps=1e-7):
-    """Build 6-channel CCR descriptor with illumination-invariant normalization."""
-    log_img = torch.log(img + eps)
+def compute_ccr(rgb):
+    """
+    6-channel CCR from linear RGB.
+    Input should match the model/dataloader RGB convention, i.e. tonemapped linear [0,1].
+    Supports both torch.Tensor (B,3,H,W or 3,H,W) and np.ndarray (H,W,3).
+    Returns same type as input:
+        If Tensor: (B,6,H,W)
+        If ndarray: (H,W,6)
+    """
+    is_numpy = isinstance(rgb, np.ndarray)
+    if is_numpy:
+        # Convert H,W,3 ndarray to 1,3,H,W tensor
+        img = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float()
+    else:
+        img = rgb
+        if img.ndim == 3:
+            img = img.unsqueeze(0)
 
-    base_kernel = torch.tensor(
-        [[0, 1, 0], [1, 0, -1], [0, -1, 0]],
-        dtype=img.dtype,
-        device=img.device,
-    )
-    kernel = base_kernel.view(1, 1, 3, 3).repeat(3, 1, 1, 1)
-    diffs = F.conv2d(log_img, kernel, padding=1, groups=3)
-
-    diff_r, diff_g, diff_b = diffs[:, 0:1], diffs[:, 1:2], diffs[:, 2:3]
-    m_rg = torch.clamp(diff_r - diff_g, -1.0, 1.0)
-    m_rb = torch.clamp(diff_r - diff_b, -1.0, 1.0)
-    m_gb = torch.clamp(diff_g - diff_b, -1.0, 1.0)
+    device = img.device
+    eps = 1e-7
     
-    ccr_log = torch.cat([m_rg, m_rb, m_gb], dim=1)
-    ccr_mean = ccr_log.mean(dim=(2, 3), keepdim=True)
-    ccr_log = ccr_log - ccr_mean  # Centers the ratios, removing global light color
+    # Ensure kernel is on the same device
+    kernel = torch.tensor(
+        [[0, 1, 0], [1, 0, -1], [0, -1, 0]], dtype=torch.float32, device=device
+    ).view(1, 1, 3, 3)
+
+    log_img = torch.log(img + eps)
+    r, g, b = log_img[:, 0:1], log_img[:, 1:2], log_img[:, 2:3]
+
+    def diff(ch):
+        return F.conv2d(ch, kernel, padding=1)
+
+    log_rg = torch.clamp(diff(r) - diff(g), -1.0, 1.0)
+    log_rb = torch.clamp(diff(r) - diff(b), -1.0, 1.0)
+    log_gb = torch.clamp(diff(g) - diff(b), -1.0, 1.0)
 
     intensity = img[:, 0:1] + img[:, 1:2] + img[:, 2:3] + eps
     norm_rgb = img / intensity
 
-    return torch.cat([ccr_log, norm_rgb], dim=1)
+    ccr = torch.cat([log_rg, log_rb, log_gb, norm_rgb], dim=1)
+
+    if is_numpy:
+        return ccr.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    else:
+        return ccr
