@@ -56,6 +56,7 @@ class ImageEncoder(nn.Module):
                     pretrained=False,
                     features_only=True,
                     out_indices=(0, 1, 2, 3),
+                    checkpoint_grad=True,  # for better OOM error messages if model is too large
                 )
             else:
                 raise

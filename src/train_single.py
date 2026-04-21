@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from skimage.metrics import structural_similarity as ssim
+from torch.amp import autocast, GradScaler
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -325,20 +326,25 @@ def train_one_step(model, batch, criterion, device):
     if normals is not None:
         normals = normals.to(device, non_blocking=True)
 
-    predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
-    predictions = _apply_diffuse_detach(predictions, m_diffuse)
-    targets = compute_targets(predictions, batch)
+    with autocast(device_type='cuda', dtype=torch.bfloat16):
+        predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
+        predictions = _apply_diffuse_detach(predictions, m_diffuse)
+        
+    with autocast(device_type='cuda', enabled=False):
+        # Convert predictions to float32 before target computation and loss
+        predictions_f32 = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in predictions.items()}
+        targets = compute_targets(predictions_f32, batch)
 
-    losses = criterion(
-        predictions,
-        targets,
-        m_diffuse,
-        m_albedo,
-        valid_mask,
-        _loss_seg(model, seg),
-        normals=normals,
-        rgb=rgb,
-    )
+        losses = criterion(
+            predictions_f32,
+            targets,
+            m_diffuse,
+            m_albedo,
+            valid_mask,
+            _loss_seg(model, seg),
+            normals=normals,
+            rgb=rgb,
+        )
 
     return losses
 
@@ -1398,19 +1404,27 @@ def main():
     compute_time_total = 0.0
     optimizer.zero_grad(set_to_none=True)
 
+    scaler = GradScaler()
+
     for step in train_pbar:
         t0 = time.time()
         batch = next(train_iter)
         dataset_name = 'hypersim'
         t1 = time.time()
+        
         losses = train_one_step(model, batch, criterion, device)
         loss_scaled = losses['loss_total'] / float(grad_accum_steps)
-        loss_scaled.backward()
+        
+        scaler.scale(loss_scaled).backward()
 
         should_step = ((step - start_step + 1) % grad_accum_steps == 0) or (step == max_iters - 1)
         if should_step:
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
-            optimizer.step()
+            
+            scaler.step(optimizer)
+            scaler.update()
+            
             optimizer.zero_grad(set_to_none=True)
             if scheduler is not None:
                 scheduler.step()

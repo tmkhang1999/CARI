@@ -91,7 +91,6 @@ class FlexibleLoss(nn.Module):
         return self.dssim_base_window.expand(channels, 1, -1, -1).contiguous()
 
     def _compute_dssim(self, pred, target, window_size=11):
-        """Memory-efficient DSSIM = (1 - SSIM) / 2."""
         pred = pred.to(torch.float32)
         target = target.to(torch.float32)
         C1, C2 = 0.01 ** 2, 0.03 ** 2
@@ -99,21 +98,24 @@ class FlexibleLoss(nn.Module):
         window = self._get_dssim_window(C).to(device=pred.device, dtype=pred.dtype)
         pad = window_size // 2
 
-        # Filter means
         mu1 = F.conv2d(pred, window, padding=pad, groups=C)
         mu2 = F.conv2d(target, window, padding=pad, groups=C)
-        mu1_mu2 = mu1 * mu2
+        
         mu1_sq = mu1.pow(2)
         mu2_sq = mu2.pow(2)
+        mu1_mu2 = mu1 * mu2
 
-        # Filter variances
-        sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C) - mu1_sq
-        sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C) - mu2_sq
-        sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C) - mu1_mu2
+        # Calculate sigma1_sq, sigma2_sq, sigma12 and combine immediately to free memory
+        num = (2 * mu1_mu2 + C1)
+        den = (mu1_sq + mu2_sq + C1)
+        
+        # Use in-place ops or immediate reuse to save VRAM
+        sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C).sub_(mu1_sq)
+        sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C).sub_(mu2_sq)
+        sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C).sub_(mu1_mu2)
 
-        # Combined calculation to minimize intermediate buffers
-        num = (2 * mu1_mu2 + C1) * (2 * sigma12 + C2)
-        den = (mu1_sq + mu2_sq + C1) * (sigma1_sq.clamp_min(0.0) + sigma2_sq.clamp_min(0.0) + C2)
+        num = num * (2 * sigma12 + C2)
+        den = den * (sigma1_sq.clamp_min_(0.0) + sigma2_sq.clamp_min_(0.0) + C2)
         
         ssim_map = num / den
         return (0.5 - 0.5 * ssim_map).mean()
@@ -123,40 +125,27 @@ class FlexibleLoss(nn.Module):
     # ------------------------------------------------------------------
 
 
-    def _compute_scale_and_shift(self, prediction, target, mask):
+    def _compute_scale_only(self, prediction, target, mask):
+        """
+        Computes scale 's' that minimizes sum(mask * (s * pred - target)^2).
+        s = sum(mask * pred * target) / sum(mask * pred * pred)
+        """
         pred = prediction.squeeze(1)
         tgt = target.squeeze(1)
         msk = mask.squeeze(1)
         
-        a_00 = torch.sum(msk * pred * pred, (1, 2))
-        a_01 = torch.sum(msk * pred, (1, 2))
-        a_11 = torch.sum(msk, (1, 2))
-
-        b_0 = torch.sum(msk * pred * tgt, (1, 2))
-        b_1 = torch.sum(msk * tgt, (1, 2))
-
-        x_0 = torch.zeros_like(b_0)
-        x_1 = torch.zeros_like(b_1)
-
-        det = a_00 * a_11 - a_01 * a_01
-        valid = det != 0
-
-        x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
-        x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
-
-        return x_0.view(-1, 1, 1, 1), x_1.view(-1, 1, 1, 1)
+        num = torch.sum(msk * pred * tgt, dim=(1, 2))
+        den = torch.sum(msk * pred * pred, dim=(1, 2))
+        
+        # Avoid div by zero, clamp minimum scale to prevent blackouts
+        scale = (num / (den + 1e-7)).clamp_min(0.05)
+        return scale.view(-1, 1, 1, 1)
 
     def loss_a(self, D_g_pred, D_g_star, valid_mask):
-        """
-        Dec A loss: Gray shading in inverse space.
-        Always active on valid pixels when pseudo-GT albedo is available.
-        Uses scale-and-shift invariant MSE (SSI-MSE).
-        """
         mask = valid_mask.float()
         
-        scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
-        scale = F.relu(scale)
-        D_g_pred_ssi = D_g_pred * scale + shift
+        scale = self._compute_scale_only(D_g_pred, D_g_star, mask)
+        D_g_pred_ssi = D_g_pred * scale
         
         mse = self._masked_mse(D_g_pred_ssi, D_g_star, mask)
         
@@ -283,44 +272,39 @@ class FlexibleLoss(nn.Module):
         return total, details
 
     def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask):
-        """
-        Targeted semantic variance loss.
-        Vectorized across pixels and filtered by self.semantic_var_classes 
-        to avoid expensive O(N) unique() calls.
-        """
         if seg_map is None or not self.semantic_var_classes:
             return (a_d_pred * 0.0).sum()
 
-        B, C, H, W = a_d_pred.shape
         if seg_map.ndim == 4:
             seg_map = seg_map.squeeze(1)
-        valid = valid_mask.bool().squeeze(1)
-
-        total_var = a_d_pred.new_tensor(0.0)
-        count = 0
         
-        # Iterate only over target classes (e.g. wall, floor, ceiling)
-        for label_val in self.semantic_var_classes:
-            # mask: (B, H, W)
-            mask = (seg_map == label_val) & valid
-            
-            # Use bool any() to skip batch items without this label efficiently
-            has_label = mask.any(dim=1).any(dim=1) # (B,)
-            for b in torch.where(has_label)[0]:
-                m = mask[b]
-                n_pix = int(m.sum())
-                if n_pix < 16: # skip tiny regions
-                    continue
-                
-                # vals: (3, N_pixels)
-                vals = a_d_pred[b, :, m]
-                mu = vals.mean(dim=1, keepdim=True)
-                total_var = total_var + ((vals - mu) ** 2).mean()
-                count += 1
-
-        if count == 0:
+        valid = valid_mask.bool().squeeze(1)
+        
+        # 1. Create a unified binary mask for ALL target structural classes
+        # Use torch.isin for fast vectorized matching
+        target_tensor = torch.tensor(self.semantic_var_classes, device=seg_map.device)
+        struct_mask = torch.isin(seg_map, target_tensor) & valid
+        
+        # 2. Compute variance globally over structural pixels per batch item
+        # a_d_pred: (B, 3, H, W) -> (B, 3, H*W)
+        B, C, H, W = a_d_pred.shape
+        flat_a = a_d_pred.view(B, C, -1)
+        flat_mask = struct_mask.view(B, 1, -1).expand(-1, C, -1)
+        
+        total_var = a_d_pred.new_tensor(0.0)
+        valid_batches = 0
+        
+        for b in range(B):
+            for c in range(C):
+                pixel_vals = flat_a[b, c, flat_mask[b, c]]
+                if pixel_vals.numel() > 16:  # Only compute if enough pixels exist
+                    total_var += pixel_vals.var(unbiased=False)
+                    valid_batches += 1
+                    
+        if valid_batches == 0:
             return (a_d_pred * 0.0).sum()
-        return total_var / float(count)
+            
+        return total_var / float(valid_batches)
 
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
