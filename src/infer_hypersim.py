@@ -188,12 +188,16 @@ def _maybe_resize_batch(batch, max_side):
 
     _, _, h, w = batch["rgb"].shape
     current_max = max(h, w)
-    if current_max <= max_side:
-        return batch, None
-
+    
     scale = float(max_side) / float(current_max)
-    new_h = max(1, int(round(h * scale)))
-    new_w = max(1, int(round(w * scale)))
+    new_h = int(round((h * scale) / 32.0) * 32)
+    new_w = int(round((w * scale) / 32.0) * 32)
+    # Ensure they don't drop to 0
+    new_h = max(32, new_h)
+    new_w = max(32, new_w)
+
+    if new_h == h and new_w == w:
+        return batch, None
 
     resized = dict(batch)
     for key in ["rgb", "albedo_raw", "illum_raw", "normals"]:
@@ -201,7 +205,7 @@ def _maybe_resize_batch(batch, max_side):
     resized["valid_mask"] = F.interpolate(batch["valid_mask"].float(), size=(new_h, new_w), mode="nearest").bool()
     resized["seg"] = F.interpolate(batch["seg"].float(), size=(new_h, new_w), mode="nearest").long()
 
-    msg = f"Applied fallback resize from {h}x{w} to {new_h}x{new_w} due to --max_side={max_side}"
+    msg = f"Applied base_resize from {h}x{w} to {new_h}x{new_w} (scale to max_side={max_side} and round to 32)"
     return resized, msg
 
 
@@ -286,7 +290,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
         illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
         S_d_star = route * illum + (1.0 - route) * S_c_star
 
-    S_g_star = 0.2126 * S_c_star[:, 0:1] + 0.7152 * S_c_star[:, 1:2] + 0.0722 * S_c_star[:, 2:3]
+    S_g_star = 0.299 * S_c_star[:, 0:1] + 0.587 * S_c_star[:, 1:2] + 0.114 * S_c_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
     D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
@@ -470,7 +474,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     c_bg_gt = (1.0 - gts['xi_star'][:, 1:2]) / (gts['xi_star'][:, 1:2] + 1e-6)
     
     # Proper RGB recovery from grayscale (luminance) and chroma ratios
-    denom_gt = (0.2126 * c_rg_gt + 0.7152 + 0.0722 * c_bg_gt).clamp(1e-6)
+    denom_gt = (0.299 * c_rg_gt + 0.587 + 0.114 * c_bg_gt).clamp(1e-6)
     s_green_gt = s_g_gt_linear / denom_gt
     s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
     
@@ -479,7 +483,7 @@ def _save_visual_strip(rgb, preds, gts, out_png):
     elif 'xi' in preds:
         c_rg_pred = (1.0 - preds['xi'][:, 0:1]) / (preds['xi'][:, 0:1] + 1e-6)
         c_bg_pred = (1.0 - preds['xi'][:, 1:2]) / (preds['xi'][:, 1:2] + 1e-6)
-        denom_pred = (0.2126 * c_rg_pred + 0.7152 + 0.0722 * c_bg_pred).clamp(1e-6)
+        denom_pred = (0.299 * c_rg_pred + 0.587 + 0.114 * c_bg_pred).clamp(1e-6)
         s_green_pred = s_g_pred_linear / denom_pred
         s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
     else:

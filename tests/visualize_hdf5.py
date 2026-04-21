@@ -26,6 +26,9 @@ Quick commands:
         --root /home/khang/datasets/hypersim \
         --scene ai_001_001 --cam 00 --all --no-show
 
+
+    # Added --aug-type argument with choices: hue_sat, scale, color_shift, all.
+
     # MIDIntrinsics: single scene (3 random white-balanced EXR merge + thumb + materials)
     python tests/visualize_hdf5.py \
         --dataset midintrinsics \
@@ -41,6 +44,14 @@ Quick commands:
 """
 
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Fix ModuleNotFoundError: No module named 'src'
+# The directory containing 'tests' is the project root.
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 import argparse
 import glob
@@ -53,6 +64,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+import random
+
+from src.data.augmentations import (
+    random_hue_saturation_shifting,
+    random_scaling_red_blue_channels,
+    random_color_shift,
+)
 
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 
@@ -254,7 +272,7 @@ def compute_ccr(rgb_hw3: np.ndarray) -> np.ndarray:
     return ccr.squeeze(0).permute(1, 2, 0).numpy()
 
 
-def load_frame_bundle(root: Path, scene: str, cam: str, frame: str) -> dict:
+def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: bool = False, aug_type: str = 'all') -> dict:
     frame = frame.zfill(4)
     images_dir = root / scene / 'images'
     final_dir = images_dir / f'scene_cam_{cam}_final_hdf5'
@@ -274,14 +292,55 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str) -> dict:
     if rid_path.exists():
         bundle['render_id'] = load_hdf5(rid_path).astype(np.int32)
 
+    # Apply augmentation if requested (Hypersim only)
+    if augment:
+        # Convert to torch for augmentation
+        A = torch.from_numpy(bundle['albedo']).permute(2, 0, 1)  # (3, H, W)
+        I_raw = torch.from_numpy(bundle['rgb_raw']).permute(2, 0, 1)
+        
+        # We need shading S = I / A for re-derivation
+        eps = 1e-6
+        S = I_raw / (A + eps)
+        
+        # Augment based on selection
+        if aug_type == 'hue_sat':
+            A_aug = random_hue_saturation_shifting(A)
+            I_aug = (A_aug * S)
+            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
+            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
+        elif aug_type == 'scale':
+            A_aug = random_scaling_red_blue_channels(A)
+            I_aug = (A_aug * S)
+            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
+            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
+        elif aug_type == 'color_shift':
+            # In CD-IID: I = A * S. If I is shifted by g, then S must be shifted by g to preserve A.
+            I_aug, gain = random_color_shift(I_raw)
+            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
+            
+            # Re-derive Diffuse Shading GT
+            S_raw = torch.from_numpy(bundle['illum']).permute(2, 0, 1)
+            S_aug = S_raw * gain
+            bundle['illum'] = S_aug.permute(1, 2, 0).numpy()
+            
+            # Re-derive Residual (if any) - assuming it scales similarly for consistency
+            R_raw = torch.from_numpy(bundle['residual']).permute(2, 0, 1)
+            bundle['residual'] = (R_raw * gain).permute(1, 2, 0).numpy()
+        else: # 'all' or default
+            A_aug = random_hue_saturation_shifting(A)
+            A_aug = random_scaling_red_blue_channels(A_aug)
+            I_aug = (A_aug * S)
+            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
+            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
+
     bundle['rgb_tm'] = tonemap_linear(bundle['rgb_raw'])
     
     eps = 1e-6
     bundle['colorful_shading'] = bundle['rgb_tm'] / (bundle['albedo'] + eps)
     bundle['gray_shading'] = (
-        0.2126 * bundle['colorful_shading'][..., 0]
-        + 0.7152 * bundle['colorful_shading'][..., 1]
-        + 0.0722 * bundle['colorful_shading'][..., 2]
+        0.299 * bundle['colorful_shading'][..., 0]
+        + 0.587 * bundle['colorful_shading'][..., 1]
+        + 0.114 * bundle['colorful_shading'][..., 2]
     )
     
     bundle['diffuse_recon_raw'] = bundle['albedo'] * bundle['illum']
@@ -386,7 +445,7 @@ def load_mid_scene_bundle(
     if albedo is not None:
         albedo_resized = cv2.resize(albedo, (rgb_merge.shape[1], rgb_merge.shape[0]), interpolation=cv2.INTER_LINEAR) if albedo.shape[:2] != rgb_merge.shape[:2] else albedo
         colorful_shading = rgb_merge / (albedo_resized + eps)
-        gray_shading = 0.2126 * colorful_shading[..., 0] + 0.7152 * colorful_shading[..., 1] + 0.0722 * colorful_shading[..., 2]
+        gray_shading = 0.299 * colorful_shading[..., 0] + 0.587 * colorful_shading[..., 1] + 0.114 * colorful_shading[..., 2]
     else:
         colorful_shading = None
         gray_shading = None
@@ -501,16 +560,19 @@ def plot_frame(
     style: str = 'light',
     dpi: int = 180,
     hdr_mode: str = 'tonemapped',
+    augment: bool = False,
+    aug_type: str = 'all',
 ):
-    bundle = load_frame_bundle(root, scene, cam, frame)
+    bundle = load_frame_bundle(root, scene, cam, frame, augment=augment, aug_type=aug_type)
     apply_style(style)
 
     text_color = 'white' if style == 'dark' else 'black'
     facecolor = '#111111' if style == 'dark' else 'white'
 
     fig, axes = plt.subplots(3, 3, figsize=(13, 12), constrained_layout=True, facecolor=facecolor)
+    aug_suffix = f" (AUG:{aug_type})" if augment else ""
     fig.suptitle(
-        f'Hypersim • {scene} • cam {cam} • frame.{frame}',
+        f'Hypersim • {scene} • cam {cam} • frame.{frame}{aug_suffix}',
         fontsize=15, fontweight='bold', color=text_color
     )
 
@@ -694,6 +756,9 @@ def parse_args():
                    help='How to display HDR GT maps (diffuse shading / residual). '
                         'This affects visualization only, never training.')
     p.add_argument('--dpi', type=int, default=180, help='Saved figure DPI')
+    p.add_argument('--augment', action='store_true', help='Apply data augmentation (Hypersim only)')
+    p.add_argument('--aug-type', choices=['hue_sat', 'scale', 'color_shift', 'all'], default='all',
+                   help='Type of augmentation to apply')
     p.add_argument('--no-show', action='store_true', help='Do not open matplotlib window; save only')
     return p.parse_args()
 
@@ -771,15 +836,19 @@ def main():
         selected = frames[:args.max_frames] if args.max_frames is not None else frames
         print(f'Rendering {len(selected)} frame(s) for {args.scene} cam {args.cam} ...')
         for fr in selected:
-            save_path = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}_summary.png'
+            aug_tag = f'_aug_{args.aug_type}' if args.augment else ''
+            save_path = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}{aug_tag}_summary.png'
             plot_frame(root, args.scene, args.cam, fr, save_path=save_path,
-                       show=False, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode)
+                       show=False, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode, 
+                       augment=args.augment, aug_type=args.aug_type)
         print('Done.')
     else:
         fr = args.frame.zfill(4)
-        save_path = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}_summary.png'
+        aug_tag = f'_aug_{args.aug_type}' if args.augment else ''
+        save_path = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}{aug_tag}_summary.png'
         plot_frame(root, args.scene, args.cam, fr, save_path=save_path,
-                   show=not args.no_show, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode)
+                   show=not args.no_show, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode, 
+                   augment=args.augment, aug_type=args.aug_type)
 
 
 if __name__ == '__main__':

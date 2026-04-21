@@ -14,7 +14,10 @@ class DecoderBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=4, stride=2, padding=1):
         super().__init__()
         self.block = nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            # nn.GroupNorm(1, out_channels),
+            # nn.GELU()
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )

@@ -17,9 +17,11 @@ Standard conv (not DW) — CCR is spatially rich and needs full channel mixing (
 import torch.nn as nn
 
 
-def _conv_bn_relu(in_c, out_c, stride):
+def _conv_gn_gelu(in_c, out_c, stride):
     return nn.Sequential(
         nn.Conv2d(in_c, out_c, kernel_size=3, stride=stride, padding=1, bias=False),
+        # nn.GroupNorm(1, out_c),
+        # nn.GELU()
         nn.BatchNorm2d(out_c),
         nn.ReLU(inplace=True),
     )
@@ -37,15 +39,15 @@ class CCREncoder(nn.Module):
         c1, c2, c3, c4 = channels
 
         # Stage 0: full resolution, stride-1  (H → H)
-        self.conv0 = _conv_bn_relu(in_channels, c1, stride=1)
+        self.conv0 = _conv_gn_gelu(in_channels, c1, stride=1)
         # Stage 1: H → H/2
-        self.conv1 = _conv_bn_relu(c1, c1, stride=2)
+        self.conv1 = _conv_gn_gelu(c1, c1, stride=2)
         # Stage 2: H/2 → H/4
-        self.conv2 = _conv_bn_relu(c1, c2, stride=2)
+        self.conv2 = _conv_gn_gelu(c1, c2, stride=2)
         # Stage 3: H/4 → H/8
-        self.conv3 = _conv_bn_relu(c2, c3, stride=2)
+        self.conv3 = _conv_gn_gelu(c2, c3, stride=2)
         # Stage 4: H/8 → H/16
-        self.conv4 = _conv_bn_relu(c3, c4, stride=2)
+        self.conv4 = _conv_gn_gelu(c3, c4, stride=2)
 
     def forward(self, ccr):
         """

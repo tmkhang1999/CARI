@@ -30,6 +30,12 @@ class ProgressiveDecoder(nn.Module):
         self.dec1 = DecoderBlock(384 + skip_channels[1] + e2, 192)
         self.dec0 = DecoderBlock(192 + skip_channels[0] + e1, 96)
 
+        # head_layers = [
+        #     nn.Conv2d(96, 64, kernel_size=3, padding=1, bias=False),
+        #     nn.GroupNorm(1, 64),
+        #     nn.GELU(),
+        #     nn.Conv2d(64, out_channels, kernel_size=1),
+        # ]
         head_layers = [
             nn.Conv2d(96, 32, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -61,10 +67,14 @@ class ProgressiveDecoder(nn.Module):
             z: (N, C, H/32, W/32) bottleneck input.
             skip_features: image skips [H/4, H/8, H/16, H/32].
             extra_features: list [e3, e2, e1] or None.
-            stage_ops: list of callables [op3, op2, op1] or None.
+            stage_ops: list of callables [op3, op2, op1, op0] or None.
         """
         extras = [None, None, None] if extra_features is None else list(extra_features)
-        ops = [None, None, None] if stage_ops is None else list(stage_ops)
+        ops = [None, None, None, None] if stage_ops is None else list(stage_ops)
+        
+        # pad ops if only 3 are provided
+        while len(ops) < 4:
+            ops.append(None)
 
         x = self.dec3(z)
         if ops[0] is not None:
@@ -82,6 +92,8 @@ class ProgressiveDecoder(nn.Module):
         x = self._cat(x, skip_features[0], self._resize_like(extras[2], x))
 
         x = self.dec0(x)
+        if ops[3] is not None:
+            x = ops[3](x)
         x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
         return self.head(x)
 

@@ -476,7 +476,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         xi_np = to_np(preds['xi'])
         c_rg = (1.0 - xi_np[..., 0:1]) / (xi_np[..., 0:1] + 1e-6)
         c_bg = (1.0 - xi_np[..., 1:2]) / (xi_np[..., 1:2] + 1e-6)
-        denom_np = np.clip(0.2126 * c_rg + 0.7152 + 0.0722 * c_bg, 1e-6, None)
+        denom_np = np.clip(0.299 * c_rg + 0.587 + 0.114 * c_bg, 1e-6, None)
         sg_1c = pred_sg[..., 0:1]
         s_green = sg_1c / denom_np
         pred_sc = np.concatenate([c_rg * s_green, s_green, c_bg * s_green], axis=-1)

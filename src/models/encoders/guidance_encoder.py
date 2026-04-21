@@ -16,8 +16,11 @@ class _DWBlock(nn.Module):
             bias=False,
         )
         self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.norm = nn.GroupNorm(1, out_channels)
-        self.act = nn.GELU()
+        # self.norm = nn.GroupNorm(1, out_channels)
+        # self.act = nn.GELU()
+        self.norm = nn.BatchNorm2d(out_channels)  
+        self.act = nn.ReLU(inplace=True)         
+  
 
     def forward(self, x):
         x = self.depthwise(x)

@@ -1,0 +1,68 @@
+# Stage 1 V11_single — Hypersim only
+# - SSI-MSE for Grayscale Shading (D_g)
+# - Decoder boundaries fixed (bilinear + conv3x3 instead of TransposedConv)
+# - BatchNorm removed for GroupNorm throughout enc/dec
+# - SPADE fixed (InstanceNorm removed)
+
+model:
+  version: 11
+  backbone: convnextv2_base
+  z_channels: 1024
+  freeze_stages: [1, 2]
+  backbone_lr_multiplier: 0.5
+  pretrained: true
+  num_seg_classes: 41
+
+train:
+  batch_size: 8
+  num_workers: 6
+  grad_accum_steps: 4
+  grad_clip_max_norm: 1.0
+  use_cosine_lr: false
+  lr_eta_min: 1.0e-7
+  log_interval: 500
+  val_interval_iters: 1000
+  checkpoint_interval_iters: 500
+  val_example_images: 3
+  val_example_indices: [120, 200, 250]
+  compute_val_losses: false
+  seed: 42
+  deterministic: false
+
+  phase1_iterations: 10000
+  phase2_iterations: 15000
+  extend_iterations: 15000
+
+  sampling_weights_phase1:
+    hypersim: 1
+    midintrinsic: 0
+  sampling_weights_phase2:
+    hypersim: 1
+    midintrinsic: 0
+
+data:
+  datasets: ['hypersim']
+  validate_midintrinsic: false
+  hypersim_strict_split: false
+  subset_seed: 42
+  hypersim_train_max_images: 0
+  midintrinsic_train_max_images: 0
+
+loss:
+  lambda_branch_a: 2.0
+  lambda_branch_b: 1.0
+  lambda_branch_c: 1.0
+  lambda_branch_d: 1.0
+
+  enable_dssim_a_d: false 
+  lambda_msg: 0.5
+
+  lambda_perceptual: 0.05
+  lambda_dssim: 0.4
+
+  lambda_tv: 0.05
+  lambda_semvar: 0.4
+
+  tv_type: 'segmentation'
+  tv_target_classes: [1, 2, 22]
+  semantic_var_classes: [1, 2, 22]

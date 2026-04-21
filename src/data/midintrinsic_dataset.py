@@ -313,11 +313,12 @@ class MIDIntrinsicDataset(Dataset):
             seg_np = np.zeros((albedo.shape[0], albedo.shape[1]), dtype=np.int32)
 
         eps = 1e-6
-        albedo_tm = self._tonemap_linear(albedo)
+        tonemap_scale = float(np.percentile(rgb_mix_neutral, 99.0)) + 1e-6
+        albedo_tm = np.clip(albedo / tonemap_scale, 0.0, None)   # keep HDR but same scale
 
         # Compute geometric grayscale shading from the neutral branch only.
         s_neutral = rgb_mix_neutral / (albedo_tm + eps)
-        s_g = 0.2126 * s_neutral[..., 0:1] + 0.7152 * s_neutral[..., 1:2] + 0.0722 * s_neutral[..., 2:3]
+        s_g = 0.299 * s_neutral[..., 0:1] + 0.587 * s_neutral[..., 1:2] + 0.114 * s_neutral[..., 2:3]
         d_g_target = 1.0 / (s_g + 1.0)
 
         # Compute chroma target from the color-shifted branch.

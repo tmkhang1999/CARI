@@ -1,11 +1,13 @@
 """Model package exports."""
 
-from .stage1_v6 import IntrinsicDecompositionV6
-from .stage1_v9 import IntrinsicDecompositionV9
-from .stage1_v10 import IntrinsicDecompositionV10
+from .v9 import IntrinsicDecompositionV9
+from .v10 import IntrinsicDecompositionV10
+from .v11_single import IntrinsicDecompositionV11Single
+from .v11_mix import IntrinsicDecompositionV11Mix
 
 __all__ = [
-    "IntrinsicDecompositionV6",
     "IntrinsicDecompositionV9",
     "IntrinsicDecompositionV10",
+    "IntrinsicDecompositionV11Single",
+    "IntrinsicDecompositionV11Mix",
 ]

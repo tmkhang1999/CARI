@@ -29,9 +29,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from models import (
-    IntrinsicDecompositionV6,
-    IntrinsicDecompositionV9,
     IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11Mix,
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
@@ -42,21 +41,21 @@ from data.mixed_dataloader import MixedDataloader
 TB_TAGS = {
     'loss_total': '01_Losses/0_Total',
     'loss_a': '01_Losses/A_1_Total',
-    'loss_a_l1': '01_Losses/A_2_L1',
+    'loss_a_mse': '01_Losses/A_2_MSE',
     'loss_a_msg': '01_Losses/A_3_MSG',
-    'loss_a_dssim': '01_Losses/A_4_DSSIM',
     'loss_b': '01_Losses/B_1_Total',
+    'loss_b_mse': '01_Losses/B_2_MSE',
+    'loss_b_msg': '01_Losses/B_3_MSG',
     'loss_c': '01_Losses/C_1_Total',
-    'loss_c_l1': '01_Losses/C_2_L1',
+    'loss_c_mse': '01_Losses/C_2_MSE',
     'loss_c_msg': '01_Losses/C_3_MSG',
     'loss_c_perceptual': '01_Losses/C_4_Perceptual',
     'loss_c_tv': '01_Losses/C_5_TV',
     'loss_c_dssim': '01_Losses/C_6_DSSIM',
     'loss_c_semvar': '01_Losses/C_7_SemVar',
     'loss_d': '01_Losses/D_1_Total',
-    'loss_d_l1': '01_Losses/D_1_L1',
+    'loss_d_mse': '01_Losses/D_2_MSE',
     'loss_d_msg': '01_Losses/D_3_MSG',
-    'loss_d_dssim': '01_Losses/D_4_DSSIM',
     'loss_recon': '01_Losses/R_1_Recon_Diffuse',
     'loss_recon_l1': '01_Losses/R_2_Recon_Color',
     'a_d_lmse': '02_Albedo_Ad/1_lmse',
@@ -76,11 +75,11 @@ def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
     """Write only requested TensorBoard tags in deterministic order."""
     ordered = [
         'loss_total',
-        'loss_a', 'loss_a_l1', 'loss_a_msg', 'loss_a_dssim',
-        'loss_b',
-        'loss_c', 'loss_c_l1', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
+        'loss_a', 'loss_a_mse', 'loss_a_msg',
+        'loss_b', 'loss_b_mse', 'loss_b_msg',
+        'loss_c', 'loss_c_mse', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
         'loss_c_semvar',
-        'loss_d', 'loss_d_l1', 'loss_d_msg', 'loss_d_dssim',
+        'loss_d', 'loss_d_mse', 'loss_d_msg',
         'loss_recon', 'loss_recon_l1',
         'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
@@ -138,9 +137,9 @@ def compute_targets(predictions, batch):
 
         # Grayscale and chroma targets depend on colorful shading (contains speculars & gloss)
         S_g_star = (
-            0.2126 * S_c_star[:, 0:1]
-            + 0.7152 * S_c_star[:, 1:2]
-            + 0.0722 * S_c_star[:, 2:3]
+            0.299 * S_c_star[:, 0:1]
+            + 0.587 * S_c_star[:, 1:2]
+            + 0.114 * S_c_star[:, 2:3]
         )
         D_g_star = 1.0 / (S_g_star + 1.0)
         
@@ -654,7 +653,7 @@ def _log_val_examples(
         c_bg_gt = (1.0 - targets['xi_star'][i:i+1, 1:2]) / (targets['xi_star'][i:i+1, 1:2] + 1e-6)
         
         # Proper RGB recovery from grayscale (luminance) and chroma ratios
-        denom_gt = (0.2126 * c_rg_gt + 0.7152 + 0.0722 * c_bg_gt).clamp(1e-6)
+        denom_gt = (0.299 * c_rg_gt + 0.587 + 0.114 * c_bg_gt).clamp(1e-6)
         s_green_gt = s_g_gt_linear / denom_gt
         s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
         
@@ -663,7 +662,7 @@ def _log_val_examples(
         elif 'xi' in predictions:
             c_rg_pred = (1.0 - predictions['xi'][i:i+1, 0:1]) / (predictions['xi'][i:i+1, 0:1] + 1e-6)
             c_bg_pred = (1.0 - predictions['xi'][i:i+1, 1:2]) / (predictions['xi'][i:i+1, 1:2] + 1e-6)
-            denom_pred = (0.2126 * c_rg_pred + 0.7152 + 0.0722 * c_bg_pred).clamp(1e-6)
+            denom_pred = (0.299 * c_rg_pred + 0.587 + 0.114 * c_bg_pred).clamp(1e-6)
             s_green_pred = s_g_pred_linear / denom_pred
             s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
         else:
@@ -836,11 +835,6 @@ def validate(
             'loss_c': 0.0,
             'loss_d': 0.0,
             'loss_total': 0.0,
-            'loss_c_l1': 0.0,
-            'loss_c_msg': 0.0,
-            'loss_c_perceptual': 0.0,
-            'loss_c_tv': 0.0,
-            'loss_c_semvar': 0.0,
         }
     total_metric = {
         's_g_lmse': 0.0,
@@ -951,9 +945,10 @@ def validate(
                     normals=normals,
                     rgb=rgb,
                 )
-                for k in total_loss:
-                    if k in losses:
-                        total_loss[k] += losses[k].item()
+                for k, v in losses.items():
+                    if k not in total_loss:
+                        total_loss[k] = 0.0
+                    total_loss[k] += v.item()
 
             # Evaluate in inverse shading space (bounded) to match decoder outputs.
             d_g_star = targets['D_g_star']
@@ -1103,9 +1098,8 @@ def build_stage1_model(config):
         'input_size': int(config['train'].get('input_size', 384)),
     }
     model_map = {
-        6.0: IntrinsicDecompositionV6,
-        9.0: IntrinsicDecompositionV9,
         10.0: IntrinsicDecompositionV10,
+        11.0: IntrinsicDecompositionV11Mix,
     }
     if version not in model_map:
         raise ValueError(f"Unsupported Stage1 version: {version}")

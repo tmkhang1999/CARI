@@ -15,7 +15,7 @@ from .modules.illuminant_descriptor import IlluminantDescriptor
 from .ccr_utils import compute_ccr
 
 
-class IntrinsicDecompositionV10(nn.Module):
+class IntrinsicDecompositionV11Single(nn.Module):
     def __init__(self, config):
         super().__init__()
 
@@ -75,6 +75,7 @@ class IntrinsicDecompositionV10(nn.Module):
         self.sfm_a_ccr2 = SpatialFeatureModulation(384, 256)
         self.sfm_a_n1 = SpatialFeatureModulation(192, 128)
         self.sfm_a_ccr1 = SpatialFeatureModulation(192, 128)
+        self.sfm_a_ccr0 = SpatialFeatureModulation(96, 64)
 
         # Dec B: FiLM + Guidance_B via SFM
         self.sfm_b3 = SpatialFeatureModulation(768, 512)
@@ -83,6 +84,7 @@ class IntrinsicDecompositionV10(nn.Module):
 
         # Dec C: CCR + SPADE(s2/s1) + Guidance_C via SFM
         self.sfm_c_ccr3 = SpatialFeatureModulation(768, 512)
+        self.spade_c3 = SPADE(num_channels=768, num_classes=num_seg_classes)
         self.sfm_c_g3 = SpatialFeatureModulation(768, 512)
 
         self.sfm_c_ccr2 = SpatialFeatureModulation(384, 256)
@@ -92,6 +94,7 @@ class IntrinsicDecompositionV10(nn.Module):
         self.sfm_c_ccr1 = SpatialFeatureModulation(192, 128)
         self.spade_c1 = SPADE(num_channels=192, num_classes=num_seg_classes)
         self.sfm_c_g1 = SpatialFeatureModulation(192, 128)
+        self.sfm_c_ccr0 = SpatialFeatureModulation(96, 64)
 
         # Direct raw-CCR projections preserve sharper boundary evidence at each stage.
         self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1, bias=False)
@@ -134,8 +137,8 @@ class IntrinsicDecompositionV10(nn.Module):
             ccr = compute_ccr(rgb)
         
         # Normalize per-image to close HDR/sRGB distribution gap
-        ccr_std = ccr.std(dim=(2, 3), keepdim=True).clamp_min(1e-6)
-        ccr = ccr / ccr_std
+        # ccr_std = ccr.std(dim=(2, 3), keepdim=True).clamp_min(1e-6)
+        # ccr = ccr / ccr_std
         
         ccr_feats = self.ccr_encoder(ccr)
 
@@ -158,10 +161,11 @@ class IntrinsicDecompositionV10(nn.Module):
                 lambda x: self.sfm_a_ccr3(self.sfm_a_n3(x, normal_feats[3]), ccr_prior3),
                 lambda x: self.sfm_a_ccr2(self.sfm_a_n2(x, normal_feats[2]), ccr_prior2),
                 lambda x: self.sfm_a_ccr1(self.sfm_a_n1(x, normal_feats[1]), ccr_prior1),
+                lambda x: self.sfm_a_ccr0(x, ccr_feats[0]),
             ],
         )
         s_g = 1.0 / (d_g + 1e-6) - 1.0
-        s_g_safe = s_g.clamp(0.0, 20.0)
+        s_g_safe = s_g.detach().clamp(0.0, 20.0)
         # allow gradient flow to Dec A
         a_g = self._derive_albedo(rgb, s_g_safe)
 
@@ -186,9 +190,10 @@ class IntrinsicDecompositionV10(nn.Module):
             z_global,
             skip_features,
             stage_ops=[
-                lambda x: self.sfm_c_g3(self.sfm_c_ccr3(x, ccr_prior3), g_c[3]),
+                lambda x: self.sfm_c_g3(self.spade_c3(self.sfm_c_ccr3(x, ccr_prior3), seg), g_c[3]),
                 lambda x: self.sfm_c_g2(self.spade_c2(self.sfm_c_ccr2(x, ccr_prior2), seg), g_c[2]),
                 lambda x: self.sfm_c_g1(self.spade_c1(self.sfm_c_ccr1(x, ccr_prior1), seg), g_c[1]),
+                lambda x: self.sfm_c_ccr0(x, ccr_feats[0]),
             ],
         )
 

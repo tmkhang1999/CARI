@@ -12,9 +12,11 @@ class IlluminantDescriptor(nn.Module):
         if out_dim is None:
             out_dim = 2 * int(z_channels) if z_channels is not None else 2048
         self.mlp = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
+            nn.Linear(in_dim, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, out_dim),
+            nn.Linear(64, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, out_dim),
         )
 
     def _masked_mean_std(self, x, mask, eps=1e-6):

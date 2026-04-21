@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train Stage 1  —  supported versions: V6 / V9 / V10
+# Train —  supported versions: V9 / V10 / V11
 #
 # Usage:
-#   bash scripts/train_stage1.sh                                  # V10 (default), CUDA auto
-#   bash scripts/train_stage1.sh --version 6 --cuda 1            # use GPU 1
-#   bash scripts/train_stage1.sh --version 9 --device cpu        # force CPU
-#   bash scripts/train_stage1.sh --version 10 --resume checkpoints/v10/checkpoint_latest.pth
-#   bash scripts/train_stage1.sh --version 9 --auto-resume
+#   bash scripts/train.sh                                  # V10 (default), CUDA auto
+#   bash scripts/train.sh --version 11 --cuda 1           # use GPU 1
+#   bash scripts/train.sh --version 9 --device cpu        # force CPU
+#   bash scripts/train.sh --version 10 --resume checkpoints/v10/checkpoint_latest.pth
+#   bash scripts/train.sh --version 9 --auto-resume
 #
 # All extra flags are forwarded directly to train_stage1.py (e.g. --device cpu).
 # ──────────────────────────────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
 RESUME_MODE=""            # forwarded as --resume <path|latest>
 AUTO_RESUME=0             # forwarded as --auto-resume
+MODE="single"             # Default mode for V11
 
 require_value() {
     local flag="$1"
@@ -37,6 +38,11 @@ while [[ $# -gt 0 ]]; do
         --version)
             require_value "$1" "${2:-}"
             VERSION="$2"
+            shift 2
+            ;;
+        --mode)
+            require_value "$1" "${2:-}"
+            MODE="$2"
             shift 2
             ;;
         --cuda|--gpus|--cuda-visible-devices)
@@ -70,12 +76,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${VERSION}" != "6" && "${VERSION}" != "9" && "${VERSION}" != "10" ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 6, 9, 10"
+if [[ "${VERSION}" != "9" && "${VERSION}" != "10" && "${VERSION}" != "11" ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11"
     exit 1
 fi
 
-CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+# Resolve config path and train script. For v11 we use mode flag (single or mix).
+if [[ "${VERSION}" == "11" ]]; then
+    if [[ "${MODE}" == "mix" ]]; then
+        CONFIG="${ROOT_DIR}/src/configs/v11_mix.yaml"
+        TRAIN_SCRIPT="${ROOT_DIR}/src/train_mix.py"
+    else
+        CONFIG="${ROOT_DIR}/src/configs/v11_single.yaml"
+        TRAIN_SCRIPT="${ROOT_DIR}/src/train_single.py"
+    fi
+else
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"  # legacy
+fi
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "ERROR: Config not found: $CONFIG"
@@ -94,7 +112,7 @@ if [[ "$AUTO_RESUME" -eq 1 && -n "$RESUME_MODE" ]]; then
 fi
 
 echo "========================================"
-echo "  Stage 1  |  Version ${VERSION}"
+echo "  Stage 1  |  Version ${VERSION}  |  Mode: ${MODE}"
 echo "  Config:  ${CONFIG}"
 echo "  Device:  ${RUN_DEVICE}"
 if [[ -n "$CUDA_IDS" ]]; then
@@ -107,7 +125,7 @@ elif [[ -n "$RESUME_MODE" ]]; then
 fi
 echo "========================================"
 
-TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"
+
 
 CMD=(
     python "${TRAIN_SCRIPT}"

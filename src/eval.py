@@ -71,7 +71,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
         illum = torch.nan_to_num(illum_raw, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
         S_d_star = route * illum + (1.0 - route) * S_c_star
 
-    S_g_star = 0.2126 * S_c_star[:, 0:1] + 0.7152 * S_c_star[:, 1:2] + 0.0722 * S_c_star[:, 2:3]
+    S_g_star = 0.299 * S_c_star[:, 0:1] + 0.587 * S_c_star[:, 1:2] + 0.114 * S_c_star[:, 2:3]
     D_g_star = 1.0 / (S_g_star + 1.0)
     D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 

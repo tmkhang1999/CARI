@@ -36,7 +36,7 @@ def visualize_predictions(rgb, predictions, save_path=None):
         c_pred = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
         s_g_linear = 1.0 / (predictions['d_g'] + 1e-6) - 1.0
         
-        denom = (0.2126 * c_rg + 0.7152 + 0.0722 * c_bg).clamp(1e-6)
+        denom = (0.299 * c_rg + 0.587 + 0.114 * c_bg).clamp(1e-6)
         s_green_linear = s_g_linear / denom
         s_c_pred = s_green_linear * c_pred
 

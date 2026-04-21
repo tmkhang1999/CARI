@@ -1,12 +1,4 @@
-"""
-Lightweight SPADE normalization module.
-Applied in Dec C only, after CCR attention, using raw resized seg map.
-(plan Section 2.4)
-
-Input: integer class-ID segmentation map (N, H, W) or (N, 1, H, W).
-The seg map is nearest-resized to match the decoder feature spatial size,
-then embedded via a small learned conv before producing gamma/beta.
-"""
+"""Lightweight additive SPADE module used by decoder-C."""
 
 import torch
 import torch.nn as nn
@@ -14,10 +6,7 @@ import torch.nn.functional as F
 
 
 class SPADE(nn.Module):
-    """
-    Standard SPADE (not SPADE ResBlk).
-    Accepts integer seg maps, embeds them, and produces per-class affine modulation.
-    """
+    """Additive SPADE residual: x + beta(embed(one_hot(seg)))."""
 
     def __init__(self, num_channels, num_classes=41, hidden_channels=64):
         """
@@ -27,15 +16,15 @@ class SPADE(nn.Module):
             hidden_channels: intermediate conv width.
         """
         super().__init__()
-        self.norm = nn.InstanceNorm2d(num_channels, affine=False)
 
         # Learnable class embedding: class ID → num_classes one-hot → hidden
         self.embed = nn.Sequential(
             nn.Conv2d(num_classes, hidden_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
         )
-        self.gamma = nn.Conv2d(hidden_channels, num_channels, kernel_size=3, padding=1)
         self.beta = nn.Conv2d(hidden_channels, num_channels, kernel_size=3, padding=1)
+        nn.init.zeros_(self.beta.weight)
+        nn.init.zeros_(self.beta.bias)
 
         self.num_classes = num_classes
 
@@ -74,7 +63,5 @@ class SPADE(nn.Module):
             return x
 
         h = self.embed(seg_oh)
-        gamma = self.gamma(h)
         beta = self.beta(h)
-        x_norm = self.norm(x)
-        return x_norm * (1.0 + gamma) + beta
+        return x + beta

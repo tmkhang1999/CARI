@@ -41,9 +41,7 @@ class FlexibleLoss(nn.Module):
         self.lambda_perceptual = config.get('lambda_perceptual', 0.05)
         self.lambda_dssim = config.get('lambda_dssim', 0.4)
         self.lambda_semvar = config.get('lambda_semvar', 0.0)
-        self.lambda_recon = config.get('lambda_recon', 0.2)
-        self.lambda_recon_color = config.get('lambda_recon_color', 1.0)
-        self.enable_dssim_a_d = config.get('enable_dssim_a_d', True)
+        self.enable_dssim_a_d = config.get('enable_dssim_a_d', False)
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
         self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22])
@@ -93,83 +91,94 @@ class FlexibleLoss(nn.Module):
         return self.dssim_base_window.expand(channels, 1, -1, -1).contiguous()
 
     def _compute_dssim(self, pred, target, window_size=11):
-        """DSSIM = (1 - SSIM) / 2."""
+        """Memory-efficient DSSIM = (1 - SSIM) / 2."""
         pred = pred.to(torch.float32)
         target = target.to(torch.float32)
-        C1 = 0.01 ** 2
-        C2 = 0.03 ** 2
+        C1, C2 = 0.01 ** 2, 0.03 ** 2
         C = pred.shape[1]
         window = self._get_dssim_window(C).to(device=pred.device, dtype=pred.dtype)
-
         pad = window_size // 2
+
+        # Filter means
         mu1 = F.conv2d(pred, window, padding=pad, groups=C)
         mu2 = F.conv2d(target, window, padding=pad, groups=C)
+        mu1_mu2 = mu1 * mu2
+        mu1_sq = mu1.pow(2)
+        mu2_sq = mu2.pow(2)
 
-        mu1_sq, mu2_sq, mu1_mu2 = mu1 ** 2, mu2 ** 2, mu1 * mu2
+        # Filter variances
         sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C) - mu1_sq
         sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C) - mu2_sq
-        sigma1_sq = sigma1_sq.clamp_min(0.0)
-        sigma2_sq = sigma2_sq.clamp_min(0.0)
         sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C) - mu1_mu2
 
-        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
-                   ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-        return ((1.0 - ssim_map) / 2.0).mean()
+        # Combined calculation to minimize intermediate buffers
+        num = (2 * mu1_mu2 + C1) * (2 * sigma12 + C2)
+        den = (mu1_sq + mu2_sq + C1) * (sigma1_sq.clamp_min(0.0) + sigma2_sq.clamp_min(0.0) + C2)
+        
+        ssim_map = num / den
+        return (0.5 - 0.5 * ssim_map).mean()
 
     # ------------------------------------------------------------------
     # Per-decoder losses
     # ------------------------------------------------------------------
 
-    def loss_reconstruction_sc(self, a_d_pred, d_g_pred, xi_pred, rgb, valid_mask, m_albedo):
-        if m_albedo.sum() == 0:
-            return (a_d_pred * 0.0).sum(), {}
-            
-        route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
-        mask = valid_mask.float() * route
 
-        # Reconstruct S_c from Dec A and Dec B
-        s_g = (1.0 / (d_g_pred.clamp(1e-6) + 1e-6)) - 1.0
-        c_rg = (1.0 - xi_pred[:, 0:1]) / (xi_pred[:, 0:1].clamp(1e-6) + 1e-6)
-        c_bg = (1.0 - xi_pred[:, 1:2]) / (xi_pred[:, 1:2].clamp(1e-6) + 1e-6)
+    def _compute_scale_and_shift(self, prediction, target, mask):
+        pred = prediction.squeeze(1)
+        tgt = target.squeeze(1)
+        msk = mask.squeeze(1)
         
-        # Invert the luminance formula: S_g = 0.2126 * S_R + 0.7152 * S_G + 0.0722 * S_B
-        denom = (0.2126 * c_rg + 0.7152 + 0.0722 * c_bg).clamp(1e-6)
-        s_green = s_g / denom
-        
-        c = torch.cat([c_rg, torch.ones_like(c_rg), c_bg], dim=1)
-        s_c_linear = (s_green * c).clamp(0.0, 20.0)
-        
-        recon = a_d_pred * s_c_linear
-        
-        l1 = self._masked_l1(recon, rgb, mask)
-        return l1, {'loss_recon_l1': l1.detach()}
+        a_00 = torch.sum(msk * pred * pred, (1, 2))
+        a_01 = torch.sum(msk * pred, (1, 2))
+        a_11 = torch.sum(msk, (1, 2))
+
+        b_0 = torch.sum(msk * pred * tgt, (1, 2))
+        b_1 = torch.sum(msk * tgt, (1, 2))
+
+        x_0 = torch.zeros_like(b_0)
+        x_1 = torch.zeros_like(b_1)
+
+        det = a_00 * a_11 - a_01 * a_01
+        valid = det != 0
+
+        x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
+        x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
+
+        return x_0.view(-1, 1, 1, 1), x_1.view(-1, 1, 1, 1)
 
     def loss_a(self, D_g_pred, D_g_star, valid_mask):
         """
         Dec A loss: Gray shading in inverse space.
         Always active on valid pixels when pseudo-GT albedo is available.
+        Uses scale-and-shift invariant MSE (SSI-MSE).
         """
         mask = valid_mask.float()
-        l1 = self._masked_l1(D_g_pred, D_g_star, mask)
+        
+        scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
+        scale = F.relu(scale)
+        D_g_pred_ssi = D_g_pred * scale + shift
+        
+        mse = self._masked_mse(D_g_pred_ssi, D_g_star, mask)
         
         if self.lambda_msg > 0:
-            msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
+            msg = self.msg_loss(D_g_pred_ssi * mask, D_g_star * mask)
         else:
             msg = D_g_pred.new_tensor(0.0)
 
         # Conditionally restore DSSIM for sharp cast shadows
         if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+            dssim = self._compute_dssim(D_g_pred_ssi * mask, D_g_star * mask)
         else:
             dssim = D_g_pred.new_tensor(0.0)
         
-        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
+        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
         
         details = {
-            'loss_a_l1': l1.detach(),
-            'loss_a_msg': msg.detach(),
+            'loss_a_mse': mse.detach(),
         }
-        if self.enable_dssim_a_d:
+        if self.lambda_msg > 0:
+            details['loss_a_msg'] = msg.detach()
+        if self.enable_dssim_a_d and self.lambda_dssim > 0:
             details['loss_a_dssim'] = dssim.detach()
             
         return total, details
@@ -181,28 +190,43 @@ class FlexibleLoss(nn.Module):
         Always active on valid pixels when pseudo-GT albedo is available.
         """
         mask = valid_mask.float()
-
         mse = self._masked_mse(xi_pred, xi_star, mask)
-        return mse
+
+        if self.lambda_msg > 0:
+            msg = self.msg_loss(xi_pred * mask, xi_star * mask)
+        else:
+            msg = xi_pred.new_tensor(0.0)
+
+        total = mse + self.lambda_msg * msg
+        details = {
+            'loss_b_mse': mse.detach(),
+        }
+        if self.lambda_msg > 0:
+            details['loss_b_msg'] = msg.detach()
+        return total, details
 
 
     def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
         """Dec C loss with per-term details for logging/debugging."""
         zero = (a_d_pred * 0.0).sum()
         if m_albedo.sum() == 0:
-            return zero, {
-                'loss_c_l1': zero,
-                'loss_c_msg': zero,
-                'loss_c_tv': zero,
-                'loss_c_perceptual': zero,
-                'loss_c_dssim': zero,
-                'loss_c_semvar': zero,
-            }
+            details = {'loss_c_mse': zero}
+            if self.lambda_msg > 0:
+                details['loss_c_msg'] = zero
+            if self.lambda_tv > 0 and self.tv_type is not None:
+                details['loss_c_tv'] = zero
+            if self.lambda_perceptual > 0:
+                details['loss_c_perceptual'] = zero
+            if self.lambda_dssim > 0:
+                details['loss_c_dssim'] = zero
+            if self.lambda_semvar > 0:
+                details['loss_c_semvar'] = zero
+            return zero, details
 
         route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
 
-        l1 = self._masked_l1(a_d_pred, A_d_star, mask)
+        mse = self._masked_mse(a_d_pred, A_d_star, mask)
         
         if self.lambda_msg > 0:
             msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
@@ -236,7 +260,7 @@ class FlexibleLoss(nn.Module):
             dssim = zero
 
         total = (
-            l1
+            mse
             + self.lambda_msg * msg
             + self.lambda_tv * tv
             + self.lambda_perceptual * perceptual
@@ -244,64 +268,81 @@ class FlexibleLoss(nn.Module):
         )
 
         details = {
-            'loss_c_l1': l1.detach(),
-            'loss_c_msg': msg.detach(),
-            'loss_c_tv': tv.detach(),
-            'loss_c_perceptual': perceptual.detach(),
-            'loss_c_dssim': dssim.detach(),
-            'loss_c_semvar': zero.detach(),
+            'loss_c_mse': mse.detach(),
         }
+        if self.lambda_msg > 0:
+            details['loss_c_msg'] = msg.detach()
+        if self.lambda_tv > 0 and self.tv_type is not None:
+            details['loss_c_tv'] = tv.detach()
+        if self.lambda_perceptual > 0:
+            details['loss_c_perceptual'] = perceptual.detach()
+        if self.lambda_dssim > 0:
+            details['loss_c_dssim'] = dssim.detach()
+        if self.lambda_semvar > 0:
+            details['loss_c_semvar'] = zero.detach()
         return total, details
 
     def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask):
-        """Encourage piece-wise constant albedo within selected semantic regions."""
-        if seg_map is None:
+        """
+        Targeted semantic variance loss.
+        Vectorized across pixels and filtered by self.semantic_var_classes 
+        to avoid expensive O(N) unique() calls.
+        """
+        if seg_map is None or not self.semantic_var_classes:
             return (a_d_pred * 0.0).sum()
 
-        if seg_map.ndim == 4 and seg_map.shape[1] == 1:
-            seg_map = seg_map[:, 0]
-        valid = valid_mask.bool()
+        B, C, H, W = a_d_pred.shape
+        if seg_map.ndim == 4:
+            seg_map = seg_map.squeeze(1)
+        valid = valid_mask.bool().squeeze(1)
 
-        total = (a_d_pred * 0.0).sum()
+        total_var = a_d_pred.new_tensor(0.0)
         count = 0
-        target_set = set(int(x) for x in self.semantic_var_classes)
-
-        for b in range(a_d_pred.shape[0]):
-            seg_b = seg_map[b]
-            valid_b = valid[b, 0]
-            for label in torch.unique(seg_b):
-                label_i = int(label.item())
-                if target_set and label_i not in target_set:
+        
+        # Iterate only over target classes (e.g. wall, floor, ceiling)
+        for label_val in self.semantic_var_classes:
+            # mask: (B, H, W)
+            mask = (seg_map == label_val) & valid
+            
+            # Use bool any() to skip batch items without this label efficiently
+            has_label = mask.any(dim=1).any(dim=1) # (B,)
+            for b in torch.where(has_label)[0]:
+                m = mask[b]
+                n_pix = int(m.sum())
+                if n_pix < 16: # skip tiny regions
                     continue
-                pix = (seg_b == label) & valid_b
-                n = int(pix.sum().item())
-                if n < 10:
-                    continue
-                vals = a_d_pred[b, :, pix]
+                
+                # vals: (3, N_pixels)
+                vals = a_d_pred[b, :, m]
                 mu = vals.mean(dim=1, keepdim=True)
-                total = total + ((vals - mu) ** 2).mean()
+                total_var = total_var + ((vals - mu) ** 2).mean()
                 count += 1
 
         if count == 0:
             return (a_d_pred * 0.0).sum()
-        return total / float(count)
+        return total_var / float(count)
 
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
-        L_D = M_diffuse * ( ||π − π*||₁ + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
+        L_D = M_diffuse * ( MSE(π, π*) + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
         Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
         with no additional conversion.
         No reconstruction loss — avoids absorbing specular residual R.
         """
         if m_diffuse.sum() == 0:
             zero = (pi_pred * 0.0).sum()
-            return zero, {'loss_d_l1': zero, 'loss_d_msg': zero, 'loss_d_dssim': zero}
+            details = {'loss_d_mse': zero}
+            if self.lambda_msg > 0:
+                details['loss_d_msg'] = zero
+            if self.enable_dssim_a_d and self.lambda_dssim > 0:
+                details['loss_d_dssim'] = zero
+            return zero, details
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
 
-        l1 = self._masked_l1(pi_pred, pi_star, mask)
+        mse = self._masked_mse(pi_pred, pi_star, mask)
         
         if self.lambda_msg > 0:
             msg = self.msg_loss(pi_pred * mask, pi_star * mask)
@@ -313,13 +354,14 @@ class FlexibleLoss(nn.Module):
         else:
             dssim = pi_pred.new_tensor(0.0)
         
-        total = l1 + self.lambda_msg * msg + self.lambda_dssim * dssim
+        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
         
         details = {
-            'loss_d_l1': l1.detach(),
-            'loss_d_msg': msg.detach(),
+            'loss_d_mse': mse.detach(),
         }
-        if self.enable_dssim_a_d:
+        if self.lambda_msg > 0:
+            details['loss_d_msg'] = msg.detach()
+        if self.enable_dssim_a_d and self.lambda_dssim > 0:
             details['loss_d_dssim'] = dssim.detach()
             
         return total, details
@@ -347,8 +389,6 @@ class FlexibleLoss(nn.Module):
                 lc_var = self._loss_semantic_variance(predictions['a_d'], seg_map, valid_mask)
                 lc = lc + self.lambda_semvar * lc_var
                 lc_details['loss_c_semvar'] = lc_var.detach()
-            else:
-                lc_details['loss_c_semvar'] = zero.detach()
                 
             # LNorm is intentionally disabled for V11 because it can leak colored illumination into albedo.
         else:
@@ -361,50 +401,22 @@ class FlexibleLoss(nn.Module):
         else:
             ld = zero
             ld_details = {}
-            
-        # 3. Diffuse Reconstruction Loss (Anchor using GT product, NOT I)
-        if targets.get('A_d_star') is not None and targets.get('pi_star') is not None and self.lambda_recon > 0.0:
-            if m_diffuse.sum() > 0:
-                s_d_pred = (1.0 / (predictions['pi'] + 1e-6)) - 1.0
-                s_d_pred = s_d_pred.clamp(0.0, 20.0)
-                s_d_star = (1.0 / (targets['pi_star'] + 1e-6)) - 1.0
-                recon_pred = predictions['a_d'] * s_d_pred
-                # Reconstruct the true latent diffuse RGB rather than forcing inclusion of specular residuals.
-                recon_target = targets['A_d_star'] * s_d_star
-                
-                route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
-                mask = valid_mask.float() * route
-                l_recon = self._masked_l1(recon_pred, recon_target, mask)
-            else:
-                l_recon = zero
-        else:
-            l_recon = zero
 
         la, la_details = zero, {}
-        lb = zero
+        lb, lb_details = zero, {}
         
         if self.w_a > 0.0 and 'd_g' in predictions and targets.get('D_g_star') is not None:
             la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
             la = self.w_a * la
 
         if self.w_b > 0.0 and 'xi' in predictions and targets.get('xi_star') is not None:
-            lb = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask)
+            lb, lb_details = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask)
             lb = self.w_b * lb
 
-        loss_total = la + lb + lc + ld + (self.lambda_recon * l_recon)
+        lc = self.w_c * lc
+        ld = self.w_d * ld
+        loss_total = la + lb + lc + ld
         
-        if 'd_g' in predictions and 'xi' in predictions and rgb is not None and self.lambda_recon_color > 0.0:
-            la_s, da_s = self.loss_reconstruction_sc(
-                predictions['a_d'],
-                predictions['d_g'],
-                predictions['xi'],
-                rgb,
-                valid_mask,
-                m_albedo
-            )
-            loss_total = loss_total + self.lambda_recon_color * la_s
-            ld_details.update(da_s)
-
         out = {
             # Keep both keys for compatibility with old and new callers.
             'loss': loss_total,
@@ -413,9 +425,10 @@ class FlexibleLoss(nn.Module):
             'loss_b': lb,
             'loss_c': lc,
             'loss_d': ld,
-            'loss_recon': l_recon,
         }
+        
         out.update(la_details)
+        out.update(lb_details)
         out.update(lc_details)
         out.update(ld_details)
         return out

@@ -32,15 +32,29 @@ NO need to flatten or merge directories.
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Fix ModuleNotFoundError when running as a standalone script
+_project_root = Path(__file__).resolve().parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import glob
 import threading
+import random
 import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 from torch.utils.data import Dataset
 import json
 from collections import OrderedDict
+from src.data.augmentations import (
+    random_hue_saturation_shifting,
+    random_scaling_red_blue_channels,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +164,7 @@ class HypersimDataset(Dataset):
         strict_split: bool = True,
         max_hdf5_retries: int = 1,
         skip_corrupt_samples: bool = True,
+        augment_train: bool = True,
     ):
         self.root_dir = root_dir
         self.split = split
@@ -164,6 +179,7 @@ class HypersimDataset(Dataset):
         self.strict_split = bool(strict_split)
         self.max_hdf5_retries = max(0, int(max_hdf5_retries))
         self.skip_corrupt_samples = bool(skip_corrupt_samples)
+        self.augment_train = bool(augment_train)
 
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._lock = threading.Lock()
@@ -445,7 +461,7 @@ class HypersimDataset(Dataset):
             sky_mask = (rid != -1)
         else:
             sky_mask = np.ones(rgb.shape[:2], dtype=bool)
-        alb_mask = alb.min(axis=-1) > 0.01       # reject near-zero per-channel albedo
+        alb_mask = alb.min(axis=-1) > 0.004       # reject near-zero per-channel albedo
         valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
@@ -472,8 +488,8 @@ class HypersimDataset(Dataset):
 
         # ── Crop policy ───────────────────────────────────────────────────────
         H, W = combined.shape[:2]
-        max_size = min(H, W)
-        min_size = max(int(0.6 * max_size), self.input_size)
+        max_crop = min(H, W)
+        min_crop = 128
 
         crop_mode = self.crop_mode_train if self.split == 'train' else self.crop_mode_val
         if crop_mode == 'hybrid':
@@ -484,11 +500,14 @@ class HypersimDataset(Dataset):
             seg_crop = seg
         else:
             if crop_mode == 'center':
-                size = max_size
-                top = max((H - size) // 2, 0)
-                left = max((W - size) // 2, 0)
+                size = max_crop
+                top = (H - size) // 2
+                left = (W - size) // 2
             else:
-                size = np.random.randint(min_size, max_size + 1) if max_size > min_size else max_size
+                if max_crop < min_crop:
+                    size = max_crop
+                else:
+                    size = np.random.randint(min_crop, max_crop + 1)
                 top = np.random.randint(0, max(1, H - size + 1))
                 left = np.random.randint(0, max(1, W - size + 1))
 
@@ -525,6 +544,22 @@ class HypersimDataset(Dataset):
                 t     = torch.flip(t,     dims=[1])   # vertical
                 seg_t = torch.flip(seg_t, dims=[1])
 
+            # V11 trains ordinal/gray-shading branch: augment albedo only,
+            # then re-derive image to preserve I = A * S.
+            if np.random.rand() > 0.5:
+                A = t[3:6]
+                S = t[6:9]
+
+                A = random_hue_saturation_shifting(A)
+                A = random_scaling_red_blue_channels(A)
+
+                t[3:6] = A
+                t[0:3] = (A * S).clamp(0, 1.0)
+
+        elif self.split == 'train' and not self.augment_train:
+            # Explicitly disabled augmentation for train
+            pass
+
         return {
             'rgb':        t[0:3],               # (3,H,W) tonemapped linear [0,1]
             'albedo_raw': t[3:6],               # (3,H,W) raw HDR  → scale_match()
@@ -556,6 +591,7 @@ def get_hypersim_loader(
     strict_split: bool = True,
     max_hdf5_retries: int = 1,
     skip_corrupt_samples: bool = True,
+    augment_train: bool = True,
     pin_memory: bool = True,
 ) -> torch.utils.data.DataLoader:
     dataset = HypersimDataset(
@@ -571,6 +607,7 @@ def get_hypersim_loader(
         strict_split=strict_split,
         max_hdf5_retries=max_hdf5_retries,
         skip_corrupt_samples=skip_corrupt_samples,
+        augment_train=augment_train,
     )
     return torch.utils.data.DataLoader(
         dataset,

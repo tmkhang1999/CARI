@@ -1,17 +1,14 @@
-# Stage 1 V10 — DSSIM Restoration & Stabilization Fixes
-# V10 Changes:
-# - Decoder A narrative: "Spatial feature modulation and robust suppression"
-#   (SFM does not rigidly 0-out features as gamma=-1 leaves the beta bias intact).
-# - DSSIM restored for Decoders A & D to enforce sharp structural boundaries.
-# - Chroma clamp raised to 100.0 to avoid washing out strong colored illuminants.
-# - Redundant stage-wise FiLM in Decoder B removed (replaced with global broadcasting).
-# - Raw CCR $1\times1$ projections explicitly zero-initialized.
+# Stage 1 V11_mix — Hypersim + MIDIntrinsics
+# - Same architectural / loss changes as V11_single
+# - Routes MID d_g_raw into Inverse Shading Target
+# - Mixed datasets during phase2
+
 model:
-  version: 10
+  version: 11
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
-  backbone_lr_multiplier: 1.0 #0.1
+  backbone_lr_multiplier: 1.0
   pretrained: true
   num_seg_classes: 41
 
@@ -57,16 +54,14 @@ loss:
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
 
-  enable_dssim_a_d: true  # Enabled as per V10 goals to restore structural boundaries
-  lambda_msg: 0.8         # Increased to capture multi-scale structural details better
-  lambda_perceptual: 0.05  # Lowered slightly to prevent perceptual artifacts taking over
-  lambda_dssim: 0.4       # Increased to strongly enforce structural edges in Shading/Albedo
+  enable_dssim_a_d: true
+  lambda_msg: 0.8
+  lambda_perceptual: 0.05
+  lambda_dssim: 0.4
 
   lambda_tv: 0.05
   lambda_semvar: 0.4
 
-  lambda_recon: 0        # Diffuse physics target anchor
-  lambda_recon_color: 0  # Enabled! Forces Decoders B & C to represent True Input including specularities
 
   tv_type: 'segmentation'
   tv_target_classes: [1, 2, 22]

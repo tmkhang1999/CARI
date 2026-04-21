@@ -11,12 +11,19 @@ class SpatialFeatureModulation(nn.Module):
     Supports both amplification and suppression (gamma in [-1, 1] after tanh).
     """
 
-    def __init__(self, x_channels, prior_channels, hidden_channels=128, gamma_scale=1.0):
+    def __init__(self, x_channels, prior_channels, hidden_channels=None, gamma_scale=1.0):
         super().__init__()
         self.gamma_scale = float(gamma_scale)
+
+        if hidden_channels is None:
+            hidden_channels = min(prior_channels, x_channels // 2)
+            hidden_channels = max(hidden_channels, 64)
+
         self.proj = nn.Sequential(
-            nn.Conv2d(prior_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.Conv2d(prior_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(hidden_channels),
             nn.ReLU(inplace=True),
+            # Final projection predicts gamma and beta (2 * x_channels)
             nn.Conv2d(hidden_channels, x_channels * 2, kernel_size=3, padding=1),
         )
 
