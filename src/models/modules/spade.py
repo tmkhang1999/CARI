@@ -16,17 +16,18 @@ class SPADE(nn.Module):
             hidden_channels: intermediate conv width.
         """
         super().__init__()
-
-        # Learnable class embedding: class ID → num_classes one-hot → hidden
+        self.num_classes = num_classes
+        
         self.embed = nn.Sequential(
             nn.Conv2d(num_classes, hidden_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
         )
-        self.beta = nn.Conv2d(hidden_channels, num_channels, kernel_size=3, padding=1)
-        nn.init.zeros_(self.beta.weight)
-        nn.init.zeros_(self.beta.bias)
-
-        self.num_classes = num_classes
+        # Predict BOTH gamma and beta
+        self.gamma_beta = nn.Conv2d(hidden_channels, num_channels * 2, kernel_size=3, padding=1)
+        
+        # Initialize to identity (gamma=0, beta=0)
+        nn.init.zeros_(self.gamma_beta.weight)
+        nn.init.zeros_(self.gamma_beta.bias)
 
     def _prepare_seg(self, seg, target_hw):
         """Convert seg to one-hot float at target spatial size."""
@@ -63,5 +64,7 @@ class SPADE(nn.Module):
             return x
 
         h = self.embed(seg_oh)
-        beta = self.beta(h)
-        return x + beta
+        out = self.gamma_beta(h)
+        gamma, beta = out.chunk(2, dim=1)
+        
+        return x * (1.0 + gamma) + beta
