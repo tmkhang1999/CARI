@@ -30,10 +30,10 @@ if str(SRC_DIR) not in sys.path:
 
 from data.hypersim_dataset import HypersimDataset, _compute_tonemap_scale, _load_hdf5, _tonemap_linear
 from models import (
-    IntrinsicDecompositionV6,
-    IntrinsicDecompositionV9,
-    IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11Single,
+    IntrinsicDecompositionV11Mix,
 )
+from preprocessor.compute_ccr import compute_ccr
 
 
 def parse_args():
@@ -108,24 +108,20 @@ def _resolve_device(device_arg, cuda_index):
 
 
 def _build_stage1_model(model_cfg):
-    version = float(model_cfg.get("version", 10))
+    version = str(model_cfg.get("version", "11_single")).lower()
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
         "backbone": model_cfg.get("backbone", "convnextv2_base"),
         "pretrained": model_cfg.get("pretrained", True),
         "num_seg_classes": model_cfg.get("num_seg_classes", 41),
-        # Input size is unused for full-size dynamic inference, but keep compatibility.
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
-    model_map = {
-        6: IntrinsicDecompositionV6,
-        9: IntrinsicDecompositionV9,
-        10: IntrinsicDecompositionV10,
-    }
-    if version not in model_map:
-        raise ValueError(f"Unsupported Stage1 version: {version}")
-    return model_map[version](model_config)
+    
+    if "11_mix" in version:
+        return IntrinsicDecompositionV11Mix(model_config)
+    else:
+        return IntrinsicDecompositionV11Single(model_config)
 
 
 def _select_sample(samples, sample_idx, match):
@@ -229,11 +225,14 @@ def _upsample_predictions_to_hw(predictions, out_h, out_w):
 
 
 def _try_forward_with_shape_fallback(model, batch):
-    """Run forward once; if V1 bottleneck shape mismatch appears, resize and retry."""
+    """Run forward once; if bottleneck shape mismatch appears, resize and retry."""
     try:
+        t_rgb = batch["rgb"]
+        ccr = compute_ccr(t_rgb) if hasattr(model, "with_ccr") and model.with_ccr else None
+        
         pred = model(
-            batch["rgb"],
-            **_forward_kwargs(model, batch["M_diffuse"], batch["normals"], batch["seg"], batch["valid_mask"]),
+            t_rgb,
+            **_forward_kwargs(model, batch["M_diffuse"], batch["normals"], batch["seg"], batch["valid_mask"], ccr),
         )
         return pred, None
     except RuntimeError as exc:
@@ -252,9 +251,12 @@ def _try_forward_with_shape_fallback(model, batch):
             raise
 
         resized = _resize_batch_to_hw(batch, exp_h, exp_w)
+        t_rgb_r = resized["rgb"]
+        ccr_r = compute_ccr(t_rgb_r) if hasattr(model, "with_ccr") and model.with_ccr else None
+        
         pred = model(
-            resized["rgb"],
-            **_forward_kwargs(model, resized["M_diffuse"], resized["normals"], resized["seg"], resized["valid_mask"]),
+            t_rgb_r,
+            **_forward_kwargs(model, resized["M_diffuse"], resized["normals"], resized["seg"], resized["valid_mask"], ccr_r),
         )
         reason = (
             f"Model requires fixed size due to adapter bottleneck shape; "
@@ -310,7 +312,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     }
 
 
-def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
+def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask, ccr=None):
     sig = inspect.signature(model.forward).parameters
     kwargs = {}
     if "m_diffuse" in sig:
@@ -321,6 +323,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
         kwargs["seg"] = seg
     if "valid_mask" in sig and valid_mask is not None:
         kwargs["valid_mask"] = valid_mask
+    if "ccr" in sig and ccr is not None:
+        kwargs["ccr"] = ccr
     return kwargs
 
 
@@ -331,10 +335,6 @@ def _apply_diffuse_detach(predictions, m_diffuse):
 
 
 def _masked_scale_invariant_rmse(pred, target, valid_mask, eps=1e-7):
-    """
-    Scale-invariant RMSE with outlier masking.
-    Normalizes by mean (not median) to match standard definition, but heavily relies on masking outliers.
-    """
     mask = valid_mask.bool().expand_as(pred)
 
     p = pred[mask]
@@ -358,7 +358,6 @@ def compute_ssim_bounded(pred, target, valid_mask):
     fn_p = pred_norm.detach().cpu().numpy()
     fn_t = target_norm.detach().cpu().numpy()
 
-    # Drop batch dimension when present and evaluate per-channel explicitly.
     if fn_p.ndim == 4:
         fn_p = fn_p[0]
         fn_t = fn_t[0]
@@ -374,13 +373,7 @@ def compute_ssim_bounded(pred, target, valid_mask):
     return float(ssim(fn_t, fn_p, data_range=1.0))
 
 
-
 def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid_ratio=0.5):
-    """
-    Standard Local Mean Squared Error (LMSE) with sliding window.
-    Based on Grosse et al. (2009) definition: local windows are rescaled
-    so that their mean squared magnitude is 1.
-    """
     if pred.ndim == 3: pred = pred.unsqueeze(1)
     if target.ndim == 3: target = target.unsqueeze(1)
     if valid_mask.ndim == 3: valid_mask = valid_mask.unsqueeze(1)
@@ -399,8 +392,6 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     t_u = unfold(target)      # (B, C*K*K, L)
     m_u = unfold(valid_mask.float())  # (B, 1*K*K, L)
 
-    # 3. Identify valid patches (at least 50% valid pixels)
-    # Note: mask is single channel, valid for all channels
     k2 = window_size * window_size
     valid_count = m_u.sum(dim=1)  # (B, L)
     valid_patch_mask = (valid_count > (min_valid_ratio * k2))  # (B, L)
@@ -434,53 +425,66 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid
     mse_per_patch = diff_sq.mean(dim=1)  # (B, L)
 
     # 6. Average over valid patches
-    # Flatten batch and L
     mse_flat = mse_per_patch[has_signal]
     return mse_flat.mean()
 
 
-
-def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None):
+def _get_tonemap_scale(img, percentile=99.0, valid_mask=None):
+    """Compute the 99th percentile scale for an image, respecting valid_mask."""
     if img.ndim == 4:
         img = img[0]
+    if valid_mask is not None and valid_mask.ndim == 4:
+        valid_mask = valid_mask[0]
+        
+    img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    if valid_mask is not None and valid_mask.any():
+        pixels = img[:, valid_mask.squeeze(0).bool()].reshape(-1)
+        if pixels.numel() > 10:
+            return torch.quantile(pixels, percentile / 100.0)
+    
+    return torch.quantile(img.reshape(-1), percentile / 100.0)
+
+
+def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None, valid_mask=None):
+    if img.ndim == 4:
+        img = img[0]
+    if valid_mask is not None and valid_mask.ndim == 4:
+        valid_mask = valid_mask[0]
+        
     if img.shape[0] == 1:
         img = img.repeat(3, 1, 1)
+        
     img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    
     if scale is None:
-        scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+        scale = _get_tonemap_scale(img, percentile=percentile, valid_mask=valid_mask)
+            
     scale = torch.as_tensor(scale, device=img.device, dtype=img.dtype).clamp_min(eps)
     return torch.clamp(img / scale, 0.0, 1.0)
 
 
-def _save_visual_strip(rgb, preds, gts, out_png):
+def _save_visual_strip(rgb, preds, gts, valid_mask, out_png):
     import torchvision.utils as vutils
     from PIL import Image, ImageDraw, ImageFont
 
     def gamma_correct(x):
         return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3.0)
 
-    # 1. Albedo via gamma correction (same as inference script)
-    a_d_pred_vis = gamma_correct(preds['a_d'])
-    a_d_gt_vis = gamma_correct(gts['A_d_star'])
-
-    # 2. Linear shading components
+    # 1. Linear shading components
     s_g_pred_linear = 1.0 / (preds['d_g'] + 1e-6) - 1.0
     s_g_gt_linear = 1.0 / (gts['D_g_star'] + 1e-6) - 1.0
     s_d_pred_linear = 1.0 / (preds['pi'] + 1e-6) - 1.0
     s_d_gt_linear = 1.0 / (gts['pi_star'] + 1e-6) - 1.0
 
-    # 3. Colorful shading GT/pred via inverse-domain route
+    # 2. Colorful shading GT/pred via inverse-domain route
     c_rg_gt = (1.0 - gts['xi_star'][:, 0:1]) / (gts['xi_star'][:, 0:1] + 1e-6)
     c_bg_gt = (1.0 - gts['xi_star'][:, 1:2]) / (gts['xi_star'][:, 1:2] + 1e-6)
-    
-    # Proper RGB recovery from grayscale (luminance) and chroma ratios
     denom_gt = (0.299 * c_rg_gt + 0.587 + 0.114 * c_bg_gt).clamp(1e-6)
     s_green_gt = s_g_gt_linear / denom_gt
     s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
     
-    if 's_c' in preds:
-        s_c_pred_linear = preds['s_c']
-    elif 'xi' in preds:
+    if 'xi' in preds:
         c_rg_pred = (1.0 - preds['xi'][:, 0:1]) / (preds['xi'][:, 0:1] + 1e-6)
         c_bg_pred = (1.0 - preds['xi'][:, 1:2]) / (preds['xi'][:, 1:2] + 1e-6)
         denom_pred = (0.299 * c_rg_pred + 0.587 + 0.114 * c_bg_pred).clamp(1e-6)
@@ -488,38 +492,46 @@ def _save_visual_strip(rgb, preds, gts, out_png):
         s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
     else:
         s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
-        
-    s_g_pred_vis = _vis_tonemap(s_g_pred_linear)
-    s_g_gt_vis = _vis_tonemap(s_g_gt_linear)
-    s_d_pred_vis = _vis_tonemap(s_d_pred_linear)
-    s_d_gt_vis = _vis_tonemap(s_d_gt_linear)
-    s_c_pred_vis = _vis_tonemap(s_c_pred_linear)
-    s_c_gt_vis = _vis_tonemap(s_c_gt_linear)
 
-    # Diffuse reconstruction tiles for GT and prediction rows.
+    # 3. Diffuse reconstruction
     recon_diffuse = preds['a_d'] * s_d_pred_linear
     recon_diffuse_gt = gts['A_d_star'] * s_d_gt_linear
 
-    # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
-    a_g_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_g_pred_linear + 1e-6), scale=None))
-    a_c_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_c_pred_linear + 1e-6), scale=None))
-    a_d_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_d_pred_linear + 1e-6), scale=None))
+    # 4. Joint Scaling only for Albedo (already scale-matched in linear space)
+    scale_a_d = torch.max(_get_tonemap_scale(preds['a_d'], valid_mask=valid_mask), _get_tonemap_scale(gts['A_d_star'], valid_mask=valid_mask))
+
+    s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=valid_mask)
+    s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=valid_mask)
+    s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=valid_mask)
+    s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=valid_mask)
+    s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=valid_mask)
+    s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=valid_mask)
+    recon_vis = _vis_tonemap(recon_diffuse, valid_mask=valid_mask)
+    recon_gt_vis = _vis_tonemap(recon_diffuse_gt, valid_mask=valid_mask)
+    
+    a_d_pred_vis = gamma_correct(_vis_tonemap(preds['a_d'], scale=scale_a_d, valid_mask=valid_mask))
+    a_d_gt_vis = gamma_correct(_vis_tonemap(gts['A_d_star'], scale=scale_a_d, valid_mask=valid_mask))
+
+    # Derived diagnostics
+    a_g_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_g_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
+    a_c_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_c_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
+    a_d_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_d_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
     blank_tile = torch.ones_like(a_g_derived_vis)
 
     sample_tiles = [
-        ('Tonemapped RGB', _vis_tonemap(rgb, scale=1.0)),
+        ('Input RGB', _vis_tonemap(rgb, scale=None, valid_mask=valid_mask)),
         ('Gray Shading GT', s_g_gt_vis),
         ('Colorful Shading GT', s_c_gt_vis),
         ('Diffuse Shading GT', s_d_gt_vis),
         ('Albedo GT', a_d_gt_vis),
-        ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None)),
+        ('Diffuse Recon GT', recon_gt_vis),
 
         ('', blank_tile),
         ('Gray Shading Pred', s_g_pred_vis),
         ('Colorful Shading Pred', s_c_pred_vis),
         ('Diffuse Shading Pred', s_d_pred_vis),
         ('Albedo Pred', a_d_pred_vis),
-        ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None)),
+        ('Diffuse Recon Pred', recon_vis),
 
         ('', blank_tile),
         ('Derived A_g = I/S_g', a_g_derived_vis),
@@ -674,9 +686,11 @@ def main():
         if "xi_raw" in batch:
             targets["xi_star"] = batch["xi_raw"].to(device)
 
-    # Compute metrics in inverse shading space (bounded).
+    # Compute metrics in real shading space.
     pi_pred = predictions["pi"]
     pi_gt = targets["pi_star"]
+    s_d_pred = 1.0 / (pi_pred + 1e-6) - 1.0
+    s_d_gt = 1.0 / (pi_gt + 1e-6) - 1.0
 
     valid_mask = batch["valid_mask"]
 
@@ -684,9 +698,9 @@ def main():
         "a_d_lmse": float(_compute_lmse(predictions["a_d"], targets["A_d_star"], valid_mask).item()),
         "a_d_rmse": _masked_scale_invariant_rmse(predictions["a_d"], targets["A_d_star"], valid_mask),
         "a_d_ssim": compute_ssim_bounded(predictions["a_d"][0], targets["A_d_star"][0], valid_mask[0]),
-        "s_d_lmse": float(_compute_lmse(pi_pred, pi_gt, valid_mask).item()),
-        "s_d_rmse": _masked_scale_invariant_rmse(pi_pred, pi_gt, valid_mask),
-        "s_d_ssim": compute_ssim_bounded(pi_pred[0], pi_gt[0], valid_mask[0]),
+        "s_d_lmse": float(_compute_lmse(s_d_pred, s_d_gt, valid_mask).item()),
+        "s_d_rmse": _masked_scale_invariant_rmse(s_d_pred, s_d_gt, valid_mask),
+        "s_d_ssim": compute_ssim_bounded(s_d_pred[0], s_d_gt[0], valid_mask[0]),
     }
 
 
@@ -696,7 +710,7 @@ def main():
     with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, sort_keys=True)
 
-    _save_visual_strip(batch["rgb"], predictions, targets, os.path.join(out_dir, "pred_gt_strip.png"))
+    _save_visual_strip(batch["rgb"], predictions, targets, valid_mask, os.path.join(out_dir, "pred_gt_strip.png"))
 
     print("Single-image inference completed.")
     print(f"Output dir: {out_dir}")

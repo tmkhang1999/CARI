@@ -9,7 +9,7 @@ model:
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
-  backbone_lr_multiplier: 0.5
+  backbone_lr_multiplier: 1
   pretrained: true
   num_seg_classes: 41
 
@@ -18,7 +18,7 @@ train:
   num_workers: 6
   grad_accum_steps: 4
   grad_clip_max_norm: 1.0
-  use_cosine_lr: false
+  use_cosine_lr: true
   lr_eta_min: 1.0e-7
   log_interval: 500
   val_interval_iters: 1000
@@ -31,7 +31,7 @@ train:
 
   phase1_iterations: 10000
   phase2_iterations: 15000
-  extend_iterations: 15000
+  extend_iterations: 20000
 
   sampling_weights_phase1:
     hypersim: 1

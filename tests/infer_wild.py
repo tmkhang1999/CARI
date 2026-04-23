@@ -15,9 +15,8 @@ sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 from src.models import (
-    IntrinsicDecompositionV6,
-    IntrinsicDecompositionV9,
-    IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11Single,
+    IntrinsicDecompositionV11Mix,
 )
 try:
     from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
@@ -343,31 +342,25 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
 
     # Check config
     if config and "model" in config and "version" in config["model"]:
-        return str(float(config["model"]["version"]))
+        return str(config["model"]["version"]).lower()
 
     # Fallback to checkpoint path
     ckpt_name = os.path.basename(str(checkpoint_path)).lower()
-    ckpt_dir = str(checkpoint_path).lower()
-    
-    for v in ["10", "9", "8", "7", "6", "5", "4", "3", "2.5", "2", "1"]:
-        if f"v{v}" in ckpt_name or f"/v{v}/" in ckpt_dir:
-            return v
-            
-    return "10"
+    if "mix" in ckpt_name:
+        return "11_mix"
+    return "11_single"
 
 
 def _build_model(model_config: dict, version: str, device: str):
-    version = float(version)
-    model_map = {
-        6: IntrinsicDecompositionV6,
-        9: IntrinsicDecompositionV9,
-        10: IntrinsicDecompositionV10,
-    }
-    if version not in model_map:
-        raise ValueError(f"Unsupported model version: {version}")
-    
-    model = model_map[version](model_config).to(device)
-    return model
+    v_str = str(version).lower()
+    if v_str.startswith("v"):
+        v_str = v_str[1:]
+        
+    if "mix" in v_str:
+        return IntrinsicDecompositionV11Mix(model_config).to(device)
+    else:
+        return IntrinsicDecompositionV11Single(model_config).to(device)
+
 
 # ====================================================================
 # Main Inference & Plotting
@@ -400,7 +393,6 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     # 3. Tonemap RGB for Model Input & Extractors
     tonemap_scale = _compute_tonemap_scale(rgb_linear, percentile=99.0)
     rgb_tm = _tonemap_linear(rgb_linear, percentile=99.0, scale=tonemap_scale)
-    rgb_tm_tensor = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float()
     
     # Surface Normal Extractor needs display-ready image (sRGB-like mapped)
     normals = get_normals_metric3d(rgb_tm, device)
@@ -411,16 +403,12 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     if seg_nyu40.shape != (H, W):
         seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST)
 
-    ccr = compute_ccr(rgb_tm_tensor).squeeze(0).permute(1, 2, 0).cpu().numpy()
-    # CCR Normalization across domains to match V10/V11 training
-    ccr = ccr / (np.std(ccr, axis=(0, 1), keepdims=True) + 1e-6)
-
     # 4. To Tensors
     t_rgb = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float().to(device)
     t_normals = torch.from_numpy(normals).permute(2, 0, 1).unsqueeze(0).float().to(device)
     t_seg = torch.from_numpy(seg_nyu40).unsqueeze(0).unsqueeze(0).long().to(device)
     t_masks = torch.ones((1, 1, H, W), dtype=torch.bool).to(device)
-    t_ccr = torch.from_numpy(ccr).permute(2, 0, 1).unsqueeze(0).float().to(device)
+    t_ccr = compute_ccr(t_rgb)
 
     # Pad to stride-multiple to avoid decoder concat mismatches on odd resolutions.
     stride = 32
@@ -453,6 +441,8 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     def to_np(t): return t.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
+    ccr = to_np(t_ccr[:, :, :H, :W]) if t_ccr is not None else None
+
     # Get predictions
     pred_ad = to_np(preds['a_d'])                 # Albedo
     if pred_ad.shape[-1] == 1:
@@ -470,9 +460,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     pred_sg = 1.0 / np.clip(pred_dg_inv, 1e-6, 1.0) - 1.0
     pred_sd = 1.0 / np.clip(pred_pi_inv, 1e-6, 1.0) - 1.0
     
-    if 's_c' in preds:
-        pred_sc = to_np(preds['s_c']) 
-    elif 'xi' in preds:
+    if 'xi' in preds:
         xi_np = to_np(preds['xi'])
         c_rg = (1.0 - xi_np[..., 0:1]) / (xi_np[..., 0:1] + 1e-6)
         c_bg = (1.0 - xi_np[..., 1:2]) / (xi_np[..., 1:2] + 1e-6)
@@ -520,8 +508,6 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     # Colorize maps
     seg_rgb = NYU40_COLORS[seg_nyu40.flatten()].reshape(H, W, 3) / 255.0
     normals_rgb = np.clip((normals + 1.0) / 2.0, 0.0, 1.0)
-    ccr_mag = np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
-    ccr_vmax = float(np.percentile(ccr_mag, 99.0)) + 1e-6
     
     # Hide all axes initially
     for r in range(3):
@@ -532,7 +518,10 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     _show(axes[0,0], _gamma_correct(rgb_tm), "Input RGB")
     _show(axes[0,1], normals_rgb, "Normals (Metric3D)")
     _show(axes[0,2], seg_rgb, "Segmentation (NYU40)")
-    _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
+    if ccr is not None:
+        ccr_mag = np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
+        ccr_vmax = float(np.percentile(ccr_mag, 99.0)) + 1e-6
+        _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
     # axes[0,4] is left empty
 
     # ROW 2: S_g_pred, S_c_Pred, S_d_pred, A_d_pred, Diffuse_recon_pred
@@ -552,15 +541,16 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     plt.savefig(out_path, facecolor="#111111", dpi=150)
     print(f"Done! Saved visualization strip to {out_path}")
 
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True, type=str, help="Path to external image")
-    parser.add_argument("--checkpoint", default="checkpoints/v10/checkpoint_latest.pth", type=str)
+    parser.add_argument("--checkpoint", default="checkpoints/v11/checkpoint_latest.pth", type=str)
     parser.add_argument(
         "--model_version",
         default="auto",
-        choices=["auto", "10"],
+        choices=["auto", "11", "11_single", "11_mix"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     parser.add_argument("--device", default="cuda", type=str, help="Device string, e.g. cpu, cuda, cuda:1")

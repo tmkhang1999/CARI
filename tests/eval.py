@@ -24,9 +24,8 @@ if str(SRC_DIR) not in sys.path:
 
 from data.hypersim_dataset import get_hypersim_loader
 from models import (
-    IntrinsicDecompositionV6,
-    IntrinsicDecompositionV9,
-    IntrinsicDecompositionV10,
+    IntrinsicDecompositionV11Single,
+    IntrinsicDecompositionV11Mix,
 )
 
 
@@ -91,7 +90,7 @@ def compute_targets(predictions, rgb, albedo_raw, valid_mask, illum_raw=None, m_
     }
 
 
-def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
+def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask, ccr):
     sig = inspect.signature(model.forward).parameters
     kwargs = {}
     if 'm_diffuse' in sig:
@@ -102,6 +101,8 @@ def _forward_kwargs(model, m_diffuse, normals, seg, valid_mask):
         kwargs['seg'] = seg
     if 'valid_mask' in sig and valid_mask is not None:
         kwargs['valid_mask'] = valid_mask
+    if 'ccr' in sig and ccr is not None:
+        kwargs['ccr'] = ccr
     return kwargs
 
 
@@ -109,17 +110,6 @@ def _apply_diffuse_detach(predictions, m_diffuse):
     mask = m_diffuse.view(-1, 1, 1, 1).to(predictions['pi'].device)
     predictions['pi'] = predictions['pi'] * mask + predictions['pi'].detach() * (1.0 - mask)
     return predictions
-
-
-def _masked_norm(pred, target, valid_mask, eps=1e-7):
-    v = valid_mask.bool().expand_as(pred)
-    p = pred[v]
-    t = target[v]
-    if p.numel() == 0:
-        return None, None
-    p = p / (p.median() + eps)
-    t = t / (t.median() + eps)
-    return p, t
 
 
 def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10, min_valid_ratio=0.5):
@@ -211,9 +201,8 @@ def compute_ssim_bounded(pred, target, valid_mask):
     return float(ssim(fn_t, fn_p, data_range=1.0))
 
 
-
 def build_stage1_model(model_cfg):
-    version = float(model_cfg.get("version", 10))
+    version = str(model_cfg.get("version", "11_single")).lower()
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -222,14 +211,11 @@ def build_stage1_model(model_cfg):
         "num_seg_classes": model_cfg.get("num_seg_classes", 41),
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
-    model_map = {
-        6: IntrinsicDecompositionV6,
-        9: IntrinsicDecompositionV9,
-        10: IntrinsicDecompositionV10,
-    }
-    if version not in model_map:
-        raise ValueError(f"Unsupported Stage1 version: {version}")
-    return model_map[version](model_config)
+    
+    if "11_mix" in version:
+        return IntrinsicDecompositionV11Mix(model_config)
+    else:
+        return IntrinsicDecompositionV11Single(model_config)
 
 
 def evaluate_model(model, dataloader, device, max_batches=0):
@@ -262,8 +248,11 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             normals = batch.get('normals')
             if normals is not None:
                 normals = normals.to(device)
+            ccr = batch.get('ccr')
+            if ccr is not None:
+                ccr = ccr.to(device)
 
-            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask))
+            predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, valid_mask, ccr))
             predictions = _apply_diffuse_detach(predictions, m_diffuse)
             targets = compute_targets(
                 predictions,
@@ -279,36 +268,27 @@ def evaluate_model(model, dataloader, device, max_batches=0):
             if 'xi_raw' in batch:
                 targets['xi_star'] = batch['xi_raw'].to(device)
 
-            # Evaluate shading in inverse space (bounded).
-            pi_pred = predictions['pi']
-            pi_gt = targets['pi_star']
-
             has_dg = 'd_g' in predictions
             has_xi = 'xi' in predictions
+            
             if has_dg and 's_g_lmse' not in metrics:
                 metrics.update({'s_g_lmse': [], 's_g_rmse': [], 's_g_ssim': []})
             if has_xi and 'xi_mse' not in metrics:
                 metrics.update({'xi_mse': []})
 
-            if batch_idx == 0 and has_dg:
-                d_g_gt = targets['D_g_star']
-                print(f"Sanity Check [Batch 0]:")
-                print(f"D_g_gt range: {d_g_gt.min().item():.4f} to {d_g_gt.max().item():.4f}")
-                print(f"D_g_star range: {targets['D_g_star'].min().item():.4f} to {targets['D_g_star'].max().item():.4f}")
-
-            for i in range(rgb.shape[0]):
-                vm = valid_mask[i:i+1] # (1, 1, H, W)
-
+            B = rgb.shape[0]
+            for i in range(B):
+                vm = valid_mask[i:i+1]
+                
                 if has_dg:
-                    d_g_pred = predictions['d_g']
-                    d_g_gt = targets['D_g_star']
-                    metrics['s_g_lmse'].append(_compute_lmse(d_g_pred[i:i+1], d_g_gt[i:i+1], vm))
-                    metrics['s_g_rmse'].append(_masked_scale_invariant_rmse(
-                        d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                    ))
-                    metrics['s_g_ssim'].append(compute_ssim_bounded(
-                        d_g_pred[i:i+1], d_g_gt[i:i+1], vm
-                    ))
+                    d_g_pred = predictions['d_g'][i:i+1]
+                    d_g_gt = targets['D_g_star'][i:i+1]
+                    # Convert inverse shading to real shading: S = 1 / (D + eps) - 1
+                    s_g_pred = 1.0 / (d_g_pred + 1e-6) - 1.0
+                    s_g_gt = 1.0 / (d_g_gt + 1e-6) - 1.0
+                    metrics['s_g_lmse'].append(_compute_lmse(s_g_pred, s_g_gt, vm))
+                    metrics['s_g_rmse'].append(_masked_scale_invariant_rmse(s_g_pred, s_g_gt, vm))
+                    metrics['s_g_ssim'].append(compute_ssim_bounded(s_g_pred, s_g_gt, vm))
 
                 # Albedo (A_d)
                 metrics['a_d_lmse'].append(_compute_lmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm))
@@ -319,13 +299,16 @@ def evaluate_model(model, dataloader, device, max_batches=0):
                     predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
                 ))
 
-                # Diffuse Shading (inverse pi)
-                metrics['s_d_lmse'].append(_compute_lmse(pi_pred[i:i+1], pi_gt[i:i+1], vm))
+                # Diffuse Shading (real shading, converted from inverse pi)
+                # Convert inverse shading to real shading: S = 1/pi - 1
+                s_d_pred = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
+                s_d_gt = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
+                metrics['s_d_lmse'].append(_compute_lmse(s_d_pred, s_d_gt, vm))
                 metrics['s_d_rmse'].append(_masked_scale_invariant_rmse(
-                    pi_pred[i:i+1], pi_gt[i:i+1], vm
+                    s_d_pred, s_d_gt, vm
                 ))
                 metrics['s_d_ssim'].append(compute_ssim_bounded(
-                    pi_pred[i:i+1], pi_gt[i:i+1], vm
+                    s_d_pred, s_d_gt, vm
                 ))
 
                 if has_xi:
@@ -410,7 +393,7 @@ def main():
     print(f"\nTotal samples evaluated: {sample_count}\n")
 
     if 's_g_lmse' in metrics:
-        print("Gray Shading (inverse D_g):")
+        print("Gray Shading (real):")
         print(f"  LMSE: {metrics['s_g_lmse']:.6f} (mean) | {metrics.get('s_g_lmse_min', 0):.6f} (min) | {metrics.get('s_g_lmse_max', 0):.6f} (max) ± {metrics.get('s_g_lmse_std', 0):.6f}")
         print(f"  RMSE: {metrics['s_g_rmse']:.6f} (mean) | {metrics.get('s_g_rmse_min', 0):.6f} (min) | {metrics.get('s_g_rmse_max', 0):.6f} (max) ± {metrics.get('s_g_rmse_std', 0):.6f}")
         print(f"  SSIM: {metrics['s_g_ssim']:.4f} (mean) | {metrics.get('s_g_ssim_min', 0):.4f} (min) | {metrics.get('s_g_ssim_max', 0):.4f} (max) ± {metrics.get('s_g_ssim_std', 0):.4f}")
@@ -421,7 +404,7 @@ def main():
         print(f"  RMSE: {metrics['a_d_rmse']:.6f} (mean) | {metrics.get('a_d_rmse_min', 0):.6f} (min) | {metrics.get('a_d_rmse_max', 0):.6f} (max) ± {metrics.get('a_d_rmse_std', 0):.6f}")
         print(f"  SSIM: {metrics['a_d_ssim']:.4f} (mean) | {metrics.get('a_d_ssim_min', 0):.4f} (min) | {metrics.get('a_d_ssim_max', 0):.4f} (max) ± {metrics.get('a_d_ssim_std', 0):.4f}")
 
-    print("\nDiffuse Shading (inverse pi):")
+    print("\nDiffuse Shading (real):")
     if 's_d_lmse' in metrics:
         print(f"  LMSE: {metrics['s_d_lmse']:.6f} (mean) | {metrics.get('s_d_lmse_min', 0):.6f} (min) | {metrics.get('s_d_lmse_max', 0):.6f} (max) ± {metrics.get('s_d_lmse_std', 0):.6f}")
         print(f"  RMSE: {metrics['s_d_rmse']:.6f} (mean) | {metrics.get('s_d_rmse_min', 0):.6f} (min) | {metrics.get('s_d_rmse_max', 0):.6f} (max) ± {metrics.get('s_d_rmse_std', 0):.6f}")

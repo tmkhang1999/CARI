@@ -37,39 +37,36 @@ from models import (
 )
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
-from data.midintrinsic_dataset import MIDIntrinsicDataset
 
 
 TB_TAGS = {
-    'loss_total': '01_Losses/0_Total',
-    'loss_a': '01_Losses/A_1_Total',
-    'loss_a_mse': '01_Losses/A_2_MSE',
-    'loss_a_msg': '01_Losses/A_3_MSG',
-    'loss_b': '01_Losses/B_1_Total',
-    'loss_b_mse': '01_Losses/B_2_MSE',
-    'loss_b_msg': '01_Losses/B_3_MSG',
-    'loss_c': '01_Losses/C_1_Total',
-    'loss_c_mse': '01_Losses/C_2_MSE',
-    'loss_c_msg': '01_Losses/C_3_MSG',
-    'loss_c_perceptual': '01_Losses/C_4_Perceptual',
-    'loss_c_tv': '01_Losses/C_5_TV',
-    'loss_c_dssim': '01_Losses/C_6_DSSIM',
-    'loss_c_semvar': '01_Losses/C_7_SemVar',
-    'loss_d': '01_Losses/D_1_Total',
-    'loss_d_mse': '01_Losses/D_2_MSE',
-    'loss_d_msg': '01_Losses/D_3_MSG',
-    'loss_recon': '01_Losses/R_1_Recon_Diffuse',
-    'loss_recon_l1': '01_Losses/R_2_Recon_Color',
-    'a_d_lmse': '02_Albedo_Ad/1_lmse',
-    'a_d_rmse': '02_Albedo_Ad/2_rmse',
-    'a_d_ssim': '02_Albedo_Ad/3_ssim',
-    's_g_lmse': '03_GrayShading_Sg/1_lmse',
-    's_g_rmse': '03_GrayShading_Sg/2_rmse',
-    's_g_ssim': '03_GrayShading_Sg/3_ssim',
-    'xi_mse': '04_Chroma_xi/1_mse',
-    's_d_lmse': '05_DiffuseShading_Sd/1_lmse',
-    's_d_rmse': '05_DiffuseShading_Sd/2_rmse',
-    's_d_ssim': '05_DiffuseShading_Sd/3_ssim',
+    'loss_total': '1. Losses/Total_all',
+    'loss_a': '1. Losses/A_total',
+    'loss_a_mse': '1. Losses/A_MSE',
+    'loss_a_msg': '1. Losses/A_MSG',
+    'loss_b': '1. Losses/B_total',
+    'loss_b_mse': '1. Losses/B_MSE',
+    'loss_b_msg': '1. Losses/B_MSG',
+    'loss_c': '1. Losses/C_total',
+    'loss_c_mse': '1. Losses/C_MSE',
+    'loss_c_msg': '1. Losses/C_MSG',
+    'loss_c_perceptual': '1. Losses/C_Perceptual',
+    'loss_c_dssim': '1. Losses/C_DSSIM',
+    'loss_c_tv': '1. Losses/C_TV',
+    'loss_c_semvar': '1. Losses/C_SemVar',
+    'loss_d': '1. Losses/D_total',
+    'loss_d_mse': '1. Losses/D_MSE',
+    'loss_d_msg': '1. Losses/D_MSG',
+    's_g_lmse': '2. Metrics/Grayshading_Sg_LMSE',
+    's_g_rmse': '2. Metrics/Grayshading_Sg_RMSE',
+    's_g_ssim': '2. Metrics/Grayshading_Sg_SSIM',
+    'xi_mse': '2. Metrics/Chroma_xi_MSE',
+    'a_d_lmse': '2. Metrics/Albedo_Ad_LMSE',
+    'a_d_rmse': '2. Metrics/Albedo_Ad_RMSE',
+    'a_d_ssim': '2. Metrics/Albedo_Ad_SSIM',
+    's_d_lmse': '2. Metrics/DiffuseShading_Sd_LMSE',
+    's_d_rmse': '2. Metrics/DiffuseShading_Sd_RMSE',
+    's_d_ssim': '2. Metrics/DiffuseShading_Sd_SSIM',
 }
 
 
@@ -79,13 +76,12 @@ def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
         'loss_total',
         'loss_a', 'loss_a_mse', 'loss_a_msg',
         'loss_b', 'loss_b_mse', 'loss_b_msg',
-        'loss_c', 'loss_c_mse', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_tv', 'loss_c_dssim',
+        'loss_c', 'loss_c_mse', 'loss_c_msg', 'loss_c_perceptual', 'loss_c_dssim', 'loss_c_tv',
         'loss_c_semvar',
         'loss_d', 'loss_d_mse', 'loss_d_msg',
-        'loss_recon', 'loss_recon_l1',
-        'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_g_lmse', 's_g_rmse', 's_g_ssim',
         'xi_mse',
+        'a_d_lmse', 'a_d_rmse', 'a_d_ssim',
         's_d_lmse', 's_d_rmse', 's_d_ssim',
     ]
     for key in ordered:
@@ -124,45 +120,36 @@ def compute_targets(predictions, batch):
     A_star = c * albedo_raw
     A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
     
-    # Get pre-computed targets from batch if available (from MIDIntrinsics etc)
-    d_g_raw = batch.get('d_g_raw', None)
-    xi_raw = batch.get('xi_raw', None)
+    # Colorful shading (S_c) is directly derived from RGB and Albedo: I / A*
+    S_c_star = rgb / (A_star + eps)
+    S_c_star = torch.nan_to_num(S_c_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+
+    # Grayscale and chroma targets depend on colorful shading (contains speculars & gloss)
+    S_g_star = (
+        0.299 * S_c_star[:, 0:1]
+        + 0.587 * S_c_star[:, 1:2]
+        + 0.114 * S_c_star[:, 2:3]
+    )
+    D_g_star = 1.0 / (S_g_star + 1.0)
     
-    if d_g_raw is not None and xi_raw is not None:
-        D_g_star = d_g_raw.to(device)
-        xi_star = xi_raw.to(device)
-        pi_star = torch.ones_like(rgb) # Decoder D is mostly skipped for MIDIntrinsic
-    else:
-        # Colorful shading (S_c) is directly derived from RGB and Albedo: I / A*
-        S_c_star = rgb / (A_star + eps)
-        S_c_star = torch.nan_to_num(S_c_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    C_RG = S_c_star[:, 0:1] / (S_c_star[:, 1:2] + eps)
+    C_BG = S_c_star[:, 2:3] / (S_c_star[:, 1:2] + eps)
+    xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
+    xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
 
-        # Grayscale and chroma targets depend on colorful shading (contains speculars & gloss)
-        S_g_star = (
-            0.299 * S_c_star[:, 0:1]
-            + 0.587 * S_c_star[:, 1:2]
-            + 0.114 * S_c_star[:, 2:3]
-        )
-        D_g_star = 1.0 / (S_g_star + 1.0)
+    # Diffuse shading target (pi_star) routes from direct illumination GT if available
+    S_d_star = S_c_star
+    illum_raw = batch.get('illum_raw', None)
+    m_diffuse = batch.get('M_diffuse', None)
+    
+    if illum_raw is not None and m_diffuse is not None:
+        route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
+        illum = torch.nan_to_num(illum_raw.to(device), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        S_d_star = route * illum + (1.0 - route) * S_c_star
         
-        C_RG = S_c_star[:, 0:1] / (S_c_star[:, 1:2] + eps)
-        C_BG = S_c_star[:, 2:3] / (S_c_star[:, 1:2] + eps)
-        xi_star = torch.cat([1.0 / (C_RG + 1.0), 1.0 / (C_BG + 1.0)], dim=1)
-        xi_star = torch.nan_to_num(xi_star, nan=0.5, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-
-        # Diffuse shading target (pi_star) routes from direct illumination GT if available
-        S_d_star = S_c_star
-        illum_raw = batch.get('illum_raw', None)
-        m_diffuse = batch.get('M_diffuse', None)
-        
-        if illum_raw is not None and m_diffuse is not None:
-            route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
-            illum = torch.nan_to_num(illum_raw.to(device), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-            S_d_star = route * illum + (1.0 - route) * S_c_star
-            
-        pi_star = 1.0 / (S_d_star + 1.0)
-        pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
-        D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+    pi_star = 1.0 / (S_d_star + 1.0)
+    pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+    D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
         
     return {
         'D_g_star': D_g_star,
@@ -523,6 +510,23 @@ def _compute_ssim_bounded(pred, target, valid_mask):
     return _pytorch_ssim_skimage_approx(pred_n, tgt_n, data_range=1.0)
 
 
+def _get_tonemap_scale(img, percentile=99.0, valid_mask=None):
+    """Compute the 99th percentile scale for an image, respecting valid_mask."""
+    if img.ndim == 4:
+        img = img[0]
+    if valid_mask is not None and valid_mask.ndim == 4:
+        valid_mask = valid_mask[0]
+        
+    img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    if valid_mask is not None and valid_mask.any():
+        pixels = img[:, valid_mask.squeeze(0).bool()].reshape(-1)
+        if pixels.numel() > 10:
+            return torch.quantile(pixels, percentile / 100.0)
+    
+    return torch.quantile(img.reshape(-1), percentile / 100.0)
+
+
 def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None, valid_mask=None):
     """Inference-style tonemap to [0,1] per sample with NaN/Inf guards.
     Use scale=1.0 for already-tonemapped RGB inputs; keep scale=None for
@@ -539,14 +543,7 @@ def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None, valid_mask=None):
     img = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
     
     if scale is None:
-        if valid_mask is not None and valid_mask.any():
-            pixels = img[:, valid_mask.squeeze(0).bool()].reshape(-1)
-            if pixels.numel() > 10:
-                scale = torch.quantile(pixels, percentile / 100.0)
-            else:
-                scale = torch.quantile(img.reshape(-1), percentile / 100.0)
-        else:
-            scale = torch.quantile(img.reshape(-1), percentile / 100.0)
+        scale = _get_tonemap_scale(img, percentile=percentile, valid_mask=valid_mask)
             
     scale = torch.as_tensor(scale, device=img.device, dtype=img.dtype).clamp_min(eps)
     return torch.clamp(img / scale, 0.0, 1.0)
@@ -605,22 +602,22 @@ def _log_val_examples(
         return tile
 
     layout_names = [
-        'Tonemapped RGB',
+        'Input RGB',
         'Gray Shading GT',
-        'Colorful Shading GT',
-        'Diffuse Shading GT',
+        'Colorful GT',
+        'Diffuse GT',
         'Albedo GT',
         'Diffuse Recon GT',
         '',
         'Gray Shading Pred',
-        'Colorful Shading Pred',
-        'Diffuse Shading Pred',
+        'Colorful Pred',
+        'Diffuse Pred',
         'Albedo Pred',
         'Diffuse Recon Pred',
         '',
         'Derived A_g = I/S_g',
         'Derived A_c = I/S_c',
-        'Derived A_d = I/S_d',
+        '',
         '',
         '',
     ]
@@ -643,23 +640,17 @@ def _log_val_examples(
     
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
-        named_tiles = []
+        v_mask = targets['valid_mask'][i:i+1]
 
-        # 1. Albedo via gamma correction (same as inference script)
-        a_d_pred_vis = _gamma_correct(predictions['a_d'][i:i+1])
-        a_d_gt_vis = _gamma_correct(targets['A_d_star'][i:i+1])
-
-        # 2. Linear shading components
+        # 1. Linear shading components
         s_g_pred_linear = 1.0 / (predictions['d_g'][i:i+1] + 1e-6) - 1.0
         s_g_gt_linear = 1.0 / (targets['D_g_star'][i:i+1] + 1e-6) - 1.0
         s_d_pred_linear = 1.0 / (predictions['pi'][i:i+1] + 1e-6) - 1.0
         s_d_gt_linear = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
 
-        # 3. Colorful shading GT/pred via inverse-domain route
+        # 2. Colorful shading GT/pred via inverse-domain route
         c_rg_gt = (1.0 - targets['xi_star'][i:i+1, 0:1]) / (targets['xi_star'][i:i+1, 0:1] + 1e-6)
         c_bg_gt = (1.0 - targets['xi_star'][i:i+1, 1:2]) / (targets['xi_star'][i:i+1, 1:2] + 1e-6)
-        
-        # Proper RGB recovery from grayscale (luminance) and chroma ratios
         denom_gt = (0.299 * c_rg_gt + 0.587 + 0.114 * c_bg_gt).clamp(1e-6)
         s_green_gt = s_g_gt_linear / denom_gt
         s_c_gt_linear = torch.cat([c_rg_gt * s_green_gt, s_green_gt, c_bg_gt * s_green_gt], dim=1)
@@ -674,45 +665,50 @@ def _log_val_examples(
             s_c_pred_linear = torch.cat([c_rg_pred * s_green_pred, s_green_pred, c_bg_pred * s_green_pred], dim=1)
         else:
             s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
-            
-        v_mask = targets['valid_mask'][i:i+1]
-        
-        s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=v_mask)
-        s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=v_mask)
-        s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=v_mask)
-        s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=v_mask)
-        s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=v_mask)
-        s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=v_mask)
 
-        # Diffuse reconstruction tiles for GT and prediction rows.
+        # 3. Diffuse reconstruction
         recon_diffuse = predictions['a_d'][i:i+1] * s_d_pred_linear
         recon_diffuse_gt = targets['A_d_star'][i:i+1] * s_d_gt_linear
 
-        # Derived albedo diagnostics: A = I / S for gray/colorful/diffuse shading.
+        # 4. Joint Scaling only for Albedo (already scale-matched in linear space)
+        scale_a_d = torch.max(_get_tonemap_scale(predictions['a_d'][i:i+1], valid_mask=v_mask), _get_tonemap_scale(targets['A_d_star'][i:i+1], valid_mask=v_mask))
+
+        s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=v_mask)
+        s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=v_mask)
+        s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=v_mask)
+        s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=v_mask)
+        s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=v_mask)
+        s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=v_mask)
+        recon_vis = _vis_tonemap(recon_diffuse, valid_mask=v_mask)
+        recon_gt_vis = _vis_tonemap(recon_diffuse_gt, valid_mask=v_mask)
+        
+        a_d_pred_vis = _gamma_correct(_vis_tonemap(predictions['a_d'][i:i+1], scale=scale_a_d))
+        a_d_gt_vis = _gamma_correct(_vis_tonemap(targets['A_d_star'][i:i+1], scale=scale_a_d))
+
+        # 5. Diagnostics
         a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
         a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
-        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
         blank_tile = torch.ones_like(a_g_derived_vis)
 
         sample_tiles = [
-            ('Tonemapped RGB', _vis_tonemap(rgb[i:i+1], scale=1.0)),
+            ('Input RGB', _vis_tonemap(rgb[i:i+1], scale=None)), # Auto-exposure for HDR Input
             ('Gray Shading GT', s_g_gt_vis),
-            ('Colorful Shading GT', s_c_gt_vis),
-            ('Diffuse Shading GT', s_d_gt_vis),
+            ('Colorful GT', s_c_gt_vis),
+            ('Diffuse GT', s_d_gt_vis),
             ('Albedo GT', a_d_gt_vis),
-            ('Diffuse Recon GT', _vis_tonemap(recon_diffuse_gt, scale=None, valid_mask=v_mask)),
+            ('Diffuse Recon GT', recon_gt_vis),
 
             ('', blank_tile),
             ('Gray Shading Pred', s_g_pred_vis),
-            ('Colorful Shading Pred', s_c_pred_vis),
-            ('Diffuse Shading Pred', s_d_pred_vis),
+            ('Colorful Pred', s_c_pred_vis),
+            ('Diffuse Pred', s_d_pred_vis),
             ('Albedo Pred', a_d_pred_vis),
-            ('Diffuse Recon Pred', _vis_tonemap(recon_diffuse, scale=None, valid_mask=v_mask)),
+            ('Diffuse Recon Pred', recon_vis),
 
             ('', blank_tile),
             ('Derived A_g = I/S_g', a_g_derived_vis),
             ('Derived A_c = I/S_c', a_c_derived_vis),
-            ('Derived A_d = I/S_d', a_d_derived_vis),
+            ('', blank_tile),
             ('', blank_tile),
             ('', blank_tile),
         ]
@@ -816,32 +812,21 @@ def validate(
     val_example_indices=None,
     max_val_batches=None,
     compute_val_losses=True,
-    dataset_name='hypersim',
-    tb_prefix='10_Val',
-    example_root='06_Examples',
+    example_root='3_Examples',
 ):
     """
-    Validation for ablation comparison on fixed Hypersim val split.
+    Validation on fixed Hypersim val split.
     Logs both losses and per-decoder metrics from scale-matched targets.
-    
-    Args:
-        val_example_indices: list of global sample indices to log, e.g., [100, 110, 120].
-                           If provided, val_example_images is ignored.
-        max_val_batches: int or None. If set, scalar losses/metrics are computed on first N
-                batches for speed. When val_example_indices is provided, extra batches
-                may still be scanned to collect requested visualization samples.
-        compute_val_losses: bool. If False, skip criterion loss computation in validation
-                    and log only metrics for faster val runs.
     """
     model.eval()
     total_loss = {}
     if compute_val_losses:
         total_loss = {
+            'loss_total': 0.0,
             'loss_a': 0.0,
             'loss_b': 0.0,
             'loss_c': 0.0,
             'loss_d': 0.0,
-            'loss_total': 0.0,
         }
     total_metric = {
         's_g_lmse': 0.0,
@@ -871,12 +856,7 @@ def validate(
 
     with torch.no_grad():
         metric_batches_to_process = len(dataloader) if max_val_batches is None else min(max_val_batches, len(dataloader))
-        # If explicit indices are requested, keep scanning until all are found (or dataloader ends),
-        # but only accumulate scalar metrics for the first `max_val_batches` batches.
-        if use_indices:
-            progress_total = len(dataloader)
-        else:
-            progress_total = metric_batches_to_process
+        progress_total = len(dataloader) if use_indices else metric_batches_to_process
 
         for batch_idx, batch in enumerate(tqdm(dataloader, desc='Validation', total=progress_total)):
             metric_budget_reached = max_val_batches is not None and batch_idx >= max_val_batches
@@ -885,10 +865,6 @@ def validate(
                 break
 
             rgb = batch['rgb'].to(device, non_blocking=True)
-            albedo_raw = batch['albedo_raw'].to(device, non_blocking=True)
-            illum_raw = batch.get('illum_raw', None)
-            if illum_raw is not None:
-                illum_raw = illum_raw.to(device, non_blocking=True)
             valid_mask = batch['valid_mask'].to(device, non_blocking=True)
             m_diffuse = batch['M_diffuse'].float().to(device, non_blocking=True)
             m_albedo = batch['M_albedo'].float().to(device, non_blocking=True)
@@ -904,16 +880,11 @@ def validate(
             targets = compute_targets(predictions, batch)
 
             # Collect samples at specified indices.
-            # Prefer true dataset sample indices when available so logging is robust to
-            # sampler behavior and variable batch composition.
             batch_size = rgb.shape[0]
             sample_indices = batch.get('sample_idx', None)
             if use_indices:
                 for i in range(batch_size):
-                    if sample_indices is not None:
-                        global_idx = int(sample_indices[i].item())
-                    else:
-                        global_idx = int(batch_idx * dataloader.batch_size + i)
+                    global_idx = int(sample_indices[i].item()) if sample_indices is not None else int(batch_idx * dataloader.batch_size + i)
                     if global_idx in indices_to_collect:
                         collected_samples[global_idx] = {
                             'rgb': rgb[i:i+1],
@@ -930,12 +901,9 @@ def validate(
                     predictions,
                     targets,
                     max_items=val_example_images,
-                    full_rgb_list=None,
-                    example_root=f'{example_root}/{dataset_name}',
+                    example_root=example_root,
                 )
 
-            # When max_val_batches is set and we are scanning extra batches only to satisfy
-            # val_example_indices, skip scalar loss/metric accumulation for those extra batches.
             if metric_budget_reached:
                 continue
 
@@ -943,117 +911,55 @@ def validate(
 
             if compute_val_losses:
                 losses = criterion(
-                    predictions,
-                    targets,
-                    m_diffuse,
-                    m_albedo,
-                    valid_mask,
-                    _loss_seg(model, seg),
-                    normals=normals,
-                    rgb=rgb,
+                    predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg),
+                    normals=normals, rgb=rgb
                 )
                 for k, v in losses.items():
-                    if k not in total_loss:
-                        total_loss[k] = 0.0
-                    total_loss[k] += v.item()
+                    if k in total_loss:
+                        total_loss[k] += v.item()
 
-            # Evaluate in inverse shading space (bounded) to match decoder outputs.
+            # Evaluate metrics
             d_g_star = targets['D_g_star']
             pi_star = targets['pi_star']
             d_g_pred = predictions['d_g']
             pi_pred = predictions['pi']
 
-            batch_size = rgb.shape[0]
             for i in range(batch_size):
                 vm = valid_mask[i:i+1]
+                s_g_pred = 1.0 / (d_g_pred[i:i+1] + 1e-6) - 1.0
+                s_g_gt = 1.0 / (d_g_star[i:i+1] + 1e-6) - 1.0
+                total_metric['s_g_lmse'] += _compute_lmse(s_g_pred, s_g_gt, vm).item()
+                total_metric['s_g_rmse'] += _masked_scale_invariant_rmse(s_g_pred, s_g_gt, vm).item()
+                total_metric['s_g_ssim'] += _compute_ssim_bounded(s_g_pred, s_g_gt, vm)
 
-                # Dec A metrics on inverse gray shading D_g
-                total_metric['s_g_lmse'] += _compute_lmse(
-                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
-                ).item()
-                total_metric['s_g_rmse'] += _masked_scale_invariant_rmse(
-                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
-                ).item()
-                total_metric['s_g_ssim'] += _compute_ssim_bounded(
-                    d_g_pred[i:i+1], d_g_star[i:i+1], vm
-                )
-
-                # Dec B metric on xi.
-                # vm is (1,1,H,W); expand_as makes it (1,2,H,W) to match xi channels.
-                # Numerator and denominator both sum over channel and spatial dims,
-                # so this computes mean squared error per xi element.
                 if 'xi' in predictions:
                     xi_v = vm.expand_as(predictions['xi'][i:i+1]).float()
                     xi_err = ((predictions['xi'][i:i+1] - targets['xi_star'][i:i+1]) ** 2 * xi_v).sum() / (xi_v.sum() + 1e-7)
                     total_metric['xi_mse'] += xi_err.item()
 
-                # Dec C metrics on A_d
-                total_metric['a_d_lmse'] += _compute_lmse(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
-                ).item()
-                total_metric['a_d_rmse'] += _masked_scale_invariant_rmse(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
-                ).item()
-                total_metric['a_d_ssim'] += _compute_ssim_bounded(
-                    predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm
-                )
+                total_metric['a_d_lmse'] += _compute_lmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm).item()
+                total_metric['a_d_rmse'] += _masked_scale_invariant_rmse(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm).item()
+                total_metric['a_d_ssim'] += _compute_ssim_bounded(predictions['a_d'][i:i+1], targets['A_d_star'][i:i+1], vm)
 
-                # Dec D metrics on inverse diffuse shading pi (count only when diffuse GT is available)
                 if m_diffuse[i].item() > 0.5:
-                    s_d_lmse = _compute_lmse(
-                        pi_pred[i:i+1], pi_star[i:i+1], vm
-                    )
-                    s_d_rmse = _masked_scale_invariant_rmse(
-                        pi_pred[i:i+1], pi_star[i:i+1], vm
-                    )
-                    s_d_ssim = torch.as_tensor(_compute_ssim_bounded(
-                        pi_pred[i:i+1], pi_star[i:i+1], vm
-                    ), device=rgb.device)
-
-                    # Guard against NaN/Inf so TensorBoard tags are always emitted.
-                    if torch.isfinite(s_d_lmse):
-                        total_metric['s_d_lmse'] += s_d_lmse.item()
-                    if torch.isfinite(s_d_rmse):
-                        total_metric['s_d_rmse'] += s_d_rmse.item()
-                    if torch.isfinite(s_d_ssim):
-                        total_metric['s_d_ssim'] += s_d_ssim.item()
-
+                    total_metric['s_d_lmse'] += _compute_lmse(pi_pred[i:i+1], pi_star[i:i+1], vm).item()
+                    total_metric['s_d_rmse'] += _masked_scale_invariant_rmse(pi_pred[i:i+1], pi_star[i:i+1], vm).item()
+                    total_metric['s_d_ssim'] += _compute_ssim_bounded(pi_pred[i:i+1], pi_star[i:i+1], vm)
                     n_s_d_samples += 1
                 n_samples += 1
 
-    if use_indices:
-        missing_indices = sorted(indices_to_collect - set(collected_samples.keys()))
-        if missing_indices:
-            print(
-                "[validate] requested val_example_indices not found in this run: "
-                f"{missing_indices}"
-            )
-
-    # Log collected samples for index-based visualization
     if use_indices and collected_samples:
-        # Sort by global index for consistent logging order
-        sorted_indices = sorted(collected_samples.keys())
-        for global_idx in sorted_indices:
+        for global_idx in sorted(collected_samples.keys()):
             sample = collected_samples[global_idx]
             _log_val_examples(
-                writer,
-                global_step,
-                sample['rgb'],
-                sample['predictions'],
-                sample['targets'],
-                max_items=1,
-                full_rgb_list=None,
-                sample_index=global_idx,
-                example_root=f'{example_root}/{dataset_name}',
+                writer, global_step, sample['rgb'], sample['predictions'], sample['targets'],
+                max_items=1, sample_index=global_idx, example_root=example_root,
             )
 
-    # Losses are averaged over batches because criterion returns batch-level scalars.
     if compute_val_losses:
         denom_loss = max(processed_batches, 1)
-        for k in total_loss:
-            total_loss[k] /= denom_loss
+        for k in total_loss: total_loss[k] /= denom_loss
 
-    # Metrics are accumulated per sample in the inner loop, so normalize by sample count.
     denom_metric = max(n_samples, 1)
     for k in total_metric:
         if k.startswith('s_d_'):
@@ -1062,26 +968,11 @@ def validate(
             total_metric[k] /= denom_metric
 
     val_out = {}
-    if compute_val_losses:
-        val_out.update(total_loss)
+    if compute_val_losses: val_out.update(total_loss)
     val_out.update(total_metric)
-    tag_prefix = f'{tb_prefix}/{dataset_name}'
-    _log_ordered_scalars(writer, val_out, global_step, tag_prefix=tag_prefix)
-    writer.add_scalar(f'{tag_prefix}/00_Meta/n_samples', float(n_samples), global_step)
-    writer.add_scalar(f'{tag_prefix}/00_Meta/n_s_d_samples', float(n_s_d_samples), global_step)
-    if compute_val_losses:
-        writer.add_scalar(f'{tag_prefix}/00_Meta/n_batches', float(processed_batches), global_step)
+    _log_ordered_scalars(writer, val_out, global_step, tag_prefix=None)
 
-
-    # Return combined dict for terminal reporting.
-    out = {}
-    if compute_val_losses:
-        out.update(total_loss)
-    out.update(total_metric)
-    out['__n_samples'] = float(n_samples)
-    out['__n_s_d_samples'] = float(n_s_d_samples)
-    out['__n_batches'] = float(processed_batches)
-    return out
+    return val_out
 
 
 def _phase_schedule(train_cfg, global_step):
@@ -1095,7 +986,7 @@ def _phase_schedule(train_cfg, global_step):
 
 
 def build_stage1_model(config):
-    version = float(config['model'].get('version', 10))
+    version = float(config['model'].get('version', 11))
     model_cfg = {
         'z_channels': config['model'].get('z_channels', 1024),
         'freeze_stages': config['model'].get('freeze_stages', [1, 2]),
@@ -1104,25 +995,13 @@ def build_stage1_model(config):
         'num_seg_classes': config['model'].get('num_seg_classes', 41),
         'input_size': int(config['train'].get('input_size', 384)),
     }
-    datasets_cfg = [str(x).lower() for x in config.get('data', {}).get('datasets', [])]
-    use_v11_mix = 'midintrinsic' in datasets_cfg
 
-    if use_v11_mix:
-        model_map = {
-            10.0: IntrinsicDecompositionV10,
-            11.0: IntrinsicDecompositionV11Mix,
-        }
-    else:
-        model_map = {
-            9.0: IntrinsicDecompositionV9,
-            10.0: IntrinsicDecompositionV10,
-            11.0: IntrinsicDecompositionV11Single,
-        }
+    model_map = {
+        11.0: IntrinsicDecompositionV11Single,
+    }
 
     if version not in model_map:
-        mode = "mix" if use_v11_mix else "single"
-        supported = ", ".join(str(int(v)) for v in sorted(model_map.keys()))
-        raise ValueError(f"Unsupported Stage1 version for {mode} mode: {version}. Supported: {supported}")
+        raise ValueError(f"Unsupported Stage1 version for single dataset mode: {version}. Supported: 11")
     return model_map[version](model_cfg)
 
 
@@ -1281,8 +1160,7 @@ def main():
     val_cache_max_items = max(0, int(config['data'].get('val_cache_max_items', 64)))
     val_batch_size = int(config['train']['batch_size'])
 
-    val_loaders = {}
-    val_loaders['hypersim'] = get_hypersim_loader(
+    val_loader = get_hypersim_loader(
         root_dir=hypersim_root,
         batch_size=val_batch_size,
         split='val',
@@ -1299,33 +1177,7 @@ def main():
         skip_corrupt_samples=hypersim_skip_corrupt_samples,
     )
 
-    validate_midintrinsic = bool(config['data'].get('validate_midintrinsic', True))
-    if 'midintrinsic' in enabled and validate_midintrinsic:
-        mid_val_ds = MIDIntrinsicDataset(
-            root_dir=mid_root,
-            split='val',
-            input_size=int(config['train']['input_size']),
-            cache_max_items=int(config['data'].get('mid_val_cache_max_items', val_cache_max_items)),
-            crop_mode_train=crop_mode_train,
-            crop_mode_val=crop_mode_val,
-            geometry_root=config['data'].get('mid_geometry_root', None),
-            require_geometry=bool(config['data'].get('mid_require_geometry', False)),
-        )
-        val_loaders['midintrinsic'] = DataLoader(
-            mid_val_ds,
-            batch_size=val_batch_size,
-            shuffle=False,
-            num_workers=val_num_workers,
-            pin_memory=True,
-            drop_last=False,
-            persistent_workers=(val_num_workers > 0),
-            prefetch_factor=4 if val_num_workers > 0 else None,
-        )
-
-    phase1_iters = int(config['train'].get('phase1_iterations', 20000))
-    phase2_iters = int(config['train'].get('phase2_iterations', 50000))
-    extend_iters = int(config['train'].get('extend_iterations', phase2_iters))
-    max_iters = max(phase2_iters, extend_iters)
+    max_iters = int(config['train'].get('max_iterations', 50000))
     grad_accum_steps = max(1, int(config['train'].get('grad_accum_steps', 1)))
     grad_clip_max_norm = float(config['train'].get('grad_clip_max_norm', 1.0))
     use_cosine_lr = bool(config['train'].get('use_cosine_lr', True))
@@ -1337,15 +1189,11 @@ def main():
     max_val_batches = config['train'].get('max_val_batches', None)
     if max_val_batches is not None:
         max_val_batches = int(max_val_batches)
-        if max_val_batches <= 0:
-            max_val_batches = None
     compute_val_losses = bool(config['train'].get('compute_val_losses', True))
 
     start_step = 0
     resume_path = _resolve_resume_path(args.resume, args.auto_resume, ckpt_dir)
     if resume_path:
-        if not os.path.exists(resume_path):
-            raise FileNotFoundError(f"Checkpoint not found: {resume_path}")
         start_step, _ = load_checkpoint(model, optimizer, resume_path, map_location=device)
         start_step += 1
 
@@ -1353,67 +1201,22 @@ def main():
     if use_cosine_lr:
         total_opt_steps = max(1, math.ceil(max_iters / grad_accum_steps))
         completed_opt_steps = max(0, start_step // grad_accum_steps)
-        # When optimizer state cannot be restored (e.g., param-group mismatch),
-        # PyTorch requires `initial_lr` to exist for last_epoch >= 0.
         for pg in optimizer.param_groups:
             pg.setdefault('initial_lr', pg['lr'])
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=total_opt_steps,
-            eta_min=lr_eta_min,
-            last_epoch=completed_opt_steps - 1,
+            optimizer, T_max=total_opt_steps, eta_min=lr_eta_min, last_epoch=completed_opt_steps - 1
         )
 
-    print(f"Curriculum: phase1 [0,{phase1_iters}), phase2 [{phase1_iters},{phase2_iters})")
     print(f"Start step: {start_step}, max step: {max_iters}")
-    print(f"Optimizer controls: grad_accum_steps={grad_accum_steps}, grad_clip_max_norm={grad_clip_max_norm}, cosine_lr={use_cosine_lr}, lr_eta_min={lr_eta_min}")
 
-    running = {'loss_a': 0.0, 'loss_b': 0.0, 'loss_c': 0.0, 'loss_d': 0.0, 'loss_total': 0.0}
-    last_phase = None
+    running = {'loss_total': 0.0, 'loss_a': 0.0, 'loss_b': 0.0, 'loss_c': 0.0, 'loss_d': 0.0}
 
-    print("Dataset summary:")
-    print(f"  Train samples (hypersim): {hypersim_effective} (base={hypersim_total})")
-    print(f"  Val samples (hypersim): {len(val_loaders['hypersim'].dataset)}")
-
-    if 'midintrinsic' in val_loaders:
-        print(f"  Val samples (midintrinsic): {len(val_loaders['midintrinsic'].dataset)}")
-    else:
-        print("  Val samples (midintrinsic): disabled")
-
-    # Explicitly notify dataset-size cap used for this run (0 means full train split).
-    if hypersim_train_max_images > 0:
-        print(
-            f"Hypersim cap active: hypersim_train_max_images={hypersim_train_max_images} "
-            f"-> effective {hypersim_effective}/{hypersim_total} train images"
-        )
-    else:
-        print(
-            f"Hypersim cap inactive: hypersim_train_max_images=0 "
-            f"-> using full train split ({hypersim_effective}/{hypersim_total})"
-        )
-
-    train_pbar = tqdm(
-        range(start_step, max_iters),
-        desc='Training',
-        total=max_iters - start_step,
-        dynamic_ncols=True,
-    )
-
-    t_start = time.time()
-    io_time_total = 0.0
-    compute_time_total = 0.0
-    optimizer.zero_grad(set_to_none=True)
-
-
+    train_pbar = tqdm(range(start_step, max_iters), desc='Training', total=max_iters - start_step, dynamic_ncols=True)
 
     scaler = GradScaler('cuda')
 
     for step in train_pbar:
-        t0 = time.time()
         batch = next(train_iter)
-        dataset_name = 'hypersim'
-        t1 = time.time()
-        
         losses = train_one_step(model, batch, criterion, device)
         loss = losses['loss_total'] / float(grad_accum_steps)
         
@@ -1427,113 +1230,38 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             if scheduler is not None:
                 scheduler.step()
-        t2 = time.time()
         
-        io_time_total += (t1 - t0)
-        compute_time_total += (t2 - t1)
-
-        train_pbar.set_postfix({
-            'ds': dataset_name,
-            'hyp_cap': (str(hypersim_train_max_images) if hypersim_train_max_images > 0 else 'all'),
-            'loss': f"{losses['loss_total'].item():.4f}",
-            'io_ms': f"{(t1-t0)*1000:.1f}",
-            'gpu_ms': f"{(t2-t1)*1000:.1f}",
-        })
+        train_pbar.set_postfix({'loss': f"{losses['loss_total'].item():.4f}"})
 
         for k in running:
-            running[k] += losses[k].item()
-
-        if step > start_step and step % 10 == 0:
-            avg_io = (io_time_total / 10) * 1000
-            avg_gpu = (compute_time_total / 10) * 1000
-            print(f"\n[Profiler Step {step}] Avg IO Wait: {avg_io:.1f} ms/batch | Avg GPU Compute: {avg_gpu:.1f} ms/batch")
-            io_time_total = 0.0
-            compute_time_total = 0.0
+            if k in losses:
+                running[k] += losses[k].item()
 
         if step % int(config['train']['log_interval']) == 0:
-            _log_ordered_scalars(writer, losses, step)
+            _log_ordered_scalars(writer, losses, step, tag_prefix=None)
             if len(optimizer.param_groups) > 1:
-                writer.add_scalar('00_Train/lr_backbone', float(optimizer.param_groups[0]['lr']), step)
-                writer.add_scalar('00_Train/lr_heads', float(optimizer.param_groups[1]['lr']), step)
-                writer.add_scalar('00_Train/lr', float(optimizer.param_groups[1]['lr']), step)
+                writer.add_scalar('0. Training/lr_backbone', float(optimizer.param_groups[0]['lr']), step)
+                writer.add_scalar('0. Training/lr_heads', float(optimizer.param_groups[1]['lr']), step)
             else:
-                writer.add_scalar('00_Train/lr', float(optimizer.param_groups[0]['lr']), step)
+                writer.add_scalar('0. Training/lr', float(optimizer.param_groups[0]['lr']), step)
 
-        should_validate = ((step + 1) % val_interval_iters == 0)
-        should_checkpoint = ((step + 1) % ckpt_interval_iters == 0)
-
-        # If both triggers coincide, save checkpoint first so validation runs
-        # against exactly the persisted model state.
-        if should_checkpoint:
+        if (step + 1) % ckpt_interval_iters == 0:
             avg = {k: running[k] / ckpt_interval_iters for k in running}
-            for k in running:
-                running[k] = 0.0
+            for k in running: running[k] = 0.0
             ckpt_path = os.path.join(ckpt_dir, f'checkpoint_iter_{step+1}.pth')
             save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
-            latest_path = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
-            save_checkpoint(model, optimizer, avg, config, latest_path, global_step=step)
-            
-            # Keep maximum 2 checkpoints (exclude checkpoint_latest.pth)
-            all_ckpts = [
-                os.path.join(ckpt_dir, f)
-                for f in os.listdir(ckpt_dir)
-                if f.startswith('checkpoint_iter_') and f.endswith('.pth')
-            ]
-            all_ckpts.sort(key=_extract_iter_from_name)
-            while len(all_ckpts) > 2:
-                oldest_ckpt = all_ckpts.pop(0)
-                try:
-                    os.remove(oldest_ckpt)
-                    print(f"Deleted old checkpoint: {oldest_ckpt}")
-                except Exception as e:
-                    print(f"Failed to delete {oldest_ckpt}: {e}")
+            save_checkpoint(model, optimizer, avg, config, os.path.join(ckpt_dir, 'checkpoint_latest.pth'), global_step=step)
 
-            print(f"[{step+1}] train(avg): " + ", ".join([f"{k}={v:.4f}" for k, v in avg.items()]))
-
-        if should_validate:
+        if (step + 1) % val_interval_iters == 0:
             torch.cuda.empty_cache()
-            val_reports = {}
-            for ds_name, ds_loader in val_loaders.items():
-                ds_example_indices = val_example_indices
-                if ds_name == 'midintrinsic':
-                    ds_example_indices = config['train'].get('val_example_indices_midintrinsic', [])
-
-                vloss = validate(
-                    model,
-                    ds_loader,
-                    criterion,
-                    device,
-                    step + 1,
-                    writer,
-                    val_example_images=val_example_images,
-                    val_example_indices=ds_example_indices,
-                    max_val_batches=max_val_batches,
-                    compute_val_losses=compute_val_losses,
-                    dataset_name=ds_name,
-                    tb_prefix='10_Val',
-                    example_root='06_Examples',
-                )
-                val_reports[ds_name] = vloss
-                pretty = ", ".join([f"{k}={v:.4f}" for k, v in vloss.items() if not k.startswith('__')])
-                print(f"[{step+1}] val/{ds_name}: {pretty}")
-
-            if len(val_reports) > 1:
-                combined = {}
-                total_weight = sum(max(1.0, rep.get('__n_samples', 0.0)) for rep in val_reports.values())
-                for key in TB_TAGS:
-                    vals = []
-                    for rep in val_reports.values():
-                        if key in rep:
-                            w = max(1.0, rep.get('__n_samples', 0.0))
-                            vals.append((rep[key], w))
-                    if vals:
-                        combined[key] = sum(v * w for v, w in vals) / max(total_weight, 1.0)
-
-                if combined:
-                    _log_ordered_scalars(writer, combined, step + 1, tag_prefix='10_Val/combined')
-                    writer.add_scalar('10_Val/combined/00_Meta/total_n_samples', float(total_weight), step + 1)
-                    pretty_combined = ", ".join([f"{k}={v:.4f}" for k, v in combined.items()])
-                    print(f"[{step+1}] val/combined: {pretty_combined}")
+            vloss = validate(
+                model, val_loader, criterion, device, step + 1, writer,
+                val_example_images=val_example_images, val_example_indices=val_example_indices,
+                max_val_batches=max_val_batches, compute_val_losses=compute_val_losses,
+                example_root='3. Examples',
+            )
+            pretty = ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()])
+            print(f"[{step+1}] val: {pretty}")
 
     print('Training completed')
     writer.close()
