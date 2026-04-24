@@ -182,7 +182,7 @@ def load_image(filepath):
             
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
     else:
-        # LDR Pipeline (JPEG, PNG): Invert sRGB gamma to approx linear space
+        # LDR Pipeline (JPEG, PNG, etc.): Invert sRGB gamma to approx linear space
         img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
         if img is None:
             raise ValueError(f"Could not load image at {filepath}")
@@ -193,12 +193,20 @@ def load_image(filepath):
             img = img[..., :3]
             
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
-        # Assuming 8-bit or 16-bit LDR
-        max_val = 65535.0 if img.dtype == np.uint16 else 255.0
-        rgb = rgb / max_val
-        rgb = np.power(np.clip(rgb, 0.0, 1.0), 2.2)  # linearization
         
-    # Sanitize NaNs and Infs that might come from EXR/HDR files
+        # Assuming 8-bit or 16-bit LDR
+        if img.dtype == np.uint16:
+            rgb = rgb / 65535.0
+        elif img.dtype == np.uint8:
+            rgb = rgb / 255.0
+        else:
+            # Fallback for other potential types (e.g. float in [0, 255])
+            rgb = rgb / 255.0
+            
+        # Linearization: img ** 2.2 (requested)
+        rgb = np.power(np.clip(rgb, 0.0, 1.0), 2.2)
+        
+    # Sanitize NaNs and Infs
     rgb = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0)
     return rgb
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train —  supported versions: V9 / V10 / V11
+# Train —  supported versions: V9 / V10 / V11 / V12
 #
 # Usage:
 #   bash scripts/train.sh                                  # V10 (default), CUDA auto
@@ -76,8 +76,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${VERSION}" != "9" && "${VERSION}" != "10" && "${VERSION}" != "11" ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11"
+if [[ "${VERSION}" != "9" && "${VERSION}" != "10" && "${VERSION}" != "11" && "${VERSION}" != "12" ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12"
     exit 1
 fi
 
@@ -90,6 +90,9 @@ if [[ "${VERSION}" == "11" ]]; then
         CONFIG="${ROOT_DIR}/src/configs/v11_single.yaml"
         TRAIN_SCRIPT="${ROOT_DIR}/src/train_single.py"
     fi
+elif [[ "${VERSION}" == "12" ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v12_single.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v12.py"
 else
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"  # legacy

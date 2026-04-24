@@ -455,14 +455,28 @@ class HypersimDataset(Dataset):
         norm = _sanitize_normals(norm)
 
         # ── Valid mask (before augmentation, in numpy) ────────────────────────
-        # Primary: render_entity_id != -1 (sky / invalid geometry)
-        # Albedo gate: require all albedo channels to stay above floor.
+        # Rule A: Drop Skybox using Render Entity ID
         if rid is not None:
             sky_mask = (rid != -1)
         else:
             sky_mask = np.ones(rgb.shape[:2], dtype=bool)
-        alb_mask = alb.min(axis=-1) > 0.004       # reject near-zero per-channel albedo
-        valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
+
+        # Rule B: Drop Glass and Mirrors using Semantic IDs
+        # In NYU-40: window/glass = 9, mirror = 19
+        if seg is not None:
+            glass_mirror_mask = (seg != 9) & (seg != 19)
+        else:
+            glass_mirror_mask = np.ones(rgb.shape[:2], dtype=bool)
+
+        # Rule C: Drop Absolute Dead Pixels (Mathematical Saftey)
+        # 1e-4 linear is ~0.015 in sRGB (rgb ~4). Keeps black jackets, drops void pixels.
+        alb_mask = alb.min(axis=-1) > 1e-4   
+
+        # alb_mask = alb.min(axis=-1) > 0.004       # reject near-zero per-channel albedo
+        # valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
+
+        # Combine all physical, semantic, and numerical masks
+        valid_np = (sky_mask & glass_mirror_mask & alb_mask).astype(np.float32)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
         # Use one shared percentile scale so routed illum and fallback rgb/albedo
@@ -547,14 +561,45 @@ class HypersimDataset(Dataset):
             # V11 trains ordinal/gray-shading branch: augment albedo only,
             # then re-derive image to preserve I = A * S.
             if np.random.rand() > 0.5:
-                A = t[3:6]
-                S = t[6:9]
+                # Extract components
+                I_orig = t[0:3]  # Tonemapped RGB
+                A_orig = t[3:6]  # Raw Albedo
+                S_diff = t[6:9]  # Normalized Diffuse Illum
+                
+                # RECOVER THE SPECULAR RESIDUAL (R)
+                # I = A * S + R  -->  R = I - (A * S)
+                # Clamp to 0 to prevent numerical errors
+                R_specular = (I_orig - (A_orig * S_diff)).clamp_min(0.0)
 
-                A = random_hue_saturation_shifting(A)
-                A = random_scaling_red_blue_channels(A)
+                # Mutually Exclusive Color Augmentation (Prevent unnatural deep-fried colors)
+                aug_choice = np.random.rand()
+                if aug_choice < 0.5:
+                    # 50% chance: Rotate Hue and Saturation
+                    A_new = random_hue_saturation_shifting(A_orig)
+                else:
+                    # 50% chance: Shift Red/Blue balance
+                    A_new = random_scaling_red_blue_channels(A_orig)
 
-                t[3:6] = A
-                t[0:3] = (A * S).clamp(0, 1.0)
+                # RECONSTRUCT IMAGE WITH SPECULARITIES INTACT
+                I_new = (A_new * S_diff) + R_specular
+
+                t[3:6] = A_new
+                t[0:3] = I_new.clamp(0.0, 1.0) # Safe to clamp now, speculars are preserved
+
+            # --- GLOBAL COLOR SHIFT (WHITE BALANCE AUGMENTATION) ---
+            # Extremely powerful for Decoder B (Chroma)
+            if np.random.rand() > 0.5:
+                rgb_view = t[0:3]
+                illum_view = t[6:9]
+                
+                # Generate random RGB gain
+                _, gain = random_color_shift(rgb_view, mean=0.5, std=0.05)
+                
+                # Apply to RGB (Clamped to simulate LDR camera clipping)
+                t[0:3] = (rgb_view * gain).clamp(0.0, 1.0)
+                
+                # Apply to Illumination GT (UNBOUNDED! Teaches the network to recover HDR)
+                t[6:9] = illum_view * gain
 
         elif self.split == 'train' and not self.augment_train:
             # Explicitly disabled augmentation for train

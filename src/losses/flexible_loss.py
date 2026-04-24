@@ -124,28 +124,40 @@ class FlexibleLoss(nn.Module):
     # Per-decoder losses
     # ------------------------------------------------------------------
 
-
-    def _compute_scale_only(self, prediction, target, mask):
-        """
-        Computes scale 's' that minimizes sum(mask * (s * pred - target)^2).
-        s = sum(mask * pred * target) / sum(mask * pred * pred)
-        """
+    def _compute_scale_and_shift(self, prediction, target, mask):
         pred = prediction.squeeze(1)
         tgt = target.squeeze(1)
         msk = mask.squeeze(1)
         
-        num = torch.sum(msk * pred * tgt, dim=(1, 2))
-        den = torch.sum(msk * pred * pred, dim=(1, 2))
-        
-        # Avoid div by zero, clamp minimum scale to prevent blackouts
-        scale = (num / (den + 1e-7)).clamp_min(0.05)
-        return scale.view(-1, 1, 1, 1)
+        a_00 = torch.sum(msk * pred * pred, (1, 2))
+        a_01 = torch.sum(msk * pred, (1, 2))
+        a_11 = torch.sum(msk, (1, 2))
+
+        b_0 = torch.sum(msk * pred * tgt, (1, 2))
+        b_1 = torch.sum(msk * tgt, (1, 2))
+
+        x_0 = torch.zeros_like(b_0)
+        x_1 = torch.zeros_like(b_1)
+
+        det = a_00 * a_11 - a_01 * a_01
+        valid = det != 0
+
+        x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
+        x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
+
+        return x_0.view(-1, 1, 1, 1), x_1.view(-1, 1, 1, 1)
 
     def loss_a(self, D_g_pred, D_g_star, valid_mask):
+        """
+        Dec A loss: Gray shading in inverse space.
+        Always active on valid pixels when pseudo-GT albedo is available.
+        Uses scale-and-shift invariant MSE (SSI-MSE).
+        """
         mask = valid_mask.float()
         
-        scale = self._compute_scale_only(D_g_pred, D_g_star, mask)
-        D_g_pred_ssi = D_g_pred * scale
+        scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
+        scale = F.relu(scale)
+        D_g_pred_ssi = D_g_pred * scale + shift
         
         mse = self._masked_mse(D_g_pred_ssi, D_g_star, mask)
         

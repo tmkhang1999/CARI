@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+import kornia
 
 
 def compute_ccr(rgb):
@@ -14,22 +15,28 @@ def compute_ccr(rgb):
     """
     is_numpy = isinstance(rgb, np.ndarray)
     if is_numpy:
-        # Convert H,W,3 ndarray to 1,3,H,W tensor
         img = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float()
     else:
-        img = rgb
-        if img.ndim == 3:
-            img = img.unsqueeze(0)
+        img = rgb if rgb.ndim == 4 else rgb.unsqueeze(0)
 
     device = img.device
-    eps = 1e-7
     
-    # Ensure kernel is on the same device
+    # 1. ROBUST EPSILON: 1e-3 is safe for 8-bit (1/255 = 0.0039). 
+    # This prevents noise explosion in dark LDR shadows.
+    eps = 1e-3 
+    
+    # 2. ANTI-ALIASING: Slightly blur the image to kill JPEG/Quantization noise 
+    # before computing extreme log gradients.
+    # Note: A 3x3 blur with small sigma preserves physical edges but kills noise.
+    kernel_size = (3, 3)
+    sigma = (0.5, 0.5)
+    img_smooth = kornia.filters.gaussian_blur2d(img, kernel_size, sigma)
+
     kernel = torch.tensor(
         [[0, 1, 0], [1, 0, -1], [0, -1, 0]], dtype=torch.float32, device=device
     ).view(1, 1, 3, 3)
 
-    log_img = torch.log(img + eps)
+    log_img = torch.log(img_smooth + eps)
     r, g, b = log_img[:, 0:1], log_img[:, 1:2], log_img[:, 2:3]
 
     def diff(ch):
@@ -39,8 +46,8 @@ def compute_ccr(rgb):
     log_rb = torch.clamp(diff(r) - diff(b), -1.0, 1.0)
     log_gb = torch.clamp(diff(g) - diff(b), -1.0, 1.0)
 
-    intensity = img[:, 0:1] + img[:, 1:2] + img[:, 2:3] + eps
-    norm_rgb = img / intensity
+    intensity = img_smooth[:, 0:1] + img_smooth[:, 1:2] + img_smooth[:, 2:3] + eps
+    norm_rgb = img_smooth / intensity
 
     ccr = torch.cat([log_rg, log_rb, log_gb, norm_rgb], dim=1)
 

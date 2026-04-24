@@ -21,6 +21,7 @@ class SPADE(nn.Module):
         self.embed = nn.Sequential(
             nn.Conv2d(num_classes, hidden_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(p=0.5) # <--- Reduce the dependency on class ID
         )
         # Predict BOTH gamma and beta
         self.gamma_beta = nn.Conv2d(hidden_channels, num_channels * 2, kernel_size=3, padding=1)
