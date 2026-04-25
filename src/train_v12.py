@@ -140,8 +140,12 @@ def compute_targets(predictions, batch):
     if illum_raw is not None and m_diffuse is not None:
         route = m_diffuse.view(-1, 1, 1, 1).to(device=rgb.device, dtype=rgb.dtype)
         illum = torch.nan_to_num(illum_raw.to(device), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
-        S_d_star = route * illum + (1.0 - route) * S_c_star
-        
+        # --- CRITICAL PHYSICS FIX ---
+        # Because A_star is scaled by 'c', S_d_star MUST be scaled by '1/c'
+        # This guarantees that A_star * S_d_star = I
+        illum_scaled = illum / c.clamp_min(1e-4)
+        S_d_star = route * illum_scaled + (1.0 - route) * S_c_star
+
     pi_star = 1.0 / (S_d_star + 1.0)
     pi_star = torch.nan_to_num(pi_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
     D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
@@ -665,17 +669,21 @@ def _log_val_examples(
         recon_diffuse = predictions['a_d'][i:i+1] * s_d_pred_linear
         recon_diffuse_gt = targets['A_d_star'][i:i+1] * s_d_gt_linear
 
-        # 4. Joint Scaling only for Albedo (already scale-matched in linear space)
+        # 4. Joint Scaling for all Pred/GT pairs to expose magnitude errors
         scale_a_d = torch.max(_get_tonemap_scale(predictions['a_d'][i:i+1], valid_mask=v_mask), _get_tonemap_scale(targets['A_d_star'][i:i+1], valid_mask=v_mask))
+        scale_s_g = torch.max(_get_tonemap_scale(s_g_pred_linear, valid_mask=v_mask), _get_tonemap_scale(s_g_gt_linear, valid_mask=v_mask))
+        scale_s_c = torch.max(_get_tonemap_scale(s_c_pred_linear, valid_mask=v_mask), _get_tonemap_scale(s_c_gt_linear, valid_mask=v_mask))
+        scale_s_d = torch.max(_get_tonemap_scale(s_d_pred_linear, valid_mask=v_mask), _get_tonemap_scale(s_d_gt_linear, valid_mask=v_mask))
+        scale_recon = torch.max(_get_tonemap_scale(recon_diffuse, valid_mask=v_mask), _get_tonemap_scale(recon_diffuse_gt, valid_mask=v_mask))
 
-        s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=v_mask)
-        s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=v_mask)
-        s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=v_mask)
-        s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=v_mask)
-        s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=v_mask)
-        s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=v_mask)
-        recon_vis = _vis_tonemap(recon_diffuse, valid_mask=v_mask)
-        recon_gt_vis = _vis_tonemap(recon_diffuse_gt, valid_mask=v_mask)
+        s_g_pred_vis = _vis_tonemap(s_g_pred_linear, scale=scale_s_g)
+        s_g_gt_vis = _vis_tonemap(s_g_gt_linear, scale=scale_s_g)
+        s_c_pred_vis = _vis_tonemap(s_c_pred_linear, scale=scale_s_c)
+        s_c_gt_vis = _vis_tonemap(s_c_gt_linear, scale=scale_s_c)
+        s_d_pred_vis = _vis_tonemap(s_d_pred_linear, scale=scale_s_d)
+        s_d_gt_vis = _vis_tonemap(s_d_gt_linear, scale=scale_s_d)
+        recon_vis = _vis_tonemap(recon_diffuse, scale=scale_recon)
+        recon_gt_vis = _vis_tonemap(recon_diffuse_gt, scale=scale_recon)
         
         a_d_pred_vis = _gamma_correct(_vis_tonemap(predictions['a_d'][i:i+1], scale=scale_a_d))
         a_d_gt_vis = _gamma_correct(_vis_tonemap(targets['A_d_star'][i:i+1], scale=scale_a_d))
@@ -683,10 +691,11 @@ def _log_val_examples(
         # 5. Diagnostics
         a_g_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_g_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
         a_c_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_c_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
+        a_d_derived_vis = _gamma_correct(_vis_tonemap(rgb[i:i+1] / (s_d_pred_linear + 1e-6), scale=None, valid_mask=v_mask))
         blank_tile = torch.ones_like(a_g_derived_vis)
 
         sample_tiles = [
-            ('Input RGB', _vis_tonemap(rgb[i:i+1], scale=None)), # Auto-exposure for HDR Input
+            ('Input RGB', _vis_tonemap(rgb[i:i+1], scale=None, valid_mask=v_mask)), # Auto-exposure for HDR Input
             ('Gray Shading GT', s_g_gt_vis),
             ('Colorful GT', s_c_gt_vis),
             ('Diffuse GT', s_d_gt_vis),
@@ -703,7 +712,7 @@ def _log_val_examples(
             ('', blank_tile),
             ('Derived A_g = I/S_g', a_g_derived_vis),
             ('Derived A_c = I/S_c', a_c_derived_vis),
-            ('', blank_tile),
+            ('Derived A_d = I/S_d', a_d_derived_vis),
             ('', blank_tile),
             ('', blank_tile),
         ]
@@ -718,6 +727,7 @@ def _log_val_examples(
             from PIL import ImageFont
             font = ImageFont.load_default()
 
+        named_tiles = []
         for name, tile in sample_tiles:
             try:
                 if tile is None:
@@ -972,7 +982,7 @@ def validate(
 
 def _phase_schedule(train_cfg, global_step):
     """Two-phase curriculum exactly as requested by config values."""
-    p1 = int(train_cfg.get('phase1_iterations', 20000))
+    p1 = int(train_cfg.get('phase1_iterations', 10000))
     w1 = train_cfg.get('sampling_weights_phase1', {'hypersim': 1.0, 'midintrinsic': 0.0})
     w2 = train_cfg.get('sampling_weights_phase2', {'hypersim': 0.6, 'midintrinsic': 0.4})
     if global_step < p1:
@@ -1173,7 +1183,7 @@ def main():
         skip_corrupt_samples=hypersim_skip_corrupt_samples,
     )
 
-    max_iters = int(config['train'].get('max_iterations', 50000))
+    max_iters = int(config['train'].get('max_iterations', 20000))
     grad_accum_steps = max(1, int(config['train'].get('grad_accum_steps', 1)))
     grad_clip_max_norm = float(config['train'].get('grad_clip_max_norm', 1.0))
     use_cosine_lr = bool(config['train'].get('use_cosine_lr', True))
@@ -1247,6 +1257,21 @@ def main():
             ckpt_path = os.path.join(ckpt_dir, f'checkpoint_iter_{step+1}.pth')
             save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
             save_checkpoint(model, optimizer, avg, config, os.path.join(ckpt_dir, 'checkpoint_latest.pth'), global_step=step)
+
+            # Keep maximum 2 checkpoints (exclude checkpoint_latest.pth)
+            all_ckpts = [
+                os.path.join(ckpt_dir, f)
+                for f in os.listdir(ckpt_dir)
+                if f.startswith('checkpoint_iter_') and f.endswith('.pth')
+            ]
+            all_ckpts.sort(key=_extract_iter_from_name)
+            while len(all_ckpts) > 2:
+                oldest_ckpt = all_ckpts.pop(0)
+                try:
+                    os.remove(oldest_ckpt)
+                    print(f"Deleted old checkpoint: {oldest_ckpt}")
+                except Exception as e:
+                    print(f"Failed to delete {oldest_ckpt}: {e}")
 
         if (step + 1) % val_interval_iters == 0:
             torch.cuda.empty_cache()

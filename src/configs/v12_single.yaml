@@ -22,7 +22,7 @@ train:
   val_interval_iters: 1000
   checkpoint_interval_iters: 500
   val_example_images: 3
-  val_example_indices: [120, 200, 250]
+  val_example_indices: [120, 200, 300]
   compute_val_losses: false
   seed: 42
   deterministic: true

@@ -155,20 +155,20 @@ class FlexibleLoss(nn.Module):
         """
         mask = valid_mask.float()
         
-        scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
-        scale = F.relu(scale)
-        D_g_pred_ssi = D_g_pred * scale + shift
+        # scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
+        # scale = F.relu(scale)
+        # D_g_pred_ssi = D_g_pred * scale + shift
         
-        mse = self._masked_mse(D_g_pred_ssi, D_g_star, mask)
+        mse = self._masked_mse(D_g_pred, D_g_star, mask)
         
         if self.lambda_msg > 0:
-            msg = self.msg_loss(D_g_pred_ssi * mask, D_g_star * mask)
+            msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
         else:
             msg = D_g_pred.new_tensor(0.0)
 
         # Conditionally restore DSSIM for sharp cast shadows
         if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            dssim = self._compute_dssim(D_g_pred_ssi * mask, D_g_star * mask)
+            dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
         else:
             dssim = D_g_pred.new_tensor(0.0)
         

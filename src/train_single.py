@@ -723,6 +723,7 @@ def _log_val_examples(
             from PIL import ImageFont
             font = ImageFont.load_default()
 
+        named_tiles = []
         for name, tile in sample_tiles:
             try:
                 if tile is None:

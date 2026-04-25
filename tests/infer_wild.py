@@ -17,6 +17,7 @@ from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 from src.models import (
     IntrinsicDecompositionV11Single,
     IntrinsicDecompositionV11Mix,
+    IntrinsicDecompositionV12,
 )
 try:
     from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
@@ -354,6 +355,8 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
 
     # Fallback to checkpoint path
     ckpt_name = os.path.basename(str(checkpoint_path)).lower()
+    if "v12" in ckpt_name or "/v12/" in str(checkpoint_path).lower():
+        return "12"
     if "mix" in ckpt_name:
         return "11_mix"
     return "11_single"
@@ -364,6 +367,8 @@ def _build_model(model_config: dict, version: str, device: str):
     if v_str.startswith("v"):
         v_str = v_str[1:]
         
+    if "12" in v_str:
+        return IntrinsicDecompositionV12(model_config).to(device)
     if "mix" in v_str:
         return IntrinsicDecompositionV11Mix(model_config).to(device)
     else:
@@ -480,7 +485,20 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         pred_sc = pred_sg.copy()
         
     # Reconstruct Diffuse = Albedo * Real Diffuse Shading
-    pred_recon = np.clip(pred_ad * pred_sd, 0.0, None)
+    pred_recon_raw = pred_ad * pred_sd
+    
+    # FIX: Align the global scale of the reconstruction to the Input RGB
+    # We find scalar 'k' such that: k * recon_raw ≈ rgb_tm
+    valid = (pred_recon_raw > 1e-4)
+    if valid.sum() > 0:
+        # Least squares scale matching
+        k_scale = np.sum(rgb_tm[valid] * pred_recon_raw[valid]) / (np.sum(pred_recon_raw[valid]**2) + 1e-6)
+        pred_recon = np.clip(pred_recon_raw * k_scale, 0.0, None)
+    else:
+        pred_recon = np.clip(pred_recon_raw, 0.0, None)
+        
+    # Now we can safely extract the true physical residual (Specularities)
+    pred_res = np.clip(rgb_tm - pred_recon, 0.0, None)
     
     # Derived Albedos
     deriv_ag = np.clip(rgb_tm / np.clip(pred_sg, 1e-6, None), 0.0, None)
@@ -489,7 +507,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     # 6. Visualization Setup (3 Rows)
     print("Generating Visualizations...")
-    fig, axes = plt.subplots(3, 5, figsize=(20, 12), constrained_layout=True, facecolor="#111111")
+    fig, axes = plt.subplots(3, 4, figsize=(15, 12), constrained_layout=True, facecolor="#111111")
     fig.suptitle(f'In-the-Wild V{inferred_version} Pipeline', fontsize=16, color='white', fontweight='bold')
     
     def _show(ax, img, title, cmap=None, vmin=0, vmax=1):
@@ -503,10 +521,11 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         ax.set_title(title, color='white', fontsize=11, fontweight='semibold')
         ax.axis('off')
 
-    def _auto_expose_rgb(img):
+    def _auto_expose_rgb(img, p=99.0):
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
         img_vis = np.clip(img_vis, 0.0, None)
-        scale = float(np.percentile(img_vis, 99.0)) + 1e-6
+        # Lowering the percentile ignores tiny bright outliers and stretches the midtones
+        scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6 
         return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/2.2)
 
     def _gamma_correct(img):
@@ -519,7 +538,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     # Hide all axes initially
     for r in range(3):
-        for c in range(5):
+        for c in range(4):
             axes[r,c].axis('off')
             
     # ROW 1: Raw Image | Normals | Segmentation | CCR
@@ -530,19 +549,18 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         ccr_mag = np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
         ccr_vmax = float(np.percentile(ccr_mag, 99.0)) + 1e-6
         _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
-    # axes[0,4] is left empty
 
     # ROW 2: S_g_pred, S_c_Pred, S_d_pred, A_d_pred, Diffuse_recon_pred
     _show(axes[1,0], _auto_expose_rgb(pred_sg), "Gray Shading Pred")
     _show(axes[1,1], _auto_expose_rgb(pred_sc), "Colorful Shading Pred")
     _show(axes[1,2], _auto_expose_rgb(pred_sd), "Diffuse Shading Pred")
-    _show(axes[1,3], _auto_expose_rgb(pred_ad), "Albedo Pred (auto-exposed)")
-    _show(axes[1,4], _auto_expose_rgb(pred_recon), "Diffuse Recon Pred")
+    _show(axes[1,3], _auto_expose_rgb(pred_recon), "Diffuse Recon Pred")
 
-    # ROW 3: A_g=I/S_g_pred, A_c=I/S_c_pred, A_d=I/S_d_pred
+    # ROW 3: A_g, A_c, A_d, Residual
     _show(axes[2,0], _auto_expose_rgb(deriv_ag), "Derived A_g = I / S_g_pred")
     _show(axes[2,1], _auto_expose_rgb(deriv_ac), "Derived A_c = I / S_c_pred")
-    _show(axes[2,2], _auto_expose_rgb(deriv_ad), "Derived A_d = I / S_d_pred")
+    _show(axes[2,2], _auto_expose_rgb(pred_ad), "Albedo Pred (auto-exposed)")
+    _show(axes[2,3], _auto_expose_rgb(pred_res), "Residual Pred (Specular)")
 
     os.makedirs("outputs", exist_ok=True)
     out_path = "outputs/wild_inference.png"
@@ -558,7 +576,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_version",
         default="auto",
-        choices=["auto", "11", "11_single", "11_mix"],
+        choices=["auto", "11", "11_single", "11_mix", "12"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     parser.add_argument("--device", default="cuda", type=str, help="Device string, e.g. cpu, cuda, cuda:1")
