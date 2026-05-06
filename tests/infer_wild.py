@@ -18,6 +18,7 @@ from src.models import (
     IntrinsicDecompositionV11Single,
     IntrinsicDecompositionV11Mix,
     IntrinsicDecompositionV12,
+    IntrinsicDecompositionV13,
 )
 try:
     from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
@@ -25,7 +26,7 @@ except ImportError:
     from visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
 from preprocessor.infer_m2f_ins import run_segmentation
 from preprocessor.colors import M2F_CLASSES
-from preprocessor.compute_ccr import compute_ccr
+from src.models.ccr_utils import compute_ccr
 
 # ====================================================================
 # 1. M2F (133/150 classes) to NYU40 (40 classes) Mapping
@@ -62,7 +63,7 @@ def _build_m2f_to_nyu40_lut() -> np.ndarray:
         # Structural classes
         if "ceiling" in name:
             nyu = 22
-        elif _contains_any(name, ["wall ", " wall", "wall,"]) and not _contains_any(
+        elif "wall" in name and not _contains_any(
             name, ["wall switch", "wall clock", "wall decoration", "wall sconce"]
         ):
             nyu = 1
@@ -295,6 +296,12 @@ def get_normals_metric3d(rgb_linear, device="cuda"):
         norm = np.linalg.norm(pred_normals, axis=-1, keepdims=True)
         pred_normals = pred_normals / np.clip(norm, 1e-6, None)
         pred_normals = np.clip(pred_normals, -1.0, 1.0)
+
+        # Explicitly clean up Metric3D to free VRAM
+        del metric3d
+        if str(device).startswith("cuda"):
+            torch.cuda.empty_cache()
+            
         return pred_normals
 
     except Exception as e:
@@ -353,8 +360,9 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
     if config and "model" in config and "version" in config["model"]:
         return str(config["model"]["version"]).lower()
 
-    # Fallback to checkpoint path
     ckpt_name = os.path.basename(str(checkpoint_path)).lower()
+    if "v13" in ckpt_name or "/v13/" in str(checkpoint_path).lower():
+        return "13"
     if "v12" in ckpt_name or "/v12/" in str(checkpoint_path).lower():
         return "12"
     if "mix" in ckpt_name:
@@ -367,6 +375,8 @@ def _build_model(model_config: dict, version: str, device: str):
     if v_str.startswith("v"):
         v_str = v_str[1:]
         
+    if "13" in v_str:
+        return IntrinsicDecompositionV13(model_config).to(device)
     if "12" in v_str:
         return IntrinsicDecompositionV12(model_config).to(device)
     if "mix" in v_str:
@@ -378,7 +388,7 @@ def _build_model(model_config: dict, version: str, device: str):
 # ====================================================================
 # Main Inference & Plotting
 # ====================================================================
-def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version="auto"):
+def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version="auto", max_size=1280):
     model_config = {
         "z_channels": 1024,
         "freeze_stages": [1, 2],
@@ -387,7 +397,35 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         "input_size": 1024,
     }
     
-    # 1. Load Model
+    # 1. Load Data & Resize if needed to prevent OOM
+    print("Preparing Input Data...")
+    rgb_linear = load_image(filepath)
+    H_orig, W_orig = rgb_linear.shape[:2]
+    
+    if max(H_orig, W_orig) > max_size:
+        scale = max_size / float(max(H_orig, W_orig))
+        H, W = int(H_orig * scale), int(W_orig * scale)
+        print(f"Resizing input from {W_orig}x{H_orig} to {W}x{H} (max_size={max_size})")
+        rgb_linear = cv2.resize(rgb_linear, (W, H), interpolation=cv2.INTER_LINEAR)
+    else:
+        H, W = H_orig, W_orig
+
+    # 2. Tonemap RGB for Extractors
+    tonemap_scale = _compute_tonemap_scale(rgb_linear, percentile=99.0)
+    rgb_tm = _tonemap_linear(rgb_linear, percentile=99.0, scale=tonemap_scale)
+    
+    # 3. Surface Normal Extraction (Metric3D)
+    # This function now handles its own loading and unloading to save peak VRAM.
+    normals = get_normals_metric3d(rgb_tm, device)
+    if normals.shape[:2] != (H, W):
+        normals = cv2.resize(normals.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
+        
+    # 4. Segmentation (Mask2Former - API based)
+    seg_nyu40 = get_segmentation_nyu40(filepath)
+    if seg_nyu40.shape != (H, W):
+        seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST)
+
+    # 5. Load V12 Model (SEQUENTIAL LOAD: After extractors are done and potentially cleared)
     state_dict = torch.load(checkpoint_path, map_location=device)
     config = state_dict.get("config", {})
     model_state = state_dict['model_state_dict'] if 'model_state_dict' in state_dict else state_dict
@@ -398,25 +436,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     model.load_state_dict(model_state, strict=False)
     model.eval()
 
-    # 2. Extract Data
-    print("Preparing Input Data...")
-    rgb_linear = load_image(filepath)
-    H, W = rgb_linear.shape[:2]
-    
-    # 3. Tonemap RGB for Model Input & Extractors
-    tonemap_scale = _compute_tonemap_scale(rgb_linear, percentile=99.0)
-    rgb_tm = _tonemap_linear(rgb_linear, percentile=99.0, scale=tonemap_scale)
-    
-    # Surface Normal Extractor needs display-ready image (sRGB-like mapped)
-    normals = get_normals_metric3d(rgb_tm, device)
-    if normals.shape[:2] != (H, W):
-        normals = cv2.resize(normals.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
-        
-    seg_nyu40 = get_segmentation_nyu40(filepath)
-    if seg_nyu40.shape != (H, W):
-        seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST)
-
-    # 4. To Tensors
+    # 6. To Tensors
     t_rgb = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float().to(device)
     t_normals = torch.from_numpy(normals).permute(2, 0, 1).unsqueeze(0).float().to(device)
     t_seg = torch.from_numpy(seg_nyu40).unsqueeze(0).unsqueeze(0).long().to(device)
@@ -435,7 +455,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         t_seg = torch.nn.functional.pad(t_seg.float(), pad_spec, mode="replicate").long()
         t_masks = torch.nn.functional.pad(t_masks.float(), pad_spec, mode="replicate").bool()
 
-    # 5. Forward Pass
+    # 7. Forward Pass
     print(f"Running V{inferred_version} Inference...")
     with torch.no_grad():
         preds = model(
@@ -451,6 +471,7 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         for k, v in preds.items():
             if isinstance(v, torch.Tensor) and v.ndim == 4:
                 preds[k] = v[:, :, :H, :W]
+        t_masks = t_masks[:, :, :H, :W]
     
     def to_np(t): return t.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
@@ -472,6 +493,10 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     # Linear shading: S = 1/D - 1
     pred_sg = 1.0 / np.clip(pred_dg_inv, 1e-6, 1.0) - 1.0
     pred_sd = 1.0 / np.clip(pred_pi_inv, 1e-6, 1.0) - 1.0
+
+    # # CRITICAL INFERENCE CLAMP: Match the training bounds (1e-3, 20.0)
+    # pred_sg = np.clip(pred_sg, 1e-3, 20.0)
+    # pred_sd = np.clip(pred_sd, 1e-3, 20.0)
     
     if 'xi' in preds:
         xi_np = to_np(preds['xi'])
@@ -483,6 +508,9 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         pred_sc = np.concatenate([c_rg * s_green, s_green, c_bg * s_green], axis=-1)
     else:
         pred_sc = pred_sg.copy()
+
+    # Albedo is a physical reflectance property. It cannot exceed 1.0.
+    pred_ad = np.clip(pred_ad, 0.0, 1.0)
         
     # Reconstruct Diffuse = Albedo * Real Diffuse Shading
     pred_recon_raw = pred_ad * pred_sd
@@ -500,10 +528,9 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     # Now we can safely extract the true physical residual (Specularities)
     pred_res = np.clip(rgb_tm - pred_recon, 0.0, None)
     
-    # Derived Albedos
+    # Derived Albedos (Only need 1e-6 to prevent zero division) 
     deriv_ag = np.clip(rgb_tm / np.clip(pred_sg, 1e-6, None), 0.0, None)
     deriv_ac = np.clip(rgb_tm / np.clip(pred_sc, 1e-6, None), 0.0, None)
-    deriv_ad = np.clip(rgb_tm / np.clip(pred_sd, 1e-6, None), 0.0, None)
     
     # 6. Visualization Setup (3 Rows)
     print("Generating Visualizations...")
@@ -521,16 +548,37 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         ax.set_title(title, color='white', fontsize=11, fontweight='semibold')
         ax.axis('off')
 
-    def _auto_expose_rgb(img, p=99.0):
+    def _auto_expose_rgb(img, p=98.0, mask=None):
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
         img_vis = np.clip(img_vis, 0.0, None)
-        # Lowering the percentile ignores tiny bright outliers and stretches the midtones
-        scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6 
+        
+        if mask is not None:
+            # Use mask to find robust scale (ignore background/padded areas)
+            valid_pixels = img_vis[mask.squeeze() > 0.5]
+            if valid_pixels.size > 100:
+                scale = float(np.percentile(valid_pixels, p)) + 1e-6
+            else:
+                scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6
+        else:
+            scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6
+            
+        # Use 1/3.0 gamma to match V12 training visualization (punchier midtones)
+        return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/3.0)
+
+    def _auto_expose_albedo(img):
+        """A smarter auto-expose specifically for collapsed Albedos"""
+        img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+        img_vis = np.clip(img_vis, 0.0, None)
+        
+        # Use 95th percentile to ignore tiny bright spikes and find the true "white"
+        scale = float(np.percentile(img_vis[img_vis > 0.01], 95.0)) + 1e-6 
+        
+        # Stretch to 1.0 and Gamma correct
         return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/2.2)
 
     def _gamma_correct(img):
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
-        return np.power(np.clip(img_vis, 0.0, 1.0), 1.0/2.2)
+        return np.power(np.clip(img_vis, 0.0, 1.0), 1.0/3.0)
 
     # Colorize maps
     seg_rgb = NYU40_COLORS[seg_nyu40.flatten()].reshape(H, W, 3) / 255.0
@@ -551,16 +599,17 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
 
     # ROW 2: S_g_pred, S_c_Pred, S_d_pred, A_d_pred, Diffuse_recon_pred
-    _show(axes[1,0], _auto_expose_rgb(pred_sg), "Gray Shading Pred")
-    _show(axes[1,1], _auto_expose_rgb(pred_sc), "Colorful Shading Pred")
-    _show(axes[1,2], _auto_expose_rgb(pred_sd), "Diffuse Shading Pred")
-    _show(axes[1,3], _auto_expose_rgb(pred_recon), "Diffuse Recon Pred")
+    mask_np = t_masks.cpu().numpy()
+    _show(axes[1,0], _auto_expose_rgb(pred_sg, mask=mask_np), "Gray Shading Pred")
+    _show(axes[1,1], _auto_expose_rgb(pred_sc, mask=mask_np), "Colorful Shading Pred")
+    _show(axes[1,2], _auto_expose_rgb(pred_sd, mask=mask_np), "Diffuse Shading Pred")
+    _show(axes[1,3], _auto_expose_rgb(pred_recon, mask=mask_np), "Diffuse Recon Pred")
 
     # ROW 3: A_g, A_c, A_d, Residual
-    _show(axes[2,0], _auto_expose_rgb(deriv_ag), "Derived A_g = I / S_g_pred")
-    _show(axes[2,1], _auto_expose_rgb(deriv_ac), "Derived A_c = I / S_c_pred")
-    _show(axes[2,2], _auto_expose_rgb(pred_ad), "Albedo Pred (auto-exposed)")
-    _show(axes[2,3], _auto_expose_rgb(pred_res), "Residual Pred (Specular)")
+    _show(axes[2,0], _auto_expose_rgb(deriv_ag, mask=mask_np), "Derived A_g = I / S_g_pred")
+    _show(axes[2,1], _auto_expose_rgb(deriv_ac, mask=mask_np), "Derived A_c = I / S_c_pred")
+    _show(axes[2,2], _auto_expose_albedo(pred_ad), "Albedo Pred (auto-exposed)")
+    _show(axes[2,3], _auto_expose_rgb(pred_res, mask=mask_np), "Residual Pred (Specular)")
 
     os.makedirs("outputs", exist_ok=True)
     out_path = "outputs/wild_inference.png"
@@ -576,16 +625,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_version",
         default="auto",
-        choices=["auto", "11", "11_single", "11_mix", "12"],
+        choices=["auto", "11", "11_single", "11_mix", "12", "13"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     parser.add_argument("--device", default="cuda", type=str, help="Device string, e.g. cpu, cuda, cuda:1")
     parser.add_argument("--cuda_index", type=int, default=None, help="CUDA index used when --device cuda")
     parser.add_argument("--cuda", type=int, default=None, help="Shortcut for CUDA index, e.g. --cuda 1")
+    parser.add_argument("--max_size", type=int, default=1280, help="Maximum image dimension to prevent OOM")
     args = parser.parse_args()
 
     chosen_cuda_index = args.cuda if args.cuda is not None else args.cuda_index
     resolved_device = resolve_device(args.device, chosen_cuda_index)
     print(f"Using device: {resolved_device}")
 
-    infer_and_visualize(args.image, args.checkpoint, resolved_device, args.model_version)
+    infer_and_visualize(args.image, args.checkpoint, resolved_device, args.model_version, max_size=args.max_size)

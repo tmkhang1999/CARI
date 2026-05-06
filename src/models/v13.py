@@ -1,4 +1,4 @@
-"""Stage 1 V10: Unified SFM-guided decoders with CCR, normals, SPADE, and FiLM."""
+"""Stage 1 V10: Unified SFM-guided decoders with CCR, normals, and FiLM."""
 
 import torch
 import torch.nn as nn
@@ -10,12 +10,11 @@ from .encoders.guidance_encoder import GuidanceEncoder
 from .encoders.ccr_encoder import CCREncoder
 from .decoders.progressive_decoder import ProgressiveDecoder
 from .modules.spatial_feature_modulation import SpatialFeatureModulation
-from .modules.spade import SPADE
 from .modules.illuminant_descriptor import IlluminantDescriptor
 from .ccr_utils import compute_ccr
 
 
-class IntrinsicDecompositionV11Mix(nn.Module):
+class IntrinsicDecompositionV13(nn.Module):
     def __init__(self, config):
         super().__init__()
 
@@ -34,6 +33,18 @@ class IntrinsicDecompositionV11Mix(nn.Module):
 
         self.normal_encoder = NormalEncoder(in_channels=3, channels=(64, 128, 256, 512))
         self.ccr_encoder = CCREncoder(in_channels=6, channels=(64, 128, 256, 512))
+        
+        # Raw CCR projections to match CCREncoder channel depths for deep injection
+        self.ccr_prior_proj1 = nn.Conv2d(6, 128, kernel_size=1)
+        self.ccr_prior_proj2 = nn.Conv2d(6, 256, kernel_size=1)
+        self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1)
+        
+        # ZERO-INITIALIZE the projections so they don't blast a pre-trained network with noise!
+        for proj in [self.ccr_prior_proj1, self.ccr_prior_proj2, self.ccr_prior_proj3]:
+            nn.init.zeros_(proj.weight)
+            if proj.bias is not None:
+                nn.init.zeros_(proj.bias)
+        
         self.guidance_b = GuidanceEncoder(in_channels=4, channels=(64, 128, 256, 512))
         self.guidance_c = GuidanceEncoder(in_channels=6, channels=(64, 128, 256, 512))
         self.guidance_d = GuidanceEncoder(in_channels=6, channels=(64, 128, 256, 512))
@@ -68,6 +79,14 @@ class IntrinsicDecompositionV11Mix(nn.Module):
             activation='sigmoid',
         )
 
+        # Factor-specific Z adapters
+        self.z_adapt_a = nn.Conv2d(z_channels, z_channels, kernel_size=1, bias=True)
+        self.z_adapt_c = nn.Conv2d(z_channels, z_channels, kernel_size=1, bias=True)
+        self.z_adapt_d = nn.Conv2d(z_channels, z_channels, kernel_size=1, bias=True)
+        for a in [self.z_adapt_a, self.z_adapt_c, self.z_adapt_d]:
+            nn.init.eye_(a.weight.view(z_channels, z_channels))
+            nn.init.zeros_(a.bias)
+
         # Dec A: Normals + CCR via SFM
         self.sfm_a_n3 = SpatialFeatureModulation(768, 512)
         self.sfm_a_ccr3 = SpatialFeatureModulation(768, 512)
@@ -75,33 +94,23 @@ class IntrinsicDecompositionV11Mix(nn.Module):
         self.sfm_a_ccr2 = SpatialFeatureModulation(384, 256)
         self.sfm_a_n1 = SpatialFeatureModulation(192, 128)
         self.sfm_a_ccr1 = SpatialFeatureModulation(192, 128)
-        self.sfm_a_ccr0 = SpatialFeatureModulation(96, 64)
 
         # Dec B: FiLM + Guidance_B via SFM
         self.sfm_b3 = SpatialFeatureModulation(768, 512)
         self.sfm_b2 = SpatialFeatureModulation(384, 256)
         self.sfm_b1 = SpatialFeatureModulation(192, 128)
 
-        # Dec C: CCR + SPADE(s2/s1) + Guidance_C via SFM
-        self.sfm_c_ccr3 = SpatialFeatureModulation(768, 512)
-        self.spade_c3 = SPADE(num_channels=768, num_classes=num_seg_classes)
+        # Dec C: Fused (CCR + Seg) SFM + Guidance_C via SFM
+        # Set use_seg=True for these specific modulators
+        self.sfm_c_ccr3 = SpatialFeatureModulation(768, 512, use_seg=True)
         self.sfm_c_g3 = SpatialFeatureModulation(768, 512)
 
-        self.sfm_c_ccr2 = SpatialFeatureModulation(384, 256)
-        self.spade_c2 = SPADE(num_channels=384, num_classes=num_seg_classes)
+        self.sfm_c_ccr2 = SpatialFeatureModulation(384, 256, use_seg=True)
         self.sfm_c_g2 = SpatialFeatureModulation(384, 256)
 
-        self.sfm_c_ccr1 = SpatialFeatureModulation(192, 128)
-        self.spade_c1 = SPADE(num_channels=192, num_classes=num_seg_classes)
+        self.sfm_c_ccr1 = SpatialFeatureModulation(192, 128, use_seg=True)
         self.sfm_c_g1 = SpatialFeatureModulation(192, 128)
         self.sfm_c_ccr0 = SpatialFeatureModulation(96, 64)
-
-        # Direct raw-CCR projections preserve sharper boundary evidence at each stage.
-        self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1, bias=False)
-        self.ccr_prior_proj2 = nn.Conv2d(6, 256, kernel_size=1, bias=False)
-        self.ccr_prior_proj1 = nn.Conv2d(6, 128, kernel_size=1, bias=False)
-        for proj in (self.ccr_prior_proj3, self.ccr_prior_proj2, self.ccr_prior_proj1):
-            nn.init.zeros_(proj.weight)
 
         # Dec D: Normals + Guidance_D via SFM
         self.sfm_d_n3 = SpatialFeatureModulation(768, 512)
@@ -123,11 +132,25 @@ class IntrinsicDecompositionV11Mix(nn.Module):
 
     @staticmethod
     def _derive_albedo(rgb, shading):
-        albedo = (rgb / (shading.clamp(1e-3, 20.0) + 1e-6)).clamp(0.0, 1.0)
-        return torch.nan_to_num(albedo, nan=0.0, posinf=1.0, neginf=0.0)
+        # In FP16, 1e-6 can sometimes underflow to 0.0.
+        # 1e-5 is much safer for FP16 math.
+        eps = 1e-5 
+        
+        # Ensure the clamp matches the safe FP16 floor
+        raw_albedo = rgb / (shading.clamp(min=1e-3, max=20.0) + eps)
+        raw_albedo = torch.nan_to_num(raw_albedo, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        safe_albedo = raw_albedo.clamp(0.0, 1.0)
+        
+        intensity = rgb.max(dim=1, keepdim=True)[0]
+        # Adding a tiny eps here prevents division by exactly zero if rgb is pitch black
+        mute_mask = torch.clamp(intensity / (0.01 + 1e-5), 0.0, 1.0)
+        
+        return safe_albedo * mute_mask
 
     def forward(self, rgb, m_diffuse=None, normals=None, seg=None, valid_mask=None, ccr=None, **kwargs):
-        z_global, skip_features = self.image_encoder(rgb)
+        x_enc = rgb.clamp(0.0, 1.0).pow(1.0 / 2.2)
+        z_global, skip_features = self.image_encoder(x_enc)
 
         if normals is None:
             normals = torch.zeros_like(rgb)
@@ -136,38 +159,37 @@ class IntrinsicDecompositionV11Mix(nn.Module):
         if ccr is None:
             ccr = compute_ccr(rgb)
         
-        # Normalize per-image to close HDR/sRGB distribution gap
-        # ccr_std = ccr.std(dim=(2, 3), keepdim=True).clamp_min(1e-6)
-        # ccr = ccr / ccr_std
-        
         ccr_feats = self.ccr_encoder(ccr)
-
+        
         # Inject raw CCR at decoder stage resolutions to avoid over-smoothed priors.
         # ccr_feats: [x0 (H,64ch), c1 (H/2,64ch), c2 (H/4,128ch), c3 (H/8,256ch), c4 (H/16,512ch)]
         ccr_raw3 = self.ccr_prior_proj3(F.interpolate(ccr, size=ccr_feats[4].shape[-2:], mode='bilinear', align_corners=False))
         ccr_raw2 = self.ccr_prior_proj2(F.interpolate(ccr, size=ccr_feats[3].shape[-2:], mode='bilinear', align_corners=False))
         ccr_raw1 = self.ccr_prior_proj1(F.interpolate(ccr, size=ccr_feats[2].shape[-2:], mode='bilinear', align_corners=False))
+        
         ccr_prior3 = ccr_feats[4] + ccr_raw3  # H/16, 512ch
         ccr_prior2 = ccr_feats[3] + ccr_raw2  # H/8,  256ch
         ccr_prior1 = ccr_feats[2] + ccr_raw1  # H/4,  128ch
+        # ccr_full   = ccr_feats[0]  # H,    64ch  (full-res, edge-rich)
 
         gamma, beta = self.illuminant_descriptor(rgb, valid_mask)
         z_b = z_global * (1.0 + gamma) + beta
-        # film_global = torch.cat([gamma, beta], dim=1)
+
+        z_a = self.z_adapt_a(z_global)
+        z_c = self.z_adapt_c(z_global)
+        z_d = self.z_adapt_d(z_global)
 
         d_g = self.decoder_a(
-            z_global,
+            z_a,
             skip_features,
             stage_ops=[
                 lambda x: self.sfm_a_ccr3(self.sfm_a_n3(x, normal_feats[3]), ccr_prior3),
                 lambda x: self.sfm_a_ccr2(self.sfm_a_n2(x, normal_feats[2]), ccr_prior2),
                 lambda x: self.sfm_a_ccr1(self.sfm_a_n1(x, normal_feats[1]), ccr_prior1),
-                lambda x: self.sfm_a_ccr0(x, ccr_feats[1]),  # c1: H/2, 64ch
             ],
         )
         s_g = 1.0 / (d_g + 1e-6) - 1.0
-        s_g_safe = s_g.detach().clamp(0.0, 20.0)
-        # allow gradient flow to Dec A
+        s_g_safe = s_g.detach().clamp(1e-3, 20.0) 
         a_g = self._derive_albedo(rgb, s_g_safe)
 
         g_b = self.guidance_b(torch.cat([s_g_safe, a_g], dim=1))
@@ -183,24 +205,24 @@ class IntrinsicDecompositionV11Mix(nn.Module):
 
         c = self._to_chroma(xi)
         s_c = s_g * c
-        s_c_safe = s_c.detach().clamp(0.0, 20.0)
+
+        s_c_safe = s_c.detach().clamp(1e-3, 20.0)
         a_c = self._derive_albedo(rgb, s_c_safe)
 
         g_c = self.guidance_c(torch.cat([s_c_safe, a_c], dim=1))
         a_d = self.decoder_c(
-            z_global,
+            z_c,
             skip_features,
             stage_ops=[
-                lambda x: self.sfm_c_g3(self.spade_c3(self.sfm_c_ccr3(x, ccr_prior3), seg), g_c[3]),
-                lambda x: self.sfm_c_g2(self.spade_c2(self.sfm_c_ccr2(x, ccr_prior2), seg), g_c[2]),
-                lambda x: self.sfm_c_g1(self.spade_c1(self.sfm_c_ccr1(x, ccr_prior1), seg), g_c[1]),
-                lambda x: self.sfm_c_ccr0(x, ccr_feats[1]),  # c1: H/2, 64ch
+                lambda x: self.sfm_c_ccr3(self.sfm_c_g3(x, g_c[3]), ccr_feats[4], seg),
+                lambda x: self.sfm_c_ccr2(self.sfm_c_g2(x, g_c[2]), ccr_feats[3], seg),
+                lambda x: self.sfm_c_ccr1(self.sfm_c_g1(x, g_c[1]), ccr_feats[2], seg),
             ],
         )
 
         g_d = self.guidance_d(torch.cat([s_c_safe, a_d.detach()], dim=1))
         pi = self.decoder_d(
-            z_global,
+            z_d,
             skip_features,
             stage_ops=[
                 lambda x: self.sfm_d_g3(self.sfm_d_n3(x, normal_feats[3]), g_d[3]),

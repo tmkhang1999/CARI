@@ -1,4 +1,4 @@
-"""Stage 1 V10: Unified SFM-guided decoders with CCR, normals, SPADE, and FiLM."""
+"""Stage 1 V10: Unified SFM-guided decoders with CCR, normals, and FiLM."""
 
 import torch
 import torch.nn as nn
@@ -10,7 +10,6 @@ from .encoders.guidance_encoder import GuidanceEncoder
 from .encoders.ccr_encoder import CCREncoder
 from .decoders.progressive_decoder import ProgressiveDecoder
 from .modules.spatial_feature_modulation import SpatialFeatureModulation
-from .modules.spade import SPADE
 from .modules.illuminant_descriptor import IlluminantDescriptor
 from .ccr_utils import compute_ccr
 
@@ -92,13 +91,6 @@ class IntrinsicDecompositionV12(nn.Module):
         self.sfm_c_ccr1 = SpatialFeatureModulation(192, 128, use_seg=True)
         self.sfm_c_g1 = SpatialFeatureModulation(192, 128)
 
-        # Direct raw-CCR projections preserve sharper boundary evidence at each stage.
-        self.ccr_prior_proj3 = nn.Conv2d(6, 512, kernel_size=1, bias=False)
-        self.ccr_prior_proj2 = nn.Conv2d(6, 256, kernel_size=1, bias=False)
-        self.ccr_prior_proj1 = nn.Conv2d(6, 128, kernel_size=1, bias=False)
-        for proj in (self.ccr_prior_proj3, self.ccr_prior_proj2, self.ccr_prior_proj1):
-            nn.init.zeros_(proj.weight)
-
         # Dec D: Normals + Guidance_D via SFM
         self.sfm_d_n3 = SpatialFeatureModulation(768, 512)
         self.sfm_d_g3 = SpatialFeatureModulation(768, 512)
@@ -119,14 +111,21 @@ class IntrinsicDecompositionV12(nn.Module):
 
     @staticmethod
     def _derive_albedo(rgb, shading):
-        # Lower the clamp from 1e-3 to 1e-5 to allow deep shadows to calculate correctly
-        # Add eps to the denominator to prevent absolute ZeroDivision
-        eps = 1e-6
-        albedo = rgb / (shading.clamp(min=1e-5, max=20.0) + eps)
+        # In FP16, 1e-6 can sometimes underflow to 0.0.
+        # 1e-5 is much safer for FP16 math.
+        eps = 1e-5 
         
-        # Clip to [0, 1] and handle any stray NaNs
-        albedo = torch.nan_to_num(albedo, nan=0.0, posinf=1.0, neginf=0.0)
-        return albedo.clamp(0.0, 1.0)
+        # Ensure the clamp matches the safe FP16 floor
+        raw_albedo = rgb / (shading.clamp(min=1e-3, max=20.0) + eps)
+        raw_albedo = torch.nan_to_num(raw_albedo, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        safe_albedo = raw_albedo.clamp(0.0, 1.0)
+        
+        intensity = rgb.max(dim=1, keepdim=True)[0]
+        # Adding a tiny eps here prevents division by exactly zero if rgb is pitch black
+        mute_mask = torch.clamp(intensity / (0.01 + 1e-5), 0.0, 1.0)
+        
+        return safe_albedo * mute_mask
 
     def forward(self, rgb, m_diffuse=None, normals=None, seg=None, valid_mask=None, ccr=None, **kwargs):
         z_global, skip_features = self.image_encoder(rgb)
@@ -138,23 +137,14 @@ class IntrinsicDecompositionV12(nn.Module):
         if ccr is None:
             ccr = compute_ccr(rgb)
         
-        # Normalize per-image to close HDR/sRGB distribution gap
-        # ccr_std = ccr.std(dim=(2, 3), keepdim=True).clamp_min(1e-6)
-        # ccr = ccr / ccr_std
-        
         ccr_feats = self.ccr_encoder(ccr)
-
-        # Inject raw CCR at decoder stage resolutions to avoid over-smoothed priors.
-        ccr_raw3 = self.ccr_prior_proj3(F.interpolate(ccr, size=ccr_feats[3].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_raw2 = self.ccr_prior_proj2(F.interpolate(ccr, size=ccr_feats[2].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_raw1 = self.ccr_prior_proj1(F.interpolate(ccr, size=ccr_feats[1].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_prior3 = ccr_feats[3] + ccr_raw3
-        ccr_prior2 = ccr_feats[2] + ccr_raw2
-        ccr_prior1 = ccr_feats[1] + ccr_raw1
+        # ccr_feats: [x0 (H,64ch), c1 (H/2,64ch), c2 (H/4,128ch), c3 (H/8,256ch), c4 (H/16,512ch)]
+        ccr_prior3 = ccr_feats[4]  # H/16, 512ch
+        ccr_prior2 = ccr_feats[3]  # H/8,  256ch
+        ccr_prior1 = ccr_feats[2]  # H/4,  128ch
 
         gamma, beta = self.illuminant_descriptor(rgb, valid_mask)
         z_b = z_global * (1.0 + gamma) + beta
-        # film_global = torch.cat([gamma, beta], dim=1)
 
         d_g = self.decoder_a(
             z_global,
@@ -167,7 +157,7 @@ class IntrinsicDecompositionV12(nn.Module):
             ],
         )
         s_g = 1.0 / (d_g + 1e-6) - 1.0
-        s_g_safe = s_g.detach().clamp(1e-5, 20.0) 
+        s_g_safe = s_g.detach().clamp(1e-3, 20.0) 
         a_g = self._derive_albedo(rgb, s_g_safe)
 
         g_b = self.guidance_b(torch.cat([s_g_safe, a_g], dim=1))
@@ -184,7 +174,7 @@ class IntrinsicDecompositionV12(nn.Module):
         c = self._to_chroma(xi)
         s_c = s_g * c
 
-        s_c_safe = s_c.detach().clamp(1e-5, 20.0)
+        s_c_safe = s_c.detach().clamp(1e-3, 20.0)
         a_c = self._derive_albedo(rgb, s_c_safe)
 
         g_c = self.guidance_c(torch.cat([s_c_safe, a_c], dim=1))

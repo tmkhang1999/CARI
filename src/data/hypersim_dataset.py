@@ -550,6 +550,53 @@ class HypersimDataset(Dataset):
             mode='nearest'
         ).squeeze(0).long()                                       # (1,H,W)
 
+        # ── Random Mask Degradation (Simulate Mask2Former errors) ────────────
+        # Mask2Former often fails to capture whole objects (e.g., missing half a door)
+        # or bleeds significantly into adjacent objects. We simulate this by applying
+        # large-scale morphological operations to random individual object classes.
+        if self.split == 'train' and np.random.rand() > 0.5:
+            import cv2
+            seg_aug = seg_crop.copy()
+            classes = np.unique(seg_aug)
+            
+            # If there's more than just a wall/background, distort 2 to 4 objects
+            if len(classes) > 1:
+                # Exclude the most dominant class (usually wall/ceiling) from being the *target*
+                # of heavy erosion so we don't accidentally erase the whole room structure.
+                counts = [np.sum(seg_aug == c) for c in classes]
+                dominant_class = classes[np.argmax(counts)]
+                target_candidates = [c for c in classes if c != dominant_class]
+                
+                if target_candidates:
+                    # Distort between 2 and 4 objects, capped by available candidates
+                    num_to_distort = min(np.random.randint(2, 5), len(target_candidates))
+                    targets = np.random.choice(target_candidates, num_to_distort, replace=False)
+                    
+                    for c in targets:
+                        bin_mask = (seg_aug == c).astype(np.uint8)
+                        
+                        # 50% chance to Erode (miss parts of object) vs Dilate (bleed outward)
+                        kernel_size = np.random.randint(15, 45) # Huge kernel! (15 to 45 pixels)
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                        
+                        if np.random.rand() > 0.5:
+                            # Erode: Object shrinks, replaced by dominant class (e.g. wall)
+                            eroded = cv2.erode(bin_mask, kernel)
+                            eroded_pixels = (bin_mask == 1) & (eroded == 0)
+                            seg_aug[eroded_pixels] = dominant_class
+                        else:
+                            # Dilate: Object expands, overriding neighboring classes
+                            dilated = cv2.dilate(bin_mask, kernel)
+                            dilated_pixels = (bin_mask == 0) & (dilated == 1)
+                            seg_aug[dilated_pixels] = c
+                            
+            seg_t = torch.from_numpy(seg_aug.astype(np.float32)).unsqueeze(0).unsqueeze(0)
+            seg_t = F.interpolate(
+                seg_t, size=(self.input_size, self.input_size),
+                mode='nearest'
+            ).squeeze(0).long()
+
+
         # ── Random flips (train only; val is deterministic) ──────────────────
         if self.split == 'train':
             if np.random.rand() > 0.5:
@@ -559,52 +606,33 @@ class HypersimDataset(Dataset):
                 t     = torch.flip(t,     dims=[1])   # vertical
                 seg_t = torch.flip(seg_t, dims=[1])
 
-            # V11 trains ordinal/gray-shading branch: augment albedo only,
-            # then re-derive image to preserve I = A * S.
-            if np.random.rand() > 0.5:
-                # Extract components
-                I_orig = t[0:3]  # Tonemapped RGB
-                A_orig = t[3:6]  # Raw Albedo
-                S_diff = t[6:9]  # Normalized Diffuse Illum
-                
-                # RECOVER THE SPECULAR RESIDUAL (R)
-                # I = A * S + R  -->  R = I - (A * S)
-                # Clamp to 0 to prevent numerical errors
+            aug_roll = np.random.rand()
+            
+            if aug_roll < 0.4:
+                # 40% chance: Albedo Augmentation (Paint changes)
+                I_orig, A_orig, S_diff = t[0:3], t[3:6], t[6:9]
                 R_specular = (I_orig - (A_orig * S_diff)).clamp_min(0.0)
-
-                # Mutually Exclusive Color Augmentation (Prevent unnatural deep-fried colors)
-                aug_choice = np.random.rand()
-                if aug_choice < 0.5:
-                    # 50% chance: Rotate Hue and Saturation
+                
+                if np.random.rand() < 0.5:
                     A_new = random_hue_saturation_shifting(A_orig)
                 else:
-                    # 50% chance: Shift Red/Blue balance
                     A_new = random_scaling_red_blue_channels(A_orig)
-
-                # RECONSTRUCT IMAGE WITH SPECULARITIES INTACT
+                    
                 I_new = (A_new * S_diff) + R_specular
-
                 t[3:6] = A_new
-                t[0:3] = I_new.clamp(0.0, 1.0) # Safe to clamp now, speculars are preserved
-
-            # --- GLOBAL COLOR SHIFT (WHITE BALANCE AUGMENTATION) ---
-            # Extremely powerful for Decoder B (Chroma)
-            if np.random.rand() > 0.5:
-                rgb_view = t[0:3]
-                illum_view = t[6:9]
+                t[0:3] = I_new.clamp(0.0, 1.0)
                 
-                # Generate random RGB gain
+            elif aug_roll > 0.6:
+                # 40% chance: White Balance Augmentation (Light changes)
+                rgb_view, illum_view = t[0:3], t[6:9]
                 _, gain = random_color_shift(rgb_view, mean=0.5, std=0.05)
                 
-                # Apply to RGB (Clamped to simulate LDR camera clipping)
                 t[0:3] = (rgb_view * gain).clamp(0.0, 1.0)
+                t[6:9] = (illum_view * gain).clamp(0.0, 5.0) 
                 
-                # Apply to Illumination GT (UNBOUNDED! Teaches the network to recover HDR)
-                t[6:9] = illum_view * gain
-
-        elif self.split == 'train' and not self.augment_train:
-            # Explicitly disabled augmentation for train
-            pass
+            else:
+                # 20% chance: No color augmentation (Learn standard distribution)
+                pass
 
         return {
             'rgb':        t[0:3],               # (3,H,W) tonemapped linear [0,1]

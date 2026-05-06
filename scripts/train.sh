@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train —  supported versions: V9 / V10 / V11 / V12
+# Train —  supported versions: V9 / V10 / V11 / V12 / V13
 #
 # Usage:
 #   bash scripts/train.sh                                  # V10 (default), CUDA auto
+#   bash scripts/train.sh --version 13.1 --cuda 0          # train V13.1 on GPU 0
 #   bash scripts/train.sh --version 11 --cuda 1           # use GPU 1
 #   bash scripts/train.sh --version 9 --device cpu        # force CPU
-#   bash scripts/train.sh --version 10 --resume checkpoints/v10/checkpoint_latest.pth
+#   bash scripts/train.sh --version 13.1 --resume checkpoints/v13.1/checkpoint_latest.pth
 #   bash scripts/train.sh --version 9 --auto-resume
 #
 # All extra flags are forwarded directly to train_stage1.py (e.g. --device cpu).
@@ -76,10 +77,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${VERSION}" != "9" && "${VERSION}" != "10" && "${VERSION}" != "11" && "${VERSION}" != "12" ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12"
+if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?)$ ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13 (and 12.x, 13.x)"
     exit 1
 fi
+
+# Normalize version: convert dots to underscores (e.g. 13.1 -> 13_1) to match filenames
+VERSION="${VERSION//./_}"
 
 # Resolve config path and train script. For v11 we use mode flag (single or mix).
 if [[ "${VERSION}" == "11" ]]; then
@@ -90,9 +94,21 @@ if [[ "${VERSION}" == "11" ]]; then
         CONFIG="${ROOT_DIR}/src/configs/v11_single.yaml"
         TRAIN_SCRIPT="${ROOT_DIR}/src/train_single.py"
     fi
-elif [[ "${VERSION}" == "12" ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v12_single.yaml"
+elif [[ "${VERSION}" == 12* ]]; then
+    if [[ "${VERSION}" == "12" ]]; then
+        CONFIG="${ROOT_DIR}/src/configs/v12.yaml"
+    else
+        CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    fi
     TRAIN_SCRIPT="${ROOT_DIR}/src/train_v12.py"
+elif [[ "${VERSION}" == 13* ]]; then
+    if [[ "${VERSION}" == "13" ]]; then
+        CONFIG="${ROOT_DIR}/src/configs/v13.yaml"
+        TRAIN_SCRIPT="${ROOT_DIR}/src/train_v13.py"
+    else
+        CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+        TRAIN_SCRIPT="${ROOT_DIR}/src/train_v${VERSION}.py"
+    fi
 else
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"  # legacy

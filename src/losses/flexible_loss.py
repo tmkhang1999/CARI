@@ -45,6 +45,11 @@ class FlexibleLoss(nn.Module):
         self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
         self.tv_target_classes = config.get('tv_target_classes', [1, 22])
         self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22])
+        
+        # New V13 Loss Weights
+        self.lambda_boundary = config.get('lambda_boundary', 0.0)
+        self.lambda_recon = config.get('lambda_recon', 0.0)
+        self.lambda_edge = config.get('lambda_edge', 0.0)
 
         # Loss modules
         self.msg_loss = MultiScaleGradientLoss(num_scales=4)
@@ -119,6 +124,32 @@ class FlexibleLoss(nn.Module):
         
         ssim_map = num / den
         return (0.5 - 0.5 * ssim_map).mean()
+
+    def loss_boundary_consistency(self, a_d_pred, ccr=None, edge_pred=None, valid_mask=None):
+        if edge_pred is not None:
+            ccr_edge = F.interpolate(edge_pred, size=a_d_pred.shape[-2:], mode='bilinear', align_corners=False)
+            ccr_edge = ccr_edge.clamp(0, 1)
+        else:
+            ccr_mag   = ccr[:, :3].abs().max(dim=1, keepdim=True).values
+            ccr_edge  = torch.sigmoid((ccr_mag - 0.25) * 20.0)
+        non_edge  = (1.0 - ccr_edge) * valid_mask.float()
+    
+        dx = (a_d_pred[:,:,:,1:] - a_d_pred[:,:,:,:-1]).abs()
+        dy = (a_d_pred[:,:,1:,:] - a_d_pred[:,:,:-1,:]).abs()
+        dx = F.pad(dx, (0,1)).mean(dim=1, keepdim=True)
+        dy = F.pad(dy, (0,0,0,1)).mean(dim=1, keepdim=True)
+        return ((dx + dy) / 2.0 * non_edge).sum() / (non_edge.sum() + 1e-7)
+
+    def loss_reconstruction(self, a_d_pred, pi_pred, rgb, valid_mask):
+        """Penalize A*S ≠ I on valid diffuse pixels."""
+        s_d_pred = 1.0 / (pi_pred.clamp(min=1e-4) + 1e-4) - 1.0
+        recon = a_d_pred * s_d_pred.clamp(1e-3, 20.0)
+        # Tonemap both to [0,1] for fair comparison
+        scale = torch.quantile(rgb[valid_mask.expand_as(rgb)].reshape(-1), 0.99).clamp_min(1e-4)
+        recon_tm = (recon / scale).clamp(0, 1)
+        rgb_tm = (rgb / scale).clamp(0, 1)
+        mask = valid_mask.float()
+        return ((recon_tm - rgb_tm).abs() * mask).sum() / (mask.sum() * 3 + 1e-7)
 
     # ------------------------------------------------------------------
     # Per-decoder losses
@@ -211,7 +242,7 @@ class FlexibleLoss(nn.Module):
         """Dec C loss with per-term details for logging/debugging."""
         zero = (a_d_pred * 0.0).sum()
         if m_albedo.sum() == 0:
-            details = {'loss_c_mse': zero}
+            details = {'loss_c_l1': zero}
             if self.lambda_msg > 0:
                 details['loss_c_msg'] = zero
             if self.lambda_tv > 0 and self.tv_type is not None:
@@ -227,7 +258,7 @@ class FlexibleLoss(nn.Module):
         route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
 
-        mse = self._masked_mse(a_d_pred, A_d_star, mask)
+        l1 = self._masked_mse(a_d_pred, A_d_star, mask)
         
         if self.lambda_msg > 0:
             msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
@@ -246,9 +277,14 @@ class FlexibleLoss(nn.Module):
             route_mask = valid_mask[route_idx].float()
             route_pred = a_d_pred[route_idx] * route_mask
             route_tgt = A_d_star[route_idx] * route_mask
+
+            # Apply gamma to align linear albedo with VGG's sRGB training distribution
+            pred_gamma = route_pred.clamp(0, 1).pow(1.0 / 2.2)
+            tgt_gamma  = route_tgt.clamp(0, 1).pow(1.0 / 2.2)
+
             
             if self.lambda_perceptual > 0:
-                perceptual = self.perceptual_loss(route_pred, route_tgt)
+                perceptual = self.perceptual_loss(pred_gamma, tgt_gamma)
             else:
                 perceptual = zero
                 
@@ -261,7 +297,7 @@ class FlexibleLoss(nn.Module):
             dssim = zero
 
         total = (
-            mse
+            l1
             + self.lambda_msg * msg
             + self.lambda_tv * tv
             + self.lambda_perceptual * perceptual
@@ -269,7 +305,7 @@ class FlexibleLoss(nn.Module):
         )
 
         details = {
-            'loss_c_mse': mse.detach(),
+            'loss_c_l1': l1.detach(),
         }
         if self.lambda_msg > 0:
             details['loss_c_msg'] = msg.detach()
@@ -365,7 +401,7 @@ class FlexibleLoss(nn.Module):
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
-    def forward(self, predictions, targets, m_diffuse, m_albedo, valid_mask, seg_map=None, normals=None, rgb=None):
+    def forward(self, predictions, targets, m_diffuse, m_albedo, valid_mask, seg_map=None, normals=None, rgb=None, ccr=None, edge_pred=None, edge_gt=None):
         # V11 supervision uses only albedo (a_d) and diffuse shading (pi).
         zero = predictions['a_d'].new_tensor(0.0)
 
@@ -398,6 +434,19 @@ class FlexibleLoss(nn.Module):
             ld = zero
             ld_details = {}
 
+        # 3. New V13 Losses
+        if self.lambda_boundary > 0.0 and ccr is not None:
+            l_boundary = self.loss_boundary_consistency(predictions['a_d'], ccr.detach(), edge_pred, valid_mask)
+            lc = lc + self.lambda_boundary * l_boundary
+            lc_details['loss_c_boundary'] = l_boundary.detach()
+            
+        l_recon = zero
+        if self.lambda_recon > 0.0 and rgb is not None:
+            # We add recon loss loosely to total, or track it separately
+            l_recon = self.loss_reconstruction(predictions['a_d'], predictions['pi'], rgb, valid_mask)
+            ld = ld + self.lambda_recon * l_recon
+            ld_details['loss_d_recon'] = l_recon.detach()
+
         la, la_details = zero, {}
         lb, lb_details = zero, {}
         
@@ -413,6 +462,28 @@ class FlexibleLoss(nn.Module):
         ld = self.w_d * ld
         loss_total = la + lb + lc + ld
         
+        if self.lambda_edge > 0 and edge_pred is not None and edge_gt is not None:
+            # 1. Balanced BCE: dynamically weight rare edge pixels to prevent
+            # the network from collapsing to "predict all zeros".
+            num_pos = edge_gt.sum() + 1e-4
+            num_neg = (1.0 - edge_gt).sum() + 1e-4
+            total = num_pos + num_neg
+            weight_pos = num_neg / total   # high weight for rare edges
+            weight_neg = num_pos / total   # low weight for abundant background
+            pixel_weights = edge_gt * weight_pos + (1.0 - edge_gt) * weight_neg
+            l_bce = F.binary_cross_entropy(edge_pred, edge_gt, weight=pixel_weights)
+            
+            # 2. Dice Loss: While BCE fixes imbalance, it heavily penalizes minor 
+            # spatial shifts. Dice loss directly maximizes shape intersection,
+            # encouraging crisp, contiguous boundaries.
+            intersection = (edge_pred * edge_gt).sum()
+            union = edge_pred.sum() + edge_gt.sum()
+            l_dice = 1.0 - (2.0 * intersection + 1e-4) / (union + 1e-4)
+            
+            l_edge = l_bce + l_dice
+            loss_total = loss_total + self.lambda_edge * l_edge
+            la_details['loss_edge'] = l_edge.detach()
+            
         out = {
             # Keep both keys for compatibility with old and new callers.
             'loss': loss_total,

@@ -54,14 +54,19 @@ class CCREncoder(nn.Module):
         Args:
             ccr: (N, 6, H, W) invariant descriptor from compute_ccr()
         Returns:
-            List of 4 feature maps at [H/2 (64ch), H/4 (128ch), H/8 (256ch), H/16 (512ch)]
+            List of 5 feature maps:
+              [0] x0: H,    64ch  (full-res, stride-1) -- high-freq edge details
+              [1] c1: H/2,  64ch
+              [2] c2: H/4,  128ch
+              [3] c3: H/8,  256ch
+              [4] c4: H/16, 512ch
         """
-        x0 = self.conv0(ccr)   # H,   64ch
+        x0 = self.conv0(ccr)   # H,   64ch  (stride-1, full-res)
         c1 = self.conv1(x0)    # H/2, 64ch
         c2 = self.conv2(c1)    # H/4, 128ch
         c3 = self.conv3(c2)    # H/8, 256ch
         c4 = self.conv4(c3)    # H/16,512ch
-        return [c1, c2, c3, c4]
+        return [x0, c1, c2, c3, c4]
 
 
 # Backward-compatible alias

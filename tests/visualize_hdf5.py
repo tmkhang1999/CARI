@@ -72,7 +72,9 @@ from src.data.augmentations import (
     random_color_shift,
 )
 
+from src.data.hypersim_dataset import HypersimDataset
 from src.models.ccr_utils import compute_ccr
+
 
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 
@@ -244,7 +246,6 @@ def compute_valid_mask(albedo: np.ndarray, render_id: np.ndarray | None) -> np.n
     alb_mask = albedo.mean(axis=-1) > 0.02
     return (sky_mask & alb_mask).astype(np.float32)
 
-
 def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: bool = False, aug_type: str = 'all') -> dict:
     frame = frame.zfill(4)
     images_dir = root / scene / 'images'
@@ -306,6 +307,36 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
             bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
             bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
 
+        if aug_type in ('seg_degrade', 'all'):
+            import cv2
+            seg_aug = bundle['seg'].copy()
+            classes = np.unique(seg_aug)
+            
+            if len(classes) > 1:
+                counts = [np.sum(seg_aug == c) for c in classes]
+                dominant_class = classes[np.argmax(counts)]
+                target_candidates = [c for c in classes if c != dominant_class]
+                
+                if target_candidates:
+                    num_to_distort = min(np.random.randint(2, 5), len(target_candidates))
+                    targets = np.random.choice(target_candidates, num_to_distort, replace=False)
+                    
+                    for c in targets:
+                        bin_mask = (seg_aug == c).astype(np.uint8)
+                        kernel_size = np.random.randint(15, 45)
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                        
+                        if np.random.rand() > 0.5:
+                            eroded = cv2.erode(bin_mask, kernel)
+                            eroded_pixels = (bin_mask == 1) & (eroded == 0)
+                            seg_aug[eroded_pixels] = dominant_class
+                        else:
+                            dilated = cv2.dilate(bin_mask, kernel)
+                            dilated_pixels = (bin_mask == 0) & (dilated == 1)
+                            seg_aug[dilated_pixels] = c
+                            
+            bundle['seg'] = seg_aug
+
     bundle['rgb_tm'] = tonemap_linear(bundle['rgb_raw'])
     
     eps = 1e-6
@@ -323,6 +354,7 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
     bundle['valid_mask'] = compute_valid_mask(bundle['albedo'], bundle['render_id'])
     bundle['ccr'] = compute_ccr(bundle['rgb_tm'])
     bundle['ccr_mag'] = np.sqrt(np.sum(bundle['ccr'][..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
+
     bundle['seg_rgb'] = seg_to_rgb(bundle['seg'])
     bundle['normals_rgb'] = normals_to_rgb(bundle['normals'])
     bundle['norm_rgb_composite'] = np.clip(bundle['ccr'][..., 3:6], 0.0, 1.0)
@@ -436,6 +468,7 @@ def load_mid_scene_bundle(
         'valid_mask': valid_mask,
         'ccr': ccr,
         'ccr_mag': np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0),
+
         'seg_rgb': seg_to_rgb(seg),
         'normals_rgb': normals_to_rgb(normals),
     }
@@ -542,6 +575,7 @@ def plot_frame(
     text_color = 'white' if style == 'dark' else 'black'
     facecolor = '#111111' if style == 'dark' else 'white'
 
+    # Grid Construction (3 rows x 3 columns)
     fig, axes = plt.subplots(3, 3, figsize=(13, 12), constrained_layout=True, facecolor=facecolor)
     aug_suffix = f" (AUG:{aug_type})" if augment else ""
     fig.suptitle(
@@ -552,10 +586,10 @@ def plot_frame(
     illum_disp = hdr_for_display(bundle['illum'], hdr_mode)
     hdr_suffix = 'display tonemap' if hdr_mode == 'tonemapped' else 'raw linear clip'
 
-    # Row 1
+    # Row 1: The "Visual" inputs and results
     _show(axes[0, 0], bundle['rgb_tm'], 'RGB\n(linear tonemap)', title_color=text_color)
     
-    diff_recon_disp = bundle['diffuse_recon_tm'] # we use the tonemapped version directly
+    diff_recon_disp = bundle['diffuse_recon_tm']
     _show(axes[0, 1], diff_recon_disp, 'Diffuse Recon\n(Albedo × Diffuse Shading)', title_color=text_color)
     
     _show(axes[0, 2], np.clip(bundle['albedo'], 0.0, 1.0), 'Albedo', title_color=text_color)
@@ -618,6 +652,7 @@ def plot_mid_scene(
     text_color = 'white' if style == 'dark' else 'black'
     facecolor = '#111111' if style == 'dark' else 'white'
 
+    # Grid Construction (3 rows x 3 columns)
     fig, axes = plt.subplots(3, 3, figsize=(13, 12), constrained_layout=True, facecolor=facecolor)
     fig.suptitle(
         f'MIDIntrinsics • {split} • {scene}',
@@ -632,6 +667,7 @@ def plot_mid_scene(
     )
     _show(axes[0, 1], bundle['thumb'], 'thumb.jpg', title_color=text_color)
     _show(axes[0, 2], bundle['materials'], 'materials_mip2', title_color=text_color)
+
 
     if bundle['albedo'] is not None:
         _show(axes[1, 0], np.clip(bundle['albedo'], 0.0, 1.0), 'Albedo (linear)', title_color=text_color)
@@ -721,6 +757,8 @@ def parse_args():
     p.add_argument('--scene', default='ai_001_001', help='Scene name, e.g. ai_001_001')
     p.add_argument('--cam', default='00', help='Camera id, e.g. 00')
     p.add_argument('--frame', default='0000', help='Frame number, e.g. 0000. Ignored if --all is set.')
+    p.add_argument('--sample-idx', '--sample_idx', type=int, default=None, help='Load Hypersim sample by index (overrides --scene, --cam, --frame)')
+    p.add_argument('--split', choices=['train', 'test', 'val'], default='val', help='Split for --sample-idx (Hypersim only)')
     p.add_argument('--all', action='store_true', help='Render all available frames for this scene/camera')
     p.add_argument('--max-frames', type=int, default=None, help='Limit number of frames when using --all')
     p.add_argument('--outdir', type=Path, default=Path('tests/visualizations'), help='Output directory for saved PNGs')
@@ -730,7 +768,7 @@ def parse_args():
                         'This affects visualization only, never training.')
     p.add_argument('--dpi', type=int, default=180, help='Saved figure DPI')
     p.add_argument('--augment', action='store_true', help='Apply data augmentation (Hypersim only)')
-    p.add_argument('--aug-type', choices=['hue_sat', 'scale', 'color_shift', 'all'], default='all',
+    p.add_argument('--aug-type', choices=['hue_sat', 'scale', 'color_shift', 'seg_degrade', 'all'], default='all',
                    help='Type of augmentation to apply')
     p.add_argument('--no-show', action='store_true', help='Do not open matplotlib window; save only')
     return p.parse_args()
@@ -743,6 +781,25 @@ def main():
         root = HYPERSIM_ROOT_DEFAULT if args.dataset == 'hypersim' else MID_ROOT_DEFAULT
     else:
         root = args.root
+
+    if args.dataset == 'hypersim' and args.sample_idx is not None:
+        # Resolve scene/cam/frame from sample index
+        dataset = HypersimDataset(root_dir=str(root), split=args.split, strict_split=False)
+        if args.sample_idx < 0 or args.sample_idx >= len(dataset.samples):
+            raise IndexError(f"--sample_idx {args.sample_idx} out of range [0, {len(dataset.samples)-1}]")
+        
+        sample = dataset.samples[args.sample_idx]
+        # Path: root / scene / images / scene_cam_00_final_hdf5 / frame.0000.color.hdf5
+        # We can use regex to extract the parts
+        color_path = sample['color']
+        match = re.search(r'([a-z0-9_]+)/images/scene_cam_(\d+)_final_hdf5/frame\.(\d+)\.color\.hdf5', color_path)
+        if match:
+            args.scene = match.group(1)
+            args.cam = match.group(2)
+            args.frame = match.group(3)
+            print(f"Resolved --sample_idx {args.sample_idx} to: --scene {args.scene} --cam {args.cam} --frame {args.frame}")
+        else:
+            raise ValueError(f"Could not parse scene/cam/frame from path: {color_path}")
 
     if args.dataset == 'midintrinsics':
         available_scenes = discover_mid_scenes(root, args.mid_split, geometry_root=args.mid_geometry_root)

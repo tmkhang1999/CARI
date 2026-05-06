@@ -141,12 +141,13 @@ class IntrinsicDecompositionV11Single(nn.Module):
         ccr_feats = self.ccr_encoder(ccr)
 
         # Inject raw CCR at decoder stage resolutions to avoid over-smoothed priors.
-        ccr_raw3 = self.ccr_prior_proj3(F.interpolate(ccr, size=ccr_feats[3].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_raw2 = self.ccr_prior_proj2(F.interpolate(ccr, size=ccr_feats[2].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_raw1 = self.ccr_prior_proj1(F.interpolate(ccr, size=ccr_feats[1].shape[-2:], mode='bilinear', align_corners=False))
-        ccr_prior3 = ccr_feats[3] + ccr_raw3
-        ccr_prior2 = ccr_feats[2] + ccr_raw2
-        ccr_prior1 = ccr_feats[1] + ccr_raw1
+        # ccr_feats: [x0 (H,64ch), c1 (H/2,64ch), c2 (H/4,128ch), c3 (H/8,256ch), c4 (H/16,512ch)]
+        ccr_raw3 = self.ccr_prior_proj3(F.interpolate(ccr, size=ccr_feats[4].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_raw2 = self.ccr_prior_proj2(F.interpolate(ccr, size=ccr_feats[3].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_raw1 = self.ccr_prior_proj1(F.interpolate(ccr, size=ccr_feats[2].shape[-2:], mode='bilinear', align_corners=False))
+        ccr_prior3 = ccr_feats[4] + ccr_raw3  # H/16, 512ch
+        ccr_prior2 = ccr_feats[3] + ccr_raw2  # H/8,  256ch
+        ccr_prior1 = ccr_feats[2] + ccr_raw1  # H/4,  128ch
 
         gamma, beta = self.illuminant_descriptor(rgb, valid_mask)
         z_b = z_global * (1.0 + gamma) + beta

@@ -20,6 +20,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from skimage.metrics import structural_similarity as ssim
+try:
+    from tests.visualize_hdf5 import NYU40_COLORS
+except ImportError:
+    from visualize_hdf5 import NYU40_COLORS
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -32,8 +36,11 @@ from data.hypersim_dataset import HypersimDataset, _compute_tonemap_scale, _load
 from models import (
     IntrinsicDecompositionV11Single,
     IntrinsicDecompositionV11Mix,
+    IntrinsicDecompositionV12,
+    IntrinsicDecompositionV13,
+    IntrinsicDecompositionV13_1,
 )
-from preprocessor.compute_ccr import compute_ccr
+from models.ccr_utils import compute_ccr
 
 
 def parse_args():
@@ -55,6 +62,7 @@ def parse_args():
         default=0,
         help="CUDA device index used when --device is 'cuda' (e.g., 0 or 1)",
     )
+    parser.add_argument("--cuda", type=int, default=None, help="Shortcut for --cuda_index")
     parser.add_argument(
         "--max_side",
         type=int,
@@ -68,6 +76,13 @@ def parse_args():
         help="Optional global pass side cap. Set 0 to disable global pass.",
     )
     parser.add_argument("--output_dir", type=str, default="outputs/infer_one", help="Directory to save outputs")
+    parser.add_argument(
+        "--model_version",
+        type=str,
+        default="auto",
+        choices=["auto", "11", "11_single", "11_mix", "12", "13", "13_1"],
+        help="Model version to load. 'auto' infers from checkpoint contents/path.",
+    )
     return parser.parse_args()
 
 
@@ -107,8 +122,29 @@ def _resolve_device(device_arg, cuda_index):
     return torch.device(device_arg)
 
 
-def _build_stage1_model(model_cfg):
-    version = str(model_cfg.get("version", "11_single")).lower()
+def _infer_model_version(config: dict, checkpoint_path: str, model_version: str = "auto") -> str:
+    requested = str(model_version).lower()
+    if requested != "auto":
+        return requested
+
+    # Check config
+    if config and "model" in config and "version" in config["model"]:
+        return str(config["model"]["version"]).lower()
+
+    # Fallback to checkpoint path
+    ckpt_name = os.path.basename(str(checkpoint_path)).lower()
+    if "13_1" in ckpt_name or "/v13_1/" in str(checkpoint_path).lower():
+        return "13_1"
+    if "v13" in ckpt_name or "/v13/" in str(checkpoint_path).lower():
+        return "13"
+    if "v12" in ckpt_name or "/v12/" in str(checkpoint_path).lower():
+        return "12"
+    if "mix" in ckpt_name:
+        return "11_mix"
+    return "11_single"
+
+
+def _build_model(model_cfg, version):
     model_config = {
         "z_channels": model_cfg.get("z_channels", 1024),
         "freeze_stages": model_cfg.get("freeze_stages", [1, 2]),
@@ -118,7 +154,17 @@ def _build_stage1_model(model_cfg):
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
     
-    if "11_mix" in version:
+    v_str = str(version).lower()
+    if v_str.startswith("v"):
+        v_str = v_str[1:]
+        
+    if "13_1" in v_str:
+        return IntrinsicDecompositionV13_1(model_config)
+    elif "13" in v_str:
+        return IntrinsicDecompositionV13(model_config)
+    elif "12" in v_str:
+        return IntrinsicDecompositionV12(model_config)
+    elif "11_mix" in v_str or "mix" in v_str:
         return IntrinsicDecompositionV11Mix(model_config)
     else:
         return IntrinsicDecompositionV11Single(model_config)
@@ -174,6 +220,7 @@ def _prepare_one_sample(sample):
         "valid_mask": torch.from_numpy(valid).unsqueeze(0).unsqueeze(0).bool(),
         "M_diffuse": torch.tensor([1.0], dtype=torch.float32),
         "M_albedo": torch.tensor([1.0], dtype=torch.float32),
+        "ccr": compute_ccr(_to_chw_tensor(rgb_tm).unsqueeze(0)),
     }
     return out
 
@@ -196,8 +243,9 @@ def _maybe_resize_batch(batch, max_side):
         return batch, None
 
     resized = dict(batch)
-    for key in ["rgb", "albedo_raw", "illum_raw", "normals"]:
-        resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
+    for key in ["rgb", "albedo_raw", "illum_raw", "normals", "ccr"]:
+        if key in batch:
+            resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
     resized["valid_mask"] = F.interpolate(batch["valid_mask"].float(), size=(new_h, new_w), mode="nearest").bool()
     resized["seg"] = F.interpolate(batch["seg"].float(), size=(new_h, new_w), mode="nearest").long()
 
@@ -207,8 +255,9 @@ def _maybe_resize_batch(batch, max_side):
 
 def _resize_batch_to_hw(batch, new_h, new_w):
     resized = dict(batch)
-    for key in ["rgb", "albedo_raw", "illum_raw", "normals"]:
-        resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
+    for key in ["rgb", "albedo_raw", "illum_raw", "normals", "ccr"]:
+        if key in batch:
+            resized[key] = F.interpolate(batch[key], size=(new_h, new_w), mode="bilinear", align_corners=False)
     resized["valid_mask"] = F.interpolate(batch["valid_mask"].float(), size=(new_h, new_w), mode="nearest").bool()
     resized["seg"] = F.interpolate(batch["seg"].float(), size=(new_h, new_w), mode="nearest").long()
     return resized
@@ -228,7 +277,9 @@ def _try_forward_with_shape_fallback(model, batch):
     """Run forward once; if bottleneck shape mismatch appears, resize and retry."""
     try:
         t_rgb = batch["rgb"]
-        ccr = compute_ccr(t_rgb) if hasattr(model, "with_ccr") and model.with_ccr else None
+        ccr = batch.get("ccr")
+        if ccr is None and hasattr(model, "with_ccr") and model.with_ccr:
+            ccr = compute_ccr(t_rgb)
         
         pred = model(
             t_rgb,
@@ -464,7 +515,71 @@ def _vis_tonemap(img, percentile=99.0, eps=1e-6, scale=None, valid_mask=None):
     return torch.clamp(img / scale, 0.0, 1.0)
 
 
-def _save_visual_strip(rgb, preds, gts, valid_mask, out_png):
+def _seg_to_rgb(seg):
+    """Convert segmentation labels to RGB using NYU40 palette."""
+    if isinstance(seg, torch.Tensor):
+        seg = seg.cpu().numpy()
+    seg_idx = seg.astype(np.int32)
+    seg_idx = np.where(seg_idx < 0, 0, seg_idx)
+    seg_idx = np.clip(seg_idx, 0, 40)
+    rgb = NYU40_COLORS[seg_idx] / 255.0
+    return torch.from_numpy(rgb.astype(np.float32)).permute(2, 0, 1)
+
+
+def _normals_to_rgb(normals):
+    """Convert [-1, 1] normals to [0, 1] RGB."""
+    return torch.clamp((normals + 1.0) / 2.0, 0.0, 1.0)
+
+
+def _auto_expose_rgb(img, p=98.0, mask=None):
+    """Auto-exposure logic from infer_wild.py adapted for torch tensors."""
+    img_vis = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    img_vis = img_vis.clamp_min(0.0)
+    
+    if mask is not None:
+        # Use mask to find robust scale (ignore background/padded areas)
+        valid_mask = mask.bool().expand_as(img_vis)
+        valid_pixels = img_vis[valid_mask]
+        if valid_pixels.numel() > 100:
+            scale = torch.quantile(valid_pixels, p / 100.0) + 1e-6
+        else:
+            scale = torch.quantile(img_vis[img_vis > 0.01], p / 100.0) + 1e-6
+    else:
+        scale = torch.quantile(img_vis[img_vis > 0.01], p / 100.0) + 1e-6
+        
+    return torch.pow(torch.clamp(img_vis / scale, 0.0, 1.0), 1.0/3.0)
+
+
+def _auto_expose_albedo(img):
+    """Smarter auto-expose for albedo from infer_wild.py."""
+    img_vis = torch.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+    img_vis = img_vis.clamp_min(0.0)
+    
+    # Use 95th percentile to ignore tiny bright spikes and find the true "white"
+    scale = torch.quantile(img_vis[img_vis > 0.01], 0.95) + 1e-6 
+    
+    # Stretch to 1.0 and Gamma correct
+    return torch.pow(torch.clamp(img_vis / scale, 0.0, 1.0), 1.0/2.2)
+
+
+def _vis_ccr_magma(ccr):
+    """Visualize CCR magnitude using the magma colormap without gamma correction."""
+    import matplotlib
+    import matplotlib.cm as cm
+    if ccr.ndim == 4:
+        ccr = ccr[0]
+    # Magnitude of first 3 channels (log CCR)
+    ccr_mag = torch.sqrt(torch.sum(ccr[:3]**2, dim=0)) / 1.73205
+    vmax = torch.quantile(ccr_mag, 0.99) + 1e-6
+    ccr_mag_norm = torch.clamp(ccr_mag / vmax, 0.0, 1.0).cpu().numpy()
+    
+    # Apply magma colormap
+    magma = cm.get_cmap("magma") if hasattr(cm, 'get_cmap') else matplotlib.colormaps["magma"]
+    ccr_rgb = magma(ccr_mag_norm)[..., :3]
+    return torch.from_numpy(ccr_rgb).permute(2, 0, 1).to(ccr.device, dtype=torch.float32)
+
+
+def _save_visual_strip(rgb, preds, gts, valid_mask, normals, seg, ccr, out_png):
     import torchvision.utils as vutils
     from PIL import Image, ImageDraw, ImageFont
 
@@ -477,7 +592,7 @@ def _save_visual_strip(rgb, preds, gts, valid_mask, out_png):
     s_d_pred_linear = 1.0 / (preds['pi'] + 1e-6) - 1.0
     s_d_gt_linear = 1.0 / (gts['pi_star'] + 1e-6) - 1.0
 
-    # 2. Colorful shading GT/pred via inverse-domain route
+    # 2. Colorful shading GT/pred
     c_rg_gt = (1.0 - gts['xi_star'][:, 0:1]) / (gts['xi_star'][:, 0:1] + 1e-6)
     c_bg_gt = (1.0 - gts['xi_star'][:, 1:2]) / (gts['xi_star'][:, 1:2] + 1e-6)
     denom_gt = (0.299 * c_rg_gt + 0.587 + 0.114 * c_bg_gt).clamp(1e-6)
@@ -493,52 +608,55 @@ def _save_visual_strip(rgb, preds, gts, valid_mask, out_png):
     else:
         s_c_pred_linear = s_g_pred_linear.repeat(1, 3, 1, 1)
 
-    # 3. Diffuse reconstruction
-    recon_diffuse = preds['a_d'] * s_d_pred_linear
-    recon_diffuse_gt = gts['A_d_star'] * s_d_gt_linear
+    # 3. Diffuse reconstruction and postprocessing (Following infer_wild.py scale matching)
+    recon_diffuse_raw = preds['a_d'] * s_d_pred_linear
+    recon_diffuse_gt_raw = gts['A_d_star'] * s_d_gt_linear
 
-    # 4. Joint Scaling only for Albedo (already scale-matched in linear space)
-    scale_a_d = torch.max(_get_tonemap_scale(preds['a_d'], valid_mask=valid_mask), _get_tonemap_scale(gts['A_d_star'], valid_mask=valid_mask))
-
-    s_g_pred_vis = _vis_tonemap(s_g_pred_linear, valid_mask=valid_mask)
-    s_g_gt_vis = _vis_tonemap(s_g_gt_linear, valid_mask=valid_mask)
-    s_c_pred_vis = _vis_tonemap(s_c_pred_linear, valid_mask=valid_mask)
-    s_c_gt_vis = _vis_tonemap(s_c_gt_linear, valid_mask=valid_mask)
-    s_d_pred_vis = _vis_tonemap(s_d_pred_linear, valid_mask=valid_mask)
-    s_d_gt_vis = _vis_tonemap(s_d_gt_linear, valid_mask=valid_mask)
-    recon_vis = _vis_tonemap(recon_diffuse, valid_mask=valid_mask)
-    recon_gt_vis = _vis_tonemap(recon_diffuse_gt, valid_mask=valid_mask)
+    # Match pred recon to Input RGB scale (Least squares)
+    v = valid_mask.float()
+    num = (rgb * recon_diffuse_raw * v).sum()
+    den = (recon_diffuse_raw * recon_diffuse_raw * v).sum()
+    k_scale = num / (den + 1e-6)
+    recon_diffuse = recon_diffuse_raw * k_scale
     
-    a_d_pred_vis = gamma_correct(_vis_tonemap(preds['a_d'], scale=scale_a_d, valid_mask=valid_mask))
-    a_d_gt_vis = gamma_correct(_vis_tonemap(gts['A_d_star'], scale=scale_a_d, valid_mask=valid_mask))
+    # GT recon matching
+    num_gt = (rgb * recon_diffuse_gt_raw * v).sum()
+    den_gt = (recon_diffuse_gt_raw * recon_diffuse_gt_raw * v).sum()
+    k_scale_gt = num_gt / (den_gt + 1e-6)
+    recon_diffuse_gt = recon_diffuse_gt_raw * k_scale_gt
+
+    # Residual calculation
+    pred_res = torch.clamp(rgb - recon_diffuse, min=0.0)
+    gt_res = torch.clamp(rgb - recon_diffuse_gt, min=0.0)
 
     # Derived diagnostics
-    a_g_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_g_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
-    a_c_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_c_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
-    a_d_derived_vis = gamma_correct(_vis_tonemap(rgb / (s_d_pred_linear + 1e-6), scale=None, valid_mask=valid_mask))
-    blank_tile = torch.ones_like(a_g_derived_vis)
+    deriv_ag = rgb / (s_g_pred_linear + 1e-6)
+    deriv_ac = rgb / (s_c_pred_linear + 1e-6)
 
+    blank_tile = torch.ones_like(rgb)
+
+    # Grid Construction (3 rows x 5 columns)
     sample_tiles = [
+        # Row 1: Input RGB, Surface Normals, Segmentation map, CCR map, Residual GT
         ('Input RGB', _vis_tonemap(rgb, scale=None, valid_mask=valid_mask)),
-        ('Gray Shading GT', s_g_gt_vis),
-        ('Colorful Shading GT', s_c_gt_vis),
-        ('Diffuse Shading GT', s_d_gt_vis),
-        ('Albedo GT', a_d_gt_vis),
-        ('Diffuse Recon GT', recon_gt_vis),
+        ('Surface Normals', _normals_to_rgb(normals)),
+        ('Segmentation map', _seg_to_rgb(seg[0, 0] if seg.ndim == 4 else seg[0])),
+        ('CCR map', _vis_ccr_magma(ccr)),
+        ('Residual GT (Spec)', _auto_expose_rgb(gt_res, mask=valid_mask)),
 
-        ('', blank_tile),
-        ('Gray Shading Pred', s_g_pred_vis),
-        ('Colorful Shading Pred', s_c_pred_vis),
-        ('Diffuse Shading Pred', s_d_pred_vis),
-        ('Albedo Pred', a_d_pred_vis),
-        ('Diffuse Recon Pred', recon_vis),
+        # Row 2: Gray Shading GT, Colorful Shading GT, Diffuse Shading GT, Albedo GT, Diffuse Recon GT
+        ('Gray Shading GT', _auto_expose_rgb(s_g_gt_linear, mask=valid_mask)),
+        ('Colorful Shading GT', _auto_expose_rgb(s_c_gt_linear, mask=valid_mask)),
+        ('Diffuse Shading GT', _auto_expose_rgb(s_d_gt_linear, mask=valid_mask)),
+        ('Albedo GT', _auto_expose_albedo(gts['A_d_star'])),
+        ('Diffuse Recon GT', _auto_expose_rgb(recon_diffuse_gt, mask=valid_mask)),
 
-        ('', blank_tile),
-        ('Derived A_g = I/S_g', a_g_derived_vis),
-        ('Derived A_c = I/S_c', a_c_derived_vis),
-        ('Derived A_d = I/S_d', a_d_derived_vis),
-        ('', blank_tile),
-        ('', blank_tile),
+        # Row 3: Gray Shading Pred, Colorful Shading Pred, Diffuse Shading Pred, Albedo Pred, Diffuse Recon Pred
+        ('Gray Shading Pred', _auto_expose_rgb(s_g_pred_linear, mask=valid_mask)),
+        ('Colorful Shading Pred', _auto_expose_rgb(s_c_pred_linear, mask=valid_mask)),
+        ('Diffuse Shading Pred', _auto_expose_rgb(s_d_pred_linear, mask=valid_mask)),
+        ('Albedo Pred', _auto_expose_albedo(preds['a_d'])),
+        ('Diffuse Recon Pred', _auto_expose_rgb(recon_diffuse, mask=valid_mask)),
     ]
 
     tiles = []
@@ -576,7 +694,7 @@ def _save_visual_strip(rgb, preds, gts, valid_mask, out_png):
         tile_labeled = torch.from_numpy(np.array(img).astype(np.float32) / 255.0).permute(2, 0, 1)
         tiles.append(tile_labeled)
 
-    grid = vutils.make_grid(tiles, nrow=6, padding=4, pad_value=1.0)
+    grid = vutils.make_grid(tiles, nrow=5, padding=4, pad_value=1.0)
     out_dir = os.path.dirname(out_png)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -588,9 +706,12 @@ def main():
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
     config = checkpoint.get("config", {})
-    device = _resolve_device(args.device, args.cuda_index)
+    
+    cuda_idx = args.cuda if args.cuda is not None else args.cuda_index
+    device = _resolve_device(args.device, cuda_idx)
 
-    model = _build_stage1_model(config.get("model", {})).to(device)
+    model_version = _infer_model_version(config, args.checkpoint, args.model_version)
+    model = _build_model(config.get("model", {}), model_version).to(device)
     model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     model.eval()
 
@@ -610,7 +731,24 @@ def main():
 
     sample = _select_sample(dataset.samples, args.sample_idx, args.match)
     batch_full_res_cpu = _prepare_one_sample(sample)
+    
+    # Padding to multiple of 32 (Following infer_wild.py preprocessing)
+    stride = 32
     _, _, h_full, w_full = batch_full_res_cpu["rgb"].shape
+    pad_h = (stride - (h_full % stride)) % stride
+    pad_w = (stride - (w_full % stride)) % stride
+    if pad_h > 0 or pad_w > 0:
+        pad_spec = (0, pad_w, 0, pad_h)  # left, right, top, bottom
+        for k in ["rgb", "albedo_raw", "illum_raw", "normals", "seg", "valid_mask", "ccr"]:
+            if k in batch_full_res_cpu:
+                batch_full_res_cpu[k] = torch.nn.functional.pad(
+                    batch_full_res_cpu[k].float() if k in ["seg", "valid_mask"] else batch_full_res_cpu[k],
+                    pad_spec,
+                    mode="replicate"
+                )
+                if k == "seg": batch_full_res_cpu[k] = batch_full_res_cpu[k].long()
+                if k == "valid_mask": batch_full_res_cpu[k] = batch_full_res_cpu[k].bool()
+        _, _, h_full, w_full = batch_full_res_cpu["rgb"].shape
 
     predictions_global_up = None
     global_resize_msg = None
@@ -685,6 +823,9 @@ def main():
             targets["D_g_star"] = batch["d_g_raw"].to(device)
         if "xi_raw" in batch:
             targets["xi_star"] = batch["xi_raw"].to(device)
+        
+        # Use pre-computed CCR for visualization
+        ccr = batch.get("ccr")
 
     # Compute metrics in real shading space.
     pi_pred = predictions["pi"]
@@ -710,7 +851,16 @@ def main():
     with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, sort_keys=True)
 
-    _save_visual_strip(batch["rgb"], predictions, targets, valid_mask, os.path.join(out_dir, "pred_gt_strip.png"))
+    _save_visual_strip(
+        batch["rgb"], 
+        predictions, 
+        targets, 
+        valid_mask, 
+        batch["normals"], 
+        batch["seg"], 
+        ccr, 
+        os.path.join(out_dir, "pred_gt_strip.png")
+    )
 
     print("Single-image inference completed.")
     print(f"Output dir: {out_dir}")

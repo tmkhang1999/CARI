@@ -33,7 +33,9 @@ from models import (
     IntrinsicDecompositionV11Single,
     IntrinsicDecompositionV11Mix,
     IntrinsicDecompositionV12,
+    IntrinsicDecompositionV13,
 )
+from models.ccr_utils import compute_ccr
 from losses.flexible_loss import FlexibleLoss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
 
@@ -96,9 +98,19 @@ def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
         writer.add_scalar(tag, float(val), global_step)
 
 
-def scale_match(A_raw, A_pred, valid):
+def scale_match(A_raw, A_pred, valid, seg=None, stable_classes=[1, 2, 22]):
     """Least-squares per-image scalar c for c*A_raw ~= A_pred over valid pixels."""
     v = valid.expand_as(A_raw).float()
+    
+    if seg is not None and stable_classes:
+        if seg.dim() == 4: seg = seg[:, 0]
+        target = torch.tensor(stable_classes, device=seg.device)
+        struct_mask = torch.isin(seg, target).unsqueeze(1).expand_as(A_raw).float()
+        # Only use structural pixels if enough exist (>5% of image)
+        struct_ratio = struct_mask.sum() / (v.sum() + 1e-7)
+        if struct_ratio > 0.05:
+            v = v * struct_mask
+
     a = (A_raw * v).reshape(A_raw.shape[0], -1)
     b = (A_pred * v).reshape(A_pred.shape[0], -1)
     c = (a * b).sum(dim=1) / ((a * a).sum(dim=1) + 1e-6)
@@ -113,9 +125,12 @@ def compute_targets(predictions, batch):
     rgb = batch['rgb'].to(device)
     albedo_raw = batch['albedo_raw'].to(device)
     valid_mask = batch['valid_mask'].to(device)
+    seg = batch.get('seg', None)
+    if seg is not None:
+        seg = seg.to(device)
     
     # Scale matching parameter C is computed between predictions and truth
-    c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask)
+    c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask, seg)
 
     A_star = c * albedo_raw
     A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
@@ -327,6 +342,9 @@ def train_one_step(model, batch, criterion, device):
         
     targets = compute_targets(predictions, batch)
 
+    with torch.no_grad():
+        ccr = compute_ccr(rgb)
+
     losses = criterion(
         predictions,
         targets,
@@ -336,6 +354,7 @@ def train_one_step(model, batch, criterion, device):
         _loss_seg(model, seg),
         normals=normals,
         rgb=rgb,
+        ccr=ccr,
     )
 
     return losses
@@ -1029,10 +1048,11 @@ def build_stage1_model(config):
     model_map = {
         11.0: IntrinsicDecompositionV11Single,
         12.0: IntrinsicDecompositionV12,
+        13.0: IntrinsicDecompositionV13,
     }
 
     if version not in model_map:
-        raise ValueError(f"Unsupported Stage1 version for single dataset mode: {version}. Supported: 11, 12")
+        raise ValueError(f"Unsupported Stage1 version for single dataset mode: {version}. Supported: 11, 12, 13")
     return model_map[version](model_cfg)
 
 
