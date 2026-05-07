@@ -279,8 +279,8 @@ class FlexibleLoss(nn.Module):
             route_tgt = A_d_star[route_idx] * route_mask
 
             # Apply gamma to align linear albedo with VGG's sRGB training distribution
-            pred_gamma = route_pred.clamp(0, 1).pow(1.0 / 2.2)
-            tgt_gamma  = route_tgt.clamp(0, 1).pow(1.0 / 2.2)
+            pred_gamma = (route_pred.clamp(0, 1) + 1e-6).pow(1.0 / 2.2)
+            tgt_gamma  = (route_tgt.clamp(0, 1) + 1e-6).pow(1.0 / 2.2)
 
             
             if self.lambda_perceptual > 0:

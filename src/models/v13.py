@@ -149,7 +149,7 @@ class IntrinsicDecompositionV13(nn.Module):
         return safe_albedo * mute_mask
 
     def forward(self, rgb, m_diffuse=None, normals=None, seg=None, valid_mask=None, ccr=None, **kwargs):
-        x_enc = rgb.clamp(0.0, 1.0).pow(1.0 / 2.2)
+        x_enc = (rgb.clamp(0.0, 1.0) + 1e-6).pow(1.0 / 2.2)
         z_global, skip_features = self.image_encoder(x_enc)
 
         if normals is None:
@@ -214,9 +214,9 @@ class IntrinsicDecompositionV13(nn.Module):
             z_c,
             skip_features,
             stage_ops=[
-                lambda x: self.sfm_c_ccr3(self.sfm_c_g3(x, g_c[3]), ccr_feats[4], seg),
-                lambda x: self.sfm_c_ccr2(self.sfm_c_g2(x, g_c[2]), ccr_feats[3], seg),
-                lambda x: self.sfm_c_ccr1(self.sfm_c_g1(x, g_c[1]), ccr_feats[2], seg),
+                lambda x: self.sfm_c_ccr3(self.sfm_c_g3(x, g_c[3]), ccr_prior3, seg),
+                lambda x: self.sfm_c_ccr2(self.sfm_c_g2(x, g_c[2]), ccr_prior2, seg),
+                lambda x: self.sfm_c_ccr1(self.sfm_c_g1(x, g_c[1]), ccr_prior1, seg),
             ],
         )
 
