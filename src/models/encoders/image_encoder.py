@@ -70,6 +70,10 @@ class ImageEncoder(nn.Module):
         # Freeze specified stages
         self._freeze_stages(freeze_stages)
 
+        # ImageNet Normalization buffers
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
     def _freeze_stages(self, freeze_stages):
         """
         Freeze parameters in specified stages (1-indexed).
@@ -119,7 +123,10 @@ class ImageEncoder(nn.Module):
             z_global: (N, C, H/32, W/32) bottleneck features
             skip_features: List of 4 tensors at scales [H/4, H/8, H/16, H/32]
         """
-        features = self.backbone(x)
+        # Apply ImageNet normalization to the input image
+        x_norm = (x - self.mean) / self.std
+
+        features = self.backbone(x_norm)
 
         # features[0]: H/4   (Base: 128, Large: 192, Tiny: 96)
         # features[1]: H/8   (Base: 256, Large: 384, Tiny: 192)

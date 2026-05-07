@@ -66,11 +66,7 @@ import torch
 import torch.nn.functional as F
 import random
 
-from src.data.augmentations import (
-    random_hue_saturation_shifting,
-    random_scaling_red_blue_channels,
-    random_color_shift,
-)
+from src.data.augmentations import apply_physical_augmentations
 
 from src.data.hypersim_dataset import HypersimDataset
 from src.models.ccr_utils import compute_ccr
@@ -268,74 +264,33 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
 
     # Apply augmentation if requested (Hypersim only)
     if augment:
-        # Convert to torch for augmentation
-        A = torch.from_numpy(bundle['albedo']).permute(2, 0, 1)  # (3, H, W)
         I_raw = torch.from_numpy(bundle['rgb_raw']).permute(2, 0, 1)
+        A = torch.from_numpy(bundle['albedo']).permute(2, 0, 1)
+        S = torch.from_numpy(bundle['illum']).permute(2, 0, 1)
+        N = torch.from_numpy(bundle['normals']).permute(2, 0, 1)
         
-        # We need shading S = I / A for re-derivation
-        eps = 1e-6
-        S = I_raw / (A + eps)
+        H, W = I_raw.shape[1:]
+        valid_mask = torch.ones((1, H, W))
         
-        # Augment based on selection
-        if aug_type == 'hue_sat':
-            A_aug = random_hue_saturation_shifting(A)
-            I_aug = (A_aug * S)
-            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
-            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
-        elif aug_type == 'scale':
-            A_aug = random_scaling_red_blue_channels(A)
-            I_aug = (A_aug * S)
-            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
-            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
-        elif aug_type == 'color_shift':
-            # In CD-IID: I = A * S. If I is shifted by g, then S must be shifted by g to preserve A.
-            I_aug, gain = random_color_shift(I_raw)
-            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
+        # Package into the 13-channel tensor expected by apply_physical_augmentations
+        t = torch.cat([I_raw, A, S, N, valid_mask], dim=0)
+        seg_t = torch.from_numpy(bundle['seg']).unsqueeze(0).long()
+        
+        # If aug_type matches a specific force_type, pass it directly
+        specific_types = ['spatial', 'wb', 'albedo_hue', 'albedo_scale', 'shadow_weak', 'shadow_strong', 'seg_degrade']
+        
+        if aug_type in specific_types:
+            t, seg_t = apply_physical_augmentations(t, seg_t, force_type=aug_type)
+        else:
+            # Apply the mutually exclusive physical augmentations just like the training script
+            t, seg_t = apply_physical_augmentations(t, seg_t, p_hflip=0.5, p_vflip=0.5)
             
-            # Re-derive Diffuse Shading GT
-            S_raw = torch.from_numpy(bundle['illum']).permute(2, 0, 1)
-            S_aug = S_raw * gain
-            bundle['illum'] = S_aug.permute(1, 2, 0).numpy()
-            
-            # Re-derive Residual (if any) - assuming it scales similarly for consistency
-            R_raw = torch.from_numpy(bundle['residual']).permute(2, 0, 1)
-            bundle['residual'] = (R_raw * gain).permute(1, 2, 0).numpy()
-        else: # 'all' or default
-            A_aug = random_hue_saturation_shifting(A)
-            A_aug = random_scaling_red_blue_channels(A_aug)
-            I_aug = (A_aug * S)
-            bundle['albedo'] = A_aug.permute(1, 2, 0).numpy()
-            bundle['rgb_raw'] = I_aug.permute(1, 2, 0).numpy()
-
-        if aug_type in ('seg_degrade', 'all'):
-            import cv2
-            seg_aug = bundle['seg'].copy()
-            classes = np.unique(seg_aug)
-            
-            if len(classes) > 1:
-                counts = [np.sum(seg_aug == c) for c in classes]
-                dominant_class = classes[np.argmax(counts)]
-                target_candidates = [c for c in classes if c != dominant_class]
-                
-                if target_candidates:
-                    num_to_distort = min(np.random.randint(2, 5), len(target_candidates))
-                    targets = np.random.choice(target_candidates, num_to_distort, replace=False)
-                    
-                    for c in targets:
-                        bin_mask = (seg_aug == c).astype(np.uint8)
-                        kernel_size = np.random.randint(15, 45)
-                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-                        
-                        if np.random.rand() > 0.5:
-                            eroded = cv2.erode(bin_mask, kernel)
-                            eroded_pixels = (bin_mask == 1) & (eroded == 0)
-                            seg_aug[eroded_pixels] = dominant_class
-                        else:
-                            dilated = cv2.dilate(bin_mask, kernel)
-                            dilated_pixels = (bin_mask == 0) & (dilated == 1)
-                            seg_aug[dilated_pixels] = c
-                            
-            bundle['seg'] = seg_aug
+        # Unpack back into the bundle
+        bundle['rgb_raw'] = t[0:3].permute(1, 2, 0).numpy()
+        bundle['albedo'] = t[3:6].permute(1, 2, 0).numpy()
+        bundle['illum'] = t[6:9].permute(1, 2, 0).numpy()
+        bundle['normals'] = t[9:12].permute(1, 2, 0).numpy()
+        bundle['seg'] = seg_t.squeeze(0).numpy()
 
     bundle['rgb_tm'] = tonemap_linear(bundle['rgb_raw'])
     
@@ -767,9 +722,8 @@ def parse_args():
                    help='How to display HDR GT maps (diffuse shading / residual). '
                         'This affects visualization only, never training.')
     p.add_argument('--dpi', type=int, default=180, help='Saved figure DPI')
-    p.add_argument('--augment', action='store_true', help='Apply data augmentation (Hypersim only)')
-    p.add_argument('--aug-type', choices=['hue_sat', 'scale', 'color_shift', 'seg_degrade', 'all'], default='all',
-                   help='Type of augmentation to apply')
+    p.add_argument('--augment', action='store_true', help='Apply mutually exclusive physical data augmentations (Hypersim only)')
+    p.add_argument('--aug-type', type=str, default='all', help='Type of physical augmentation: albedo_hue, albedo_scale, shadow_weak, shadow_strong, wb, all, all_summary')
     p.add_argument('--no-show', action='store_true', help='Do not open matplotlib window; save only')
     return p.parse_args()
 
@@ -872,6 +826,29 @@ def main():
                        show=False, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode, 
                        augment=args.augment, aug_type=args.aug_type)
         print('Done.')
+    elif args.aug_type == 'all_summary' and args.augment:
+        fr = args.frame.zfill(4)
+        summary_types = [
+            'none',             # 00
+            'wb',               # 01
+            'albedo_hue',       # 02
+            'albedo_scale',     # 03
+            'shadow_weak',      # 04
+            'shadow_strong',    # 05
+            'seg_degrade',      # 06
+            'all'               # 07
+        ]
+        save_dir = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}_all_summary'
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"Generating comprehensive augmentation summary for frame {fr} into {save_dir}")
+        for i, aug_t in enumerate(summary_types):
+            save_path = save_dir / f'{i:02d}_{aug_t}.png'
+            is_augment = aug_t != 'none'
+            plot_frame(root, args.scene, args.cam, fr, save_path=save_path,
+                       show=False, style=args.style, dpi=args.dpi, hdr_mode=args.hdr_mode, 
+                       augment=is_augment, aug_type=aug_t)
+        print("Done generating summary folder.")
     else:
         fr = args.frame.zfill(4)
         aug_tag = f'_aug_{args.aug_type}' if args.augment else ''
