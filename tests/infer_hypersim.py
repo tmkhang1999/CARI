@@ -38,7 +38,6 @@ from models import (
     IntrinsicDecompositionV11Mix,
     IntrinsicDecompositionV12,
     IntrinsicDecompositionV13,
-    IntrinsicDecompositionV13_1,
 )
 from models.ccr_utils import compute_ccr
 
@@ -158,9 +157,7 @@ def _build_model(model_cfg, version):
     if v_str.startswith("v"):
         v_str = v_str[1:]
         
-    if "13_1" in v_str:
-        return IntrinsicDecompositionV13_1(model_config)
-    elif "13" in v_str:
+    if "13" in v_str:
         return IntrinsicDecompositionV13(model_config)
     elif "12" in v_str:
         return IntrinsicDecompositionV12(model_config)

@@ -125,12 +125,17 @@ def compute_targets(predictions, batch):
     rgb = batch['rgb'].to(device)
     albedo_raw = batch['albedo_raw'].to(device)
     valid_mask = batch['valid_mask'].to(device)
+    loss_mask = batch.get('loss_mask', None)
+    if loss_mask is None:
+        loss_mask = valid_mask
+    else:
+        loss_mask = loss_mask.to(device)
     seg = batch.get('seg', None)
     if seg is not None:
         seg = seg.to(device)
     
     # Scale matching parameter C is computed between predictions and truth
-    c = scale_match(albedo_raw, predictions['a_d'].detach(), valid_mask, seg)
+    c = scale_match(albedo_raw, predictions['a_d'].detach(), loss_mask, seg)
 
     A_star = c * albedo_raw
     A_star = torch.nan_to_num(A_star, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
@@ -177,6 +182,7 @@ def compute_targets(predictions, batch):
         'A_d_star': A_star,
         'pi_star': pi_star,
         'valid_mask': valid_mask,
+        'loss_mask': loss_mask,
     }
 
 
@@ -187,6 +193,7 @@ def parse_args():
     parser.add_argument('--version', type=str, default=None)
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint path or "latest"')
     parser.add_argument('--auto-resume', action='store_true', help='Resume from latest checkpoint in version checkpoint dir')
+    parser.add_argument('--reset-lr', action='store_true', help='Override checkpoint LR with value from config')
     parser.add_argument('--device', type=str, default='cuda')
     return parser.parse_args()
 
@@ -324,6 +331,11 @@ def train_one_step(model, batch, criterion, device):
     if illum_raw is not None:
         illum_raw = illum_raw.to(device, non_blocking=True)
     valid_mask = batch['valid_mask'].to(device, non_blocking=True)
+    loss_mask = batch.get('loss_mask', None)
+    if loss_mask is None:
+        loss_mask = valid_mask
+    else:
+        loss_mask = loss_mask.to(device, non_blocking=True)
     m_diffuse = batch['M_diffuse'].float().to(device, non_blocking=True)
     m_albedo = batch['M_albedo'].float().to(device, non_blocking=True)
     seg = batch.get('seg', None)
@@ -350,7 +362,7 @@ def train_one_step(model, batch, criterion, device):
         targets,
         m_diffuse,
         m_albedo,
-        valid_mask,
+        loss_mask,
         _loss_seg(model, seg),
         normals=normals,
         rgb=rgb,
@@ -903,6 +915,11 @@ def validate(
 
             rgb = batch['rgb'].to(device, non_blocking=True)
             valid_mask = batch['valid_mask'].to(device, non_blocking=True)
+            loss_mask = batch.get('loss_mask', None)
+            if loss_mask is None:
+                loss_mask = valid_mask
+            else:
+                loss_mask = loss_mask.to(device, non_blocking=True)
             m_diffuse = batch['M_diffuse'].float().to(device, non_blocking=True)
             m_albedo = batch['M_albedo'].float().to(device, non_blocking=True)
             seg = batch.get('seg', None)
@@ -948,7 +965,7 @@ def validate(
 
             if compute_val_losses:
                 losses = criterion(
-                    predictions, targets, m_diffuse, m_albedo, valid_mask, _loss_seg(model, seg),
+                    predictions, targets, m_diffuse, m_albedo, loss_mask, _loss_seg(model, seg),
                     normals=normals, rgb=rgb
                 )
                 for k, v in losses.items():
@@ -966,33 +983,37 @@ def validate(
             s_g_gt = 1.0 / (d_g_star + 1e-6) - 1.0
 
             # Grayshading metrics
-            total_metric['s_g_lmse'] += _compute_lmse(s_g_pred, s_g_gt, valid_mask).item() * batch_size
-            total_metric['s_g_rmse'] += _masked_scale_invariant_rmse(s_g_pred, s_g_gt, valid_mask).item() * batch_size
-            total_metric['s_g_ssim'] += _compute_ssim_bounded(s_g_pred, s_g_gt, valid_mask) * batch_size
+            total_metric['s_g_lmse'] += _compute_lmse(s_g_pred, s_g_gt, loss_mask).item() * batch_size
+            total_metric['s_g_rmse'] += _masked_scale_invariant_rmse(s_g_pred, s_g_gt, loss_mask).item() * batch_size
+            total_metric['s_g_ssim'] += _compute_shading_ssim(s_g_pred, s_g_gt, loss_mask) * batch_size
 
             # Chroma metrics
             if 'xi' in predictions:
-                xi_v = valid_mask.expand_as(predictions['xi']).float()
+                xi_v = loss_mask.expand_as(predictions['xi']).float()
                 xi_diff_sq = (predictions['xi'] - targets['xi_star']) ** 2 * xi_v
                 xi_err_per_image = xi_diff_sq.reshape(batch_size, -1).sum(dim=1) / (xi_v.reshape(batch_size, -1).sum(dim=1) + 1e-7)
                 total_metric['xi_mse'] += xi_err_per_image.mean().item() * batch_size
 
             # Albedo metrics
-            total_metric['a_d_lmse'] += _compute_lmse(predictions['a_d'], targets['A_d_star'], valid_mask).item() * batch_size
-            total_metric['a_d_rmse'] += _masked_scale_invariant_rmse(predictions['a_d'], targets['A_d_star'], valid_mask).item() * batch_size
-            total_metric['a_d_ssim'] += _compute_ssim_bounded(predictions['a_d'], targets['A_d_star'], valid_mask) * batch_size
+            total_metric['a_d_lmse'] += _compute_lmse(predictions['a_d'], targets['A_d_star'], loss_mask).item() * batch_size
+            total_metric['a_d_rmse'] += _masked_scale_invariant_rmse(predictions['a_d'], targets['A_d_star'], loss_mask).item() * batch_size
+            total_metric['a_d_ssim'] += _compute_ssim_bounded(predictions['a_d'], targets['A_d_star'], loss_mask) * batch_size
 
             # Diffuse metrics
             diffuse_valid = (m_diffuse > 0.5)
-            n_diffuse_batch = diffuse_valid.sum().item()
+            n_diffuse_batch = int(diffuse_valid.sum().item())
             if n_diffuse_batch > 0:
-                pi_pred_d = pi_pred[diffuse_valid]
-                pi_star_d = pi_star[diffuse_valid]
-                vm_d = valid_mask[diffuse_valid]
+                # Convert diffuse distance map (pi) to linear shading (s_d) for consistent evaluation
+                s_d_pred = 1.0 / (pi_pred + 1e-6) - 1.0
+                s_d_gt = 1.0 / (pi_star + 1e-6) - 1.0
                 
-                total_metric['s_d_lmse'] += _compute_lmse(pi_pred_d, pi_star_d, vm_d).item() * n_diffuse_batch
-                total_metric['s_d_rmse'] += _masked_scale_invariant_rmse(pi_pred_d, pi_star_d, vm_d).item() * n_diffuse_batch
-                total_metric['s_d_ssim'] += _compute_ssim_bounded(pi_pred_d, pi_star_d, vm_d) * n_diffuse_batch
+                s_d_pred_v = s_d_pred[diffuse_valid]
+                s_d_gt_v = s_d_gt[diffuse_valid]
+                vm_d = loss_mask[diffuse_valid]
+                
+                total_metric['s_d_lmse'] += _compute_lmse(s_d_pred_v, s_d_gt_v, vm_d).item() * n_diffuse_batch
+                total_metric['s_d_rmse'] += _masked_scale_invariant_rmse(s_d_pred_v, s_d_gt_v, vm_d).item() * n_diffuse_batch
+                total_metric['s_d_ssim'] += _compute_shading_ssim(s_d_pred_v, s_d_gt_v, vm_d) * n_diffuse_batch
                 n_s_d_samples += n_diffuse_batch
             
             n_samples += batch_size
@@ -1248,6 +1269,17 @@ def main():
     if resume_path:
         start_step, _ = load_checkpoint(model, optimizer, resume_path, map_location=device)
         start_step += 1
+        
+        if args.reset_lr or config['train'].get('reset_lr', False):
+            base_lr = float(config['train']['lr'])
+            multiplier = float(config['model'].get('backbone_lr_multiplier', 1.0))
+            if len(optimizer.param_groups) == 2:
+                optimizer.param_groups[0]['lr'] = base_lr * multiplier
+                optimizer.param_groups[1]['lr'] = base_lr
+            else:
+                for pg in optimizer.param_groups:
+                    pg['lr'] = base_lr
+            print(f"!!! LR Reset: Manual override to {base_lr} from config")
 
     scheduler = None
     if use_cosine_lr:

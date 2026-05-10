@@ -462,22 +462,23 @@ class HypersimDataset(Dataset):
         else:
             sky_mask = np.ones(rgb.shape[:2], dtype=bool)
 
-        # Rule B: Drop Glass and Mirrors using Semantic IDs
-        # In NYU-40: window/glass = 9, mirror = 19
+        # Rule B: Identify non-diffuse classes using Semantic IDs
+        # In NYU-40: window/glass = 9, mirror = 19, tv/screen = 25
         if seg is not None:
-            glass_mirror_mask = (seg != 9) & (seg != 19)
+            diffuse_mask = (seg != 9) & (seg != 19) & (seg != 25)
         else:
-            glass_mirror_mask = np.ones(rgb.shape[:2], dtype=bool)
+            diffuse_mask = np.ones(rgb.shape[:2], dtype=bool)
 
-        # Rule C: Drop Absolute Dead Pixels (Mathematical Saftey)
-        # 1e-4 linear is ~0.015 in sRGB (rgb ~4). Keeps black jackets, drops void pixels.
-        alb_mask = alb.min(axis=-1) > 1e-4   
-
-        # alb_mask = alb.min(axis=-1) > 0.004       # reject near-zero per-channel albedo
+        # Rule C: Drop unreliable albedo pixels (paper threshold)
+        # 0.004 linear is ~0.066 in sRGB; filters sky/glass/mirror compression artifacts.
+        alb_mask = alb.min(axis=-1) > 0.004
         # valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
 
-        # Combine all physical, semantic, and numerical masks
-        valid_np = (sky_mask & glass_mirror_mask & alb_mask).astype(np.float32)
+        # Valid mask for model input/stats
+        # (keeps non-diffuse pixels visible, but MUST drop the sky void)
+        valid_np = (alb_mask).astype(np.float32)
+        # Loss mask excludes non-diffuse and sky pixels during supervision
+        loss_np = (alb_mask).astype(np.float32)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
         # Use one shared percentile scale so routed illum and fallback rgb/albedo
@@ -513,6 +514,7 @@ class HypersimDataset(Dataset):
         if crop_mode == 'full':
             # Evaluation mode: keep the full frame, then resize to input_size.
             seg_crop = seg
+            loss_crop = loss_np
         else:
             if crop_mode == 'center':
                 size = max_crop
@@ -528,6 +530,7 @@ class HypersimDataset(Dataset):
 
             combined = combined[top:top+size, left:left+size]        # (size,size,13)
             seg_crop = seg[top:top+size, left:left+size]             # (size,size)
+            loss_crop = loss_np[top:top+size, left:left+size]
 
         # ── Resize to input_size ──────────────────────────────────────────────
         t_img = torch.from_numpy(combined[..., :12]).permute(2, 0, 1).unsqueeze(0).float()
@@ -542,6 +545,12 @@ class HypersimDataset(Dataset):
             mode='nearest'
         ).squeeze(0)                                              # (1,H,W)
 
+        t_loss_mask = torch.from_numpy(loss_crop[..., None]).permute(2, 0, 1).unsqueeze(0).float()
+        t_loss_mask = F.interpolate(
+            t_loss_mask, size=(self.input_size, self.input_size),
+            mode='nearest'
+        ).squeeze(0)                                              # (1,H,W)
+
         t = torch.cat([t_img, t_mask], dim=0)                     # (13,H,W)
 
         seg_t = torch.from_numpy(seg_crop.astype(np.float32)).unsqueeze(0).unsqueeze(0)
@@ -552,7 +561,7 @@ class HypersimDataset(Dataset):
 
         # ── Segmentation Augmentation (train only) ───────────────
         if self.split == 'train':
-            seg_t = random_segmentation_degradation(seg_t, p_degrade=0.5)
+            seg_t = random_segmentation_degradation(seg_t, p_degrade=0.6)
 
         # ── Physical Augmentations (train only) ──────────────────
         if self.split == 'train':
@@ -567,6 +576,7 @@ class HypersimDataset(Dataset):
             'illum_raw':  t[6:9],               # (3,H,W) normalized by shared RGB scale
             'normals':    t[9:12],              # (3,H,W) unit vectors
             'valid_mask': t[12:13].bool(),      # (1,H,W)
+            'loss_mask':  t_loss_mask.bool(),   # (1,H,W) excludes non-diffuse
             'seg':        seg_t,                # (1,H,W) long, NYU-40
             'M_diffuse':  torch.tensor(1.0),
             'M_albedo':   torch.tensor(1.0),

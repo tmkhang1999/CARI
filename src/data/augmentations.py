@@ -46,9 +46,10 @@ def random_scaling_red_blue_channels(albedo, scale_range=(0.8, 1.2)):
 
     return (albedo * gain).clamp(0, 1)
 
-def random_segmentation_degradation(seg_t, p_degrade=0.5):
+def random_segmentation_degradation(seg_t, p_degrade=0.7):
     """
     Randomly erodes or dilates segmentation masks to simulate imperfect boundaries.
+    Also adds translation shifts to simulate misaligned masks.
     Args:
         seg_t: Tensor (1, H, W) or (H, W)
     """
@@ -70,19 +71,24 @@ def random_segmentation_degradation(seg_t, p_degrade=0.5):
     if not target_candidates:
         return seg_t
         
-    num_to_distort = min(np.random.randint(2, 5), len(target_candidates))
+    # STRONGER: Distort more classes (up to 10)
+    num_to_distort = min(np.random.randint(4, 10), len(target_candidates))
     targets = np.random.choice(target_candidates, num_to_distort, replace=False)
     
     seg_aug = seg_np.copy()
     for c in targets:
         bin_mask = (seg_np == c).astype(np.uint8)
-        kernel_size = np.random.randint(5, 25)
+        
+        # STRONGER: Even larger kernel sizes (up to 20)
+        kernel_size = np.random.randint(10, 20)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         
         if np.random.rand() > 0.5:
+            # Erosion: class shrinks
             eroded = cv2.erode(bin_mask, kernel)
             seg_aug[(bin_mask == 1) & (eroded == 0)] = dominant_class
         else:
+            # Dilation: class expands
             dilated = cv2.dilate(bin_mask, kernel)
             seg_aug[(bin_mask == 0) & (dilated == 1)] = c
             

@@ -12,16 +12,17 @@ model:
   num_seg_classes: 41
 
 train:
-  batch_size: 4
+  batch_size: 8
   input_size: 384
   num_workers: 6
-  grad_accum_steps: 8
+  grad_accum_steps: 4
   grad_clip_max_norm: 1.0
-  use_cosine_lr: false
+  use_cosine_lr: true
   lr: 1.0e-5
+  reset_lr: true
   lr_eta_min: 1.0e-7
   log_interval: 500
-  val_interval_iters: 1000
+  val_interval_iters: 2000
   checkpoint_interval_iters: 500
   val_example_images: 3
   val_example_indices: [25, 50,75] #[120, 200, 300]
@@ -50,7 +51,7 @@ data:
   midintrinsic_train_max_images: 0
 
 loss:
-  lambda_branch_a: 2.0
+  lambda_branch_a: 1.0
   lambda_branch_b: 1.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
@@ -59,14 +60,14 @@ loss:
   lambda_msg: 0.5           # Keeps boundaries sharp.
   
   # 2. THE SMART ROOM CLEANER (Replaces SemVar!)
-  lambda_boundary: 0.05     # Flattens albedo ONLY where CCR says there is no edge.
+  lambda_boundary: 0     # Flattens albedo ONLY where CCR says there is no edge.
 
   # 3. TEXTURE & COLOR
   enable_dssim_a_d: false   # Shading stays smooth!
-  lambda_dssim: 0.4         # Albedo keeps local micro-textures (like carpets).
-  lambda_perceptual: 0.05   # With Gamma Fix: Restores vibrant cross-channel colors.
+  lambda_dssim: 0         # Albedo keeps local micro-textures (like carpets).
 
   # 4. THE DEAD WEIGHT (Killed by your logic)
+  lambda_perceptual: 0      # With Gamma Fix: Restores vibrant cross-channel colors.
   lambda_recon: 0.0         # Killed: Violates I = A*S + R
   lambda_semvar: 0.0        # Killed: Destroys multi-material objects (Shoji screens)
   lambda_tv: 0.0            # Killed: Smears edges

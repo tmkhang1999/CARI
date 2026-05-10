@@ -494,9 +494,9 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     pred_sg = 1.0 / np.clip(pred_dg_inv, 1e-6, 1.0) - 1.0
     pred_sd = 1.0 / np.clip(pred_pi_inv, 1e-6, 1.0) - 1.0
 
-    # # CRITICAL INFERENCE CLAMP: Match the training bounds (1e-3, 20.0)
-    # pred_sg = np.clip(pred_sg, 1e-3, 20.0)
-    # pred_sd = np.clip(pred_sd, 1e-3, 20.0)
+    # Removed upper clamp to allow unbounded shading
+    pred_sg = np.clip(pred_sg, 1e-5, None)
+    pred_sd = np.clip(pred_sd, 1e-5, None)
     
     if 'xi' in preds:
         xi_np = to_np(preds['xi'])

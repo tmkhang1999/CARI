@@ -23,13 +23,13 @@ def compute_ccr(rgb):
     
     # 1. ROBUST EPSILON: 1e-3 is safe for 8-bit (1/255 = 0.0039). 
     # This prevents noise explosion in dark LDR shadows.
-    eps = 1e-3 
+    eps = 1e-4
     
     # 2. ANTI-ALIASING: Slightly blur the image to kill JPEG/Quantization noise 
     # before computing extreme log gradients.
     # Note: Stronger blur (5x5, sigma=1.0) for V13 to suppress noise in dark pixels
-    kernel_size = (5,5)
-    sigma = (1, 1)
+    kernel_size = (3, 3)
+    sigma = (0.5, 0.5)
     img_smooth = kornia.filters.gaussian_blur2d(img, kernel_size, sigma)
 
     kernel = torch.tensor(
@@ -55,9 +55,9 @@ def compute_ccr(rgb):
     
     # Soft dark-region gate: suppress CCR completely in extremely dark regions
     # where sensor/quantization noise dominates the log ratio.
-    intensity = img_smooth.mean(dim=1, keepdim=True)
-    dark_gate = torch.sigmoid((intensity - 0.02) * 50.0)
-    ccr = ccr * dark_gate
+    # intensity = img_smooth.mean(dim=1, keepdim=True)
+    # dark_gate = torch.sigmoid((intensity - 0.02) * 50.0)
+    # ccr = ccr * dark_gate
 
     if is_numpy:
         return ccr.squeeze(0).permute(1, 2, 0).cpu().numpy()
