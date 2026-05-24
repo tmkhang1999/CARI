@@ -14,12 +14,7 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from src.models import (
-    IntrinsicDecompositionV11Single,
-    IntrinsicDecompositionV11Mix,
-    IntrinsicDecompositionV12,
-    IntrinsicDecompositionV13,
-)
+from src.models import IntrinsicDecompositionV12, IntrinsicDecompositionV16
 try:
     from tests.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES
 except ImportError:
@@ -27,6 +22,14 @@ except ImportError:
 from preprocessor.infer_m2f_ins import run_segmentation
 from preprocessor.colors import M2F_CLASSES
 from src.models.ccr_utils import compute_ccr
+from src.models.iid_utils import (
+    derive_albedo,
+    invert,
+    iuv_to_rgb,
+    rgb_to_iuv,
+    resize_to_base,
+    uninvert,
+)
 
 # ====================================================================
 # 1. M2F (133/150 classes) to NYU40 (40 classes) Mapping
@@ -168,13 +171,14 @@ def map_m2f_to_nyu40(seg_m2f: np.ndarray) -> np.ndarray:
 # Data Loading (LDR vs HDR)
 # ====================================================================
 def load_image(filepath):
-    """Loads image and returns linear RGB [0,inf) (H,W,3) float32."""
+    """Loads image and returns linear RGB [0,inf) (H,W,3) float32 and is_hdr boolean."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Image not found at {filepath}")
     
     ext = os.path.splitext(filepath)[-1].lower()
+    is_hdr = ext in ['.hdr', '.exr']
     
-    if ext in ['.hdr', '.exr']:
+    if is_hdr:
         img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
         if img is None:
             raise ValueError(f"Could not load HDR image at {filepath}")
@@ -210,7 +214,7 @@ def load_image(filepath):
         
     # Sanitize NaNs and Infs
     rgb = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0)
-    return rgb
+    return rgb, is_hdr
 
 # ====================================================================
 # External Services
@@ -360,59 +364,83 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
     if config and "model" in config and "version" in config["model"]:
         return str(config["model"]["version"]).lower()
 
-    ckpt_name = os.path.basename(str(checkpoint_path)).lower()
-    if "v13" in ckpt_name or "/v13/" in str(checkpoint_path).lower():
+    # Fallback to path check
+    if "v17" in checkpoint_path.lower():
+        return "17"
+    if "v16" in checkpoint_path.lower():
+        return "16"
+    if "v15" in checkpoint_path.lower():
+        return "15"
+    if "v14" in checkpoint_path.lower():
+        return "14"
+    if "v13" in checkpoint_path.lower():
         return "13"
-    if "v12" in ckpt_name or "/v12/" in str(checkpoint_path).lower():
+    if "v12" in checkpoint_path.lower():
         return "12"
-    if "mix" in ckpt_name:
-        return "11_mix"
-    return "11_single"
-
+    return "14"
 
 def _build_model(model_config: dict, version: str, device: str):
-    v_str = str(version).lower()
-    if v_str.startswith("v"):
-        v_str = v_str[1:]
-        
-    if "13" in v_str:
-        return IntrinsicDecompositionV13(model_config).to(device)
-    if "12" in v_str:
+    v = str(version).strip().lower()
+    if v in ["17", "17.0"]:
+        return IntrinsicDecompositionV17(model_config).to(device)
+    if v in ["16", "16.0"]:
+        return IntrinsicDecompositionV16(model_config).to(device)
+    if v in ["15", "15.0"]:
+        return IntrinsicDecompositionV15(model_config).to(device)
+    if v in ["14", "14.0"]:
+        return IntrinsicDecompositionV14(model_config).to(device)
+    if v in ["12", "12.0"]:
         return IntrinsicDecompositionV12(model_config).to(device)
-    if "mix" in v_str:
-        return IntrinsicDecompositionV11Mix(model_config).to(device)
-    else:
-        return IntrinsicDecompositionV11Single(model_config).to(device)
+    return IntrinsicDecompositionV13(model_config).to(device)
 
 
 # ====================================================================
 # Main Inference & Plotting
 # ====================================================================
-def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version="auto", max_size=1280):
+def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version="auto", max_size=1280, min_size=1024):
     model_config = {
         "z_channels": 1024,
         "freeze_stages": [1, 2],
         "backbone": "convnextv2_base",
         "num_seg_classes": 41, 
-        "input_size": 1024,
+        "input_size": 384,
     }
     
     # 1. Load Data & Resize if needed to prevent OOM
     print("Preparing Input Data...")
-    rgb_linear = load_image(filepath)
+    rgb_linear, is_hdr = load_image(filepath)
     H_orig, W_orig = rgb_linear.shape[:2]
     
     if max(H_orig, W_orig) > max_size:
         scale = max_size / float(max(H_orig, W_orig))
+    elif max(H_orig, W_orig) < min_size:
+        scale = min_size / float(max(H_orig, W_orig))
+    else:
+        scale = 1.0
+        
+    if scale != 1.0:
         H, W = int(H_orig * scale), int(W_orig * scale)
-        print(f"Resizing input from {W_orig}x{H_orig} to {W}x{H} (max_size={max_size})")
+        print(f"Resizing input from {W_orig}x{H_orig} to {W}x{H} (scale={scale:.2f})")
         rgb_linear = cv2.resize(rgb_linear, (W, H), interpolation=cv2.INTER_LINEAR)
     else:
         H, W = H_orig, W_orig
 
     # 2. Tonemap RGB for Extractors
-    tonemap_scale = _compute_tonemap_scale(rgb_linear, percentile=99.0)
-    rgb_tm = _tonemap_linear(rgb_linear, percentile=99.0, scale=tonemap_scale)
+    if is_hdr:
+        tonemap_scale = _compute_tonemap_scale(rgb_linear, percentile=99.0)
+        # Note: _tonemap_linear effectively divides by scale, so rgb_linear / tonemap_scale undoes it.
+        # But we actually want rgb_tm to be the properly compressed [0,1] image for extractors
+        rgb_tm = _tonemap_linear(rgb_linear, percentile=99.0, scale=tonemap_scale)
+        # V13 model was trained on unclipped linear HDR input?
+        # Actually V13's forward() does x_enc = (rgb.clamp(0.0, 1.0) + 1e-6).pow(1.0 / 2.2)
+        # So passing raw HDR values will just be clamped.
+        # We will pass the properly scaled tonemapped HDR, because the model expects [0, 1] bounds!
+        rgb_hdr = rgb_linear / tonemap_scale
+    else:
+        # LDR images are already properly scaled in [0, 1] by the camera!
+        # DO NOT divide or tonemap them again, it will crush the data!
+        rgb_tm = np.clip(rgb_linear, 0.0, 1.0)
+        rgb_hdr = rgb_linear
     
     # 3. Surface Normal Extraction (Metric3D)
     # This function now handles its own loading and unloading to save peak VRAM.
@@ -466,119 +494,113 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
             ccr=t_ccr
         )
 
-    # Crop predictions back to the original image size.
+    # Crop predictions and inputs back to the original image size.
     if pad_h > 0 or pad_w > 0:
         for k, v in preds.items():
             if isinstance(v, torch.Tensor) and v.ndim == 4:
                 preds[k] = v[:, :, :H, :W]
         t_masks = t_masks[:, :, :H, :W]
+        t_rgb = t_rgb[:, :, :H, :W]
+        t_ccr = t_ccr[:, :, :H, :W] if t_ccr is not None else None
     
-    def to_np(t): return t.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    def to_np(t):
+        arr = t.squeeze(0).permute(1, 2, 0).cpu().numpy()
+        if arr.shape[-1] == 1:
+            arr = np.repeat(arr, 3, axis=-1)
+        return arr
 
-    ccr = to_np(t_ccr[:, :, :H, :W]) if t_ccr is not None else None
+    ccr = to_np(t_ccr) if t_ccr is not None else None
 
-    # Get predictions
-    pred_ad = to_np(preds['a_d'])                 # Albedo
-    if pred_ad.shape[-1] == 1:
-        pred_ad = np.repeat(pred_ad, 3, axis=-1)
+    # Get predictions and compute derived targets in PyTorch for maximum fidelity and alignment with training logic
+    with torch.no_grad():
+        t_dg_inv = preds['d_g']
+        t_pi_inv = preds['pi']
         
-    pred_pi_inv = to_np(preds['pi'])              # Inverse Diffuse Shading
-    if pred_pi_inv.shape[-1] == 1:
-        pred_pi_inv = np.repeat(pred_pi_inv, 3, axis=-1)
+        # Auxiliary CCR Edge Prediction
+        t_ccr_edge = preds.get('ccr_edge_pred', None)
+        if t_ccr_edge is not None:
+            t_ccr_edge = torch.sigmoid(t_ccr_edge)
+        
+        # Linear shading: S = uninvert(D)
+        t_sg = uninvert(t_dg_inv)
+        t_sd = uninvert(t_pi_inv)
+        
+        # Colorful shading
+        if 'xi' in preds:
+            t_iuv_shd = torch.cat([t_dg_inv, preds['xi']], dim=1)
+            t_sc = iuv_to_rgb(t_iuv_shd)
+        else:
+            t_sc = t_sg.repeat(1, 3, 1, 1)
 
-    pred_dg_inv = to_np(preds['d_g'])
-    if pred_dg_inv.shape[-1] == 1:
-        pred_dg_inv = np.repeat(pred_dg_inv, 3, axis=-1)
+        # Albedo Prediction (clamp to physical [0, 1] reflectance space)
+        t_ad = preds['a_d'].clamp(0.0, 1.0)
+
+        # Derived metrics (I / X)
+        t_deriv_ag = derive_albedo(t_rgb, t_sg)       # I / S_g (Albedo is bounded [0, 1])
+        t_deriv_ac = derive_albedo(t_rgb, t_sc)       # I / S_c (Albedo is bounded [0, 1])
+        
+        # Derive shading: I / A_d. Shading is NOT bounded to 1.0, so we cannot use derive_albedo!
+        t_net_clr_shd = t_rgb / t_ad.clamp(min=1e-3)
+        t_net_clr_shd = torch.nan_to_num(t_net_clr_shd, nan=0.0, posinf=1e6, neginf=0.0)
     
-    # Linear shading: S = 1/D - 1
-    pred_sg = 1.0 / np.clip(pred_dg_inv, 1e-6, 1.0) - 1.0
-    pred_sd = 1.0 / np.clip(pred_pi_inv, 1e-6, 1.0) - 1.0
-
-    # Removed upper clamp to allow unbounded shading
-    pred_sg = np.clip(pred_sg, 1e-5, None)
-    pred_sd = np.clip(pred_sd, 1e-5, None)
-    
-    if 'xi' in preds:
-        xi_np = to_np(preds['xi'])
-        c_rg = (1.0 - xi_np[..., 0:1]) / (xi_np[..., 0:1] + 1e-6)
-        c_bg = (1.0 - xi_np[..., 1:2]) / (xi_np[..., 1:2] + 1e-6)
-        denom_np = np.clip(0.299 * c_rg + 0.587 + 0.114 * c_bg, 1e-6, None)
-        sg_1c = pred_sg[..., 0:1]
-        s_green = sg_1c / denom_np
-        pred_sc = np.concatenate([c_rg * s_green, s_green, c_bg * s_green], axis=-1)
-    else:
-        pred_sc = pred_sg.copy()
-
-    # Albedo is a physical reflectance property. It cannot exceed 1.0.
-    pred_ad = np.clip(pred_ad, 0.0, 1.0)
+    # Convert all tensors to numpy arrays for visualization
+    pred_ad = to_np(t_ad)
+    pred_sg = to_np(t_sg)
+    pred_sd = to_np(t_sd)
+    pred_sc = to_np(t_sc)
+    deriv_ag = to_np(t_deriv_ag)
+    deriv_ac = to_np(t_deriv_ac)
+    deriv_shd_ad = to_np(t_net_clr_shd)
+    pred_edge = to_np(t_ccr_edge) if t_ccr_edge is not None else None
         
     # Reconstruct Diffuse = Albedo * Real Diffuse Shading
     pred_recon_raw = pred_ad * pred_sd
     
-    # FIX: Align the global scale of the reconstruction to the Input RGB
-    # We find scalar 'k' such that: k * recon_raw ≈ rgb_tm
-    valid = (pred_recon_raw > 1e-4)
-    if valid.sum() > 0:
-        # Least squares scale matching
-        k_scale = np.sum(rgb_tm[valid] * pred_recon_raw[valid]) / (np.sum(pred_recon_raw[valid]**2) + 1e-6)
-        pred_recon = np.clip(pred_recon_raw * k_scale, 0.0, None)
-    else:
-        pred_recon = np.clip(pred_recon_raw, 0.0, None)
-        
-    # Now we can safely extract the true physical residual (Specularities)
-    pred_res = np.clip(rgb_tm - pred_recon, 0.0, None)
-    
-    # Derived Albedos (Only need 1e-6 to prevent zero division) 
-    deriv_ag = np.clip(rgb_tm / np.clip(pred_sg, 1e-6, None), 0.0, None)
-    deriv_ac = np.clip(rgb_tm / np.clip(pred_sc, 1e-6, None), 0.0, None)
+    # CD-IID Residual Calculation
+    pred_res_raw = rgb_tm - pred_recon_raw
+    pos_res = np.clip(pred_res_raw, 0.0, None)
+    neg_res = np.abs(np.clip(pred_res_raw, None, 0.0))
     
     # 6. Visualization Setup (3 Rows)
     print("Generating Visualizations...")
-    fig, axes = plt.subplots(3, 4, figsize=(15, 12), constrained_layout=True, facecolor="#111111")
+    fig, axes = plt.subplots(3, 5, figsize=(18, 12), constrained_layout=True, facecolor="#111111")
     fig.suptitle(f'In-the-Wild V{inferred_version} Pipeline', fontsize=16, color='white', fontweight='bold')
     
     def _show(ax, img, title, cmap=None, vmin=0, vmax=1):
         if img is None:
             ax.axis('off')
             return
-        if len(img.shape) == 2:
+        if len(img.shape) == 2 or (len(img.shape) == 3 and img.shape[2] == 1):
             ax.imshow(img, cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest')
         else:
             ax.imshow(np.clip(img, 0, 1), interpolation='nearest')
         ax.set_title(title, color='white', fontsize=11, fontweight='semibold')
         ax.axis('off')
 
-    def _auto_expose_rgb(img, p=98.0, mask=None):
+    def _tonemap_shading(img):
+        # Scale 90th percentile to 1.0 (or 1.5 for darker highlights) then apply Reinhard
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
         img_vis = np.clip(img_vis, 0.0, None)
-        
-        if mask is not None:
-            # Use mask to find robust scale (ignore background/padded areas)
-            valid_pixels = img_vis[mask.squeeze() > 0.5]
-            if valid_pixels.size > 100:
-                scale = float(np.percentile(valid_pixels, p)) + 1e-6
-            else:
-                scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6
-        else:
-            scale = float(np.percentile(img_vis[img_vis > 0.01], p)) + 1e-6
-            
-        # Use 1/3.0 gamma to match V12 training visualization (punchier midtones)
-        return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/3.0)
+        p90 = np.percentile(img_vis, 90.0) + 1e-6
+        img_vis = (img_vis / p90) * 1.5
+        return img_vis / (img_vis + 1.0)
 
-    def _auto_expose_albedo(img):
-        """A smarter auto-expose specifically for collapsed Albedos"""
+    def _normalize_albedo(img):
+        # CD-IID uses: view(p=100) -> normalize by max and gamma correct
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
         img_vis = np.clip(img_vis, 0.0, None)
         
-        # Use 95th percentile to ignore tiny bright spikes and find the true "white"
-        scale = float(np.percentile(img_vis[img_vis > 0.01], 95.0)) + 1e-6 
-        
-        # Stretch to 1.0 and Gamma correct
-        return np.power(np.clip(img_vis / scale, 0.0, 1.0), 1.0/2.2)
+        valid_pixels = img_vis[img_vis > 0.01]
+        if valid_pixels.size > 100:
+            p100 = float(np.percentile(valid_pixels, 100.0)) + 1e-6
+        else:
+            p100 = 1.0
+            
+        return np.power(np.clip(img_vis / p100, 0.0, 1.0), 1.0/2.2)
 
     def _gamma_correct(img):
         img_vis = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
-        return np.power(np.clip(img_vis, 0.0, 1.0), 1.0/3.0)
+        return np.power(np.clip(img_vis, 0.0, 1.0), 1.0/2.2)
 
     # Colorize maps
     seg_rgb = NYU40_COLORS[seg_nyu40.flatten()].reshape(H, W, 3) / 255.0
@@ -586,10 +608,10 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
     
     # Hide all axes initially
     for r in range(3):
-        for c in range(4):
+        for c in range(5):
             axes[r,c].axis('off')
             
-    # ROW 1: Raw Image | Normals | Segmentation | CCR
+    # ROW 1: RGB | Normals | Segmentation | CCR | Edge Prediction
     _show(axes[0,0], _gamma_correct(rgb_tm), "Input RGB")
     _show(axes[0,1], normals_rgb, "Normals (Metric3D)")
     _show(axes[0,2], seg_rgb, "Segmentation (NYU40)")
@@ -597,35 +619,36 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", model_version=
         ccr_mag = np.sqrt(np.sum(ccr[..., :3] ** 2, axis=-1)) / np.sqrt(3.0)
         ccr_vmax = float(np.percentile(ccr_mag, 99.0)) + 1e-6
         _show(axes[0,3], ccr_mag, "CCR Magnitude", cmap="magma", vmax=ccr_vmax)
+    if pred_edge is not None:
+        _show(axes[0,4], pred_edge, "Edge Prediction", cmap="magma", vmin=0, vmax=1)
 
-    # ROW 2: S_g_pred, S_c_Pred, S_d_pred, A_d_pred, Diffuse_recon_pred
-    mask_np = t_masks.cpu().numpy()
-    _show(axes[1,0], _auto_expose_rgb(pred_sg, mask=mask_np), "Gray Shading Pred")
-    _show(axes[1,1], _auto_expose_rgb(pred_sc, mask=mask_np), "Colorful Shading Pred")
-    _show(axes[1,2], _auto_expose_rgb(pred_sd, mask=mask_np), "Diffuse Shading Pred")
-    _show(axes[1,3], _auto_expose_rgb(pred_recon, mask=mask_np), "Diffuse Recon Pred")
+    # ROW 2: S_g | S_c | A_d | S_d | Diffuse Recon
+    _show(axes[1,0], _tonemap_shading(pred_sg), "S_g (Gray Shd)")
+    _show(axes[1,1], _tonemap_shading(pred_sc), "S_c (Color Shd)")
+    _show(axes[1,2], _normalize_albedo(pred_ad), "A_d (Albedo)")
+    _show(axes[1,3], _tonemap_shading(pred_sd), "S_d (Diffuse Shd)")
+    _show(axes[1,4], _gamma_correct(pred_recon_raw), "Diffuse Recon (No Scale)")
 
-    # ROW 3: A_g, A_c, A_d, Residual
-    _show(axes[2,0], _auto_expose_rgb(deriv_ag, mask=mask_np), "Derived A_g = I / S_g_pred")
-    _show(axes[2,1], _auto_expose_rgb(deriv_ac, mask=mask_np), "Derived A_c = I / S_c_pred")
-    _show(axes[2,2], _auto_expose_albedo(pred_ad), "Albedo Pred (auto-exposed)")
-    _show(axes[2,3], _auto_expose_rgb(pred_res, mask=mask_np), "Residual Pred (Specular)")
+    # ROW 3: I/S_g | I/S_c | I/A_d | "" | Residual
+    _show(axes[2,0], _normalize_albedo(deriv_ag), "I / S_g (Derived A_g)")
+    _show(axes[2,1], _normalize_albedo(deriv_ac), "I / S_c (Derived A_c)")
+    _show(axes[2,2], _tonemap_shading(deriv_shd_ad), "I / A_d (Derived Shd)")
+    # Column 3 is empty
+    _show(axes[2,4], _gamma_correct(pred_res_raw), "Residual (I - Recon)")
 
     os.makedirs("outputs", exist_ok=True)
     out_path = "outputs/wild_inference.png"
     plt.savefig(out_path, facecolor="#111111", dpi=150)
     print(f"Done! Saved visualization strip to {out_path}")
 
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True, type=str, help="Path to external image")
-    parser.add_argument("--checkpoint", default="checkpoints/v11/checkpoint_latest.pth", type=str)
+    parser.add_argument("--checkpoint", default="checkpoints/v13/checkpoint_latest.pth", type=str)
     parser.add_argument(
         "--model_version",
         default="auto",
-        choices=["auto", "11", "11_single", "11_mix", "12", "13"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     parser.add_argument("--device", default="cuda", type=str, help="Device string, e.g. cpu, cuda, cuda:1")
@@ -637,5 +660,11 @@ if __name__ == "__main__":
     chosen_cuda_index = args.cuda if args.cuda is not None else args.cuda_index
     resolved_device = resolve_device(args.device, chosen_cuda_index)
     print(f"Using device: {resolved_device}")
-
-    infer_and_visualize(args.image, args.checkpoint, resolved_device, args.model_version, max_size=args.max_size)
+    
+    infer_and_visualize(
+        args.image, 
+        args.checkpoint, 
+        device=resolved_device, 
+        model_version=args.model_version,
+        max_size=args.max_size
+    )

@@ -66,7 +66,7 @@ import torch
 import torch.nn.functional as F
 import random
 
-from src.data.augmentations import apply_physical_augmentations
+from src.data.augmentations import apply_physical_augmentations, random_exposure_jitter
 
 from src.data.hypersim_dataset import HypersimDataset
 from src.models.ccr_utils import compute_ccr
@@ -199,11 +199,13 @@ def tonemap_linear(rgb: np.ndarray, percentile: float = 99.0) -> np.ndarray:
     return np.clip(rgb / scale, 0.0, 1.0)
 
 
-def tonemap_hdr(img: np.ndarray, gamma: float = 2.2) -> np.ndarray:
+def tonemap_hdr(img: np.ndarray, gamma: float = 2.2, auto_scale: bool = True) -> np.ndarray:
     """Display-only tone mapping for HDR RGB images."""
     img = np.clip(img, 0, None)
-    scale = float(np.percentile(img, 99)) + 1e-6
-    return np.clip(img / scale, 0.0, 1.0) ** (1 / gamma)
+    if auto_scale:
+        scale = float(np.percentile(img, 99)) + 1e-6
+        img = img / scale
+    return np.clip(img, 0.0, 1.0) ** (1 / gamma)
 
 
 def vis_tonemap_linear(img: np.ndarray, percentile: float = 99.0, valid_mask: np.ndarray | None = None) -> np.ndarray:
@@ -248,11 +250,12 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
     final_dir = images_dir / f'scene_cam_{cam}_final_hdf5'
     geo_dir = images_dir / f'scene_cam_{cam}_geometry_hdf5'
 
+    res_path = final_dir / f'frame.{frame}.residual.hdf5'
     bundle = {
         'rgb_raw':   load_hdf5(final_dir / f'frame.{frame}.color.hdf5'),
         'albedo':    load_hdf5(final_dir / f'frame.{frame}.diffuse_reflectance.hdf5'),
         'illum':     load_hdf5(final_dir / f'frame.{frame}.diffuse_illumination.hdf5'),
-        'residual':  load_hdf5(final_dir / f'frame.{frame}.residual.hdf5'),
+        'residual':  load_hdf5(res_path) if res_path.exists() else None,
         'normals':   load_hdf5(geo_dir / f'frame.{frame}.normal_cam.hdf5'),
         'seg':       load_hdf5(geo_dir / f'frame.{frame}.semantic.hdf5').astype(np.int16),
         'render_id': None,
@@ -262,18 +265,23 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
     if rid_path.exists():
         bundle['render_id'] = load_hdf5(rid_path).astype(np.int32)
 
-    # Apply augmentation if requested (Hypersim only)
+    # 1. Tonemap FIRST to match training pipeline semantics
+    tonemap_scale = float(np.percentile(bundle['rgb_raw'], 99.0)) + 1e-6
+    bundle['rgb_tm'] = np.clip(bundle['rgb_raw'] / tonemap_scale, 0.0, 1.0)
+    bundle['illum_norm'] = bundle['illum'] / tonemap_scale
+
+    # 2. Apply augmentation if requested (Hypersim only)
     if augment:
-        I_raw = torch.from_numpy(bundle['rgb_raw']).permute(2, 0, 1)
+        I_tm = torch.from_numpy(bundle['rgb_tm']).permute(2, 0, 1)
         A = torch.from_numpy(bundle['albedo']).permute(2, 0, 1)
-        S = torch.from_numpy(bundle['illum']).permute(2, 0, 1)
+        S_norm = torch.from_numpy(bundle['illum_norm']).permute(2, 0, 1)
         N = torch.from_numpy(bundle['normals']).permute(2, 0, 1)
         
-        H, W = I_raw.shape[1:]
+        H, W = I_tm.shape[1:]
         valid_mask = torch.ones((1, H, W))
         
         # Package into the 13-channel tensor expected by apply_physical_augmentations
-        t = torch.cat([I_raw, A, S, N, valid_mask], dim=0)
+        t = torch.cat([I_tm, A, S_norm, N, valid_mask], dim=0)
         seg_t = torch.from_numpy(bundle['seg']).unsqueeze(0).long()
         
         # If aug_type matches a specific force_type, pass it directly
@@ -281,19 +289,20 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
         
         if aug_type in specific_types:
             t, seg_t = apply_physical_augmentations(t, seg_t, force_type=aug_type)
+        elif aug_type == 'exposure':
+            t = random_exposure_jitter(t, p=1.0)
         else:
             # Apply the mutually exclusive physical augmentations just like the training script
             t, seg_t = apply_physical_augmentations(t, seg_t, p_hflip=0.5, p_vflip=0.5)
+            t = random_exposure_jitter(t, p=1.0)
             
         # Unpack back into the bundle
-        bundle['rgb_raw'] = t[0:3].permute(1, 2, 0).numpy()
+        bundle['rgb_tm'] = t[0:3].permute(1, 2, 0).numpy()
         bundle['albedo'] = t[3:6].permute(1, 2, 0).numpy()
-        bundle['illum'] = t[6:9].permute(1, 2, 0).numpy()
+        bundle['illum_norm'] = t[6:9].permute(1, 2, 0).numpy()
         bundle['normals'] = t[9:12].permute(1, 2, 0).numpy()
         bundle['seg'] = seg_t.squeeze(0).numpy()
 
-    bundle['rgb_tm'] = tonemap_linear(bundle['rgb_raw'])
-    
     eps = 1e-6
     bundle['colorful_shading'] = bundle['rgb_tm'] / (bundle['albedo'] + eps)
     bundle['gray_shading'] = (
@@ -302,9 +311,8 @@ def load_frame_bundle(root: Path, scene: str, cam: str, frame: str, augment: boo
         + 0.114 * bundle['colorful_shading'][..., 2]
     )
     
-    bundle['diffuse_recon_raw'] = bundle['albedo'] * bundle['illum']
-    scale = float(np.percentile(bundle['rgb_raw'], 99.0)) + 1e-6
-    bundle['diffuse_recon_tm'] = np.clip(bundle['diffuse_recon_raw'] / scale, 0.0, 1.0)
+    # Diffuse recon is albedo * normalized illumination
+    bundle['diffuse_recon_tm'] = np.clip(bundle['albedo'] * bundle['illum_norm'], 0.0, 1.0)
     
     bundle['valid_mask'] = compute_valid_mask(bundle['albedo'], bundle['render_id'])
     bundle['ccr'] = compute_ccr(bundle['rgb_tm'])
@@ -498,7 +506,7 @@ def _seg_summary_lines(seg: np.ndarray, max_items: int = 10) -> list[str]:
     return lines
 
 
-def hdr_for_display(img: np.ndarray, mode: str) -> np.ndarray:
+def hdr_for_display(img: np.ndarray, mode: str, auto_scale: bool = True) -> np.ndarray:
     """
     Display helper for HDR GT maps.
     - mode='tonemapped': display-friendly percentile tonemap (for humans only)
@@ -507,7 +515,7 @@ def hdr_for_display(img: np.ndarray, mode: str) -> np.ndarray:
     """
     if mode == 'raw':
         return np.clip(img, 0.0, 1.0)
-    return tonemap_hdr(img)
+    return tonemap_hdr(img, auto_scale=auto_scale)
 
 
 def plot_frame(
@@ -538,7 +546,10 @@ def plot_frame(
         fontsize=15, fontweight='bold', color=text_color
     )
 
-    illum_disp = hdr_for_display(bundle['illum'], hdr_mode)
+    if augment:
+        illum_disp = hdr_for_display(bundle['illum_norm'], hdr_mode, auto_scale=False)
+    else:
+        illum_disp = hdr_for_display(bundle['illum'], hdr_mode)
     hdr_suffix = 'display tonemap' if hdr_mode == 'tonemapped' else 'raw linear clip'
 
     # Row 1: The "Visual" inputs and results
@@ -723,7 +734,7 @@ def parse_args():
                         'This affects visualization only, never training.')
     p.add_argument('--dpi', type=int, default=180, help='Saved figure DPI')
     p.add_argument('--augment', action='store_true', help='Apply mutually exclusive physical data augmentations (Hypersim only)')
-    p.add_argument('--aug-type', type=str, default='all', help='Type of physical augmentation: albedo_hue, albedo_scale, shadow_weak, shadow_strong, wb, all, all_summary')
+    p.add_argument('--aug-type', type=str, default='all', help='Type of physical augmentation: albedo_hue, albedo_scale, shadow_weak, shadow_strong, wb, exposure, all, all_summary')
     p.add_argument('--no-show', action='store_true', help='Do not open matplotlib window; save only')
     return p.parse_args()
 
@@ -836,7 +847,8 @@ def main():
             'shadow_weak',      # 04
             'shadow_strong',    # 05
             'seg_degrade',      # 06
-            'all'               # 07
+            'exposure',         # 07
+            'all'               # 08
         ]
         save_dir = args.outdir / 'hypersim' / args.scene / f'cam_{args.cam}' / f'frame_{fr}_all_summary'
         save_dir.mkdir(parents=True, exist_ok=True)

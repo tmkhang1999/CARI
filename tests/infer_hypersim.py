@@ -34,10 +34,8 @@ if str(SRC_DIR) not in sys.path:
 
 from data.hypersim_dataset import HypersimDataset, _compute_tonemap_scale, _load_hdf5, _tonemap_linear
 from models import (
-    IntrinsicDecompositionV11Single,
-    IntrinsicDecompositionV11Mix,
-    IntrinsicDecompositionV12,
     IntrinsicDecompositionV13,
+    IntrinsicDecompositionV14,
 )
 from models.ccr_utils import compute_ccr
 
@@ -79,7 +77,7 @@ def parse_args():
         "--model_version",
         type=str,
         default="auto",
-        choices=["auto", "11", "11_single", "11_mix", "12", "13", "13_1"],
+        choices=["auto", "13", "14"],
         help="Model version to load. 'auto' infers from checkpoint contents/path.",
     )
     return parser.parse_args()
@@ -130,17 +128,12 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str 
     if config and "model" in config and "version" in config["model"]:
         return str(config["model"]["version"]).lower()
 
-    # Fallback to checkpoint path
-    ckpt_name = os.path.basename(str(checkpoint_path)).lower()
-    if "13_1" in ckpt_name or "/v13_1/" in str(checkpoint_path).lower():
-        return "13_1"
-    if "v13" in ckpt_name or "/v13/" in str(checkpoint_path).lower():
+    # Fallback checking the path string
+    if "v14" in checkpoint_path.lower():
+        return "14"
+    if "v13" in checkpoint_path.lower():
         return "13"
-    if "v12" in ckpt_name or "/v12/" in str(checkpoint_path).lower():
-        return "12"
-    if "mix" in ckpt_name:
-        return "11_mix"
-    return "11_single"
+    return "14"
 
 
 def _build_model(model_cfg, version):
@@ -153,18 +146,10 @@ def _build_model(model_cfg, version):
         "input_size": int(model_cfg.get("input_size", 1024)),
     }
     
-    v_str = str(version).lower()
-    if v_str.startswith("v"):
-        v_str = v_str[1:]
-        
-    if "13" in v_str:
-        return IntrinsicDecompositionV13(model_config)
-    elif "12" in v_str:
-        return IntrinsicDecompositionV12(model_config)
-    elif "11_mix" in v_str or "mix" in v_str:
-        return IntrinsicDecompositionV11Mix(model_config)
-    else:
-        return IntrinsicDecompositionV11Single(model_config)
+    v = str(version).strip().lower()
+    if v in ["14", "14.0"]:
+        return IntrinsicDecompositionV14(model_config)
+    return IntrinsicDecompositionV13(model_config)
 
 
 def _select_sample(samples, sample_idx, match):
@@ -204,8 +189,8 @@ def _prepare_one_sample(sample):
     alb_mask = alb.min(axis=-1) > 0.01
     valid = (sky_mask & alb_mask).astype(np.float32)
 
-    tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
-    rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)
+    tonemap_scale = _compute_tonemap_scale(rgb)
+    rgb_tm = _tonemap_linear(rgb, scale=tonemap_scale)
     illum_norm = np.nan_to_num(illum, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float64) / tonemap_scale
 
     out = {
