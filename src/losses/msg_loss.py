@@ -1,117 +1,119 @@
-"""
-Multi-scale gradient (MSG) loss for scale-invariant comparison.
-Computes L1 loss on gradients at multiple scales.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import kornia.filters as kn_filters
+import kornia.morphology as kn_morph
 
+def compute_scale_and_shift(prediction, target, mask):
+    a_00 = torch.sum(mask * prediction * prediction, dim=(1, 2, 3))
+    a_01 = torch.sum(mask * prediction, dim=(1, 2, 3))
+    a_11 = torch.sum(mask, dim=(1, 2, 3))
 
-class MultiScaleGradientLoss(nn.Module):
-    """
-    Multi-scale gradient loss summed across M scales.
-    Enforces structural similarity at multiple resolutions.
-    """
-    def __init__(self, num_scales=4):
+    b_0 = torch.sum(mask * prediction * target, dim=(1, 2, 3))
+    b_1 = torch.sum(mask * target, dim=(1, 2, 3))
+
+    x_0 = torch.zeros_like(b_0)
+    x_1 = torch.zeros_like(b_1)
+
+    det = a_00 * a_11 - a_01 * a_01
+    valid = det.nonzero()
+
+    x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
+    x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
+
+    return x_0, x_1
+
+def compute_ssi_pred(pred, grnd, mask):
+    scale, shift = compute_scale_and_shift(pred, grnd, mask)
+    scale = torch.nn.functional.relu(scale)
+    
+    # Broadcast to match pred shape (B, C, H, W)
+    scale = scale.view(-1, 1, 1, 1)
+    shift = shift.view(-1, 1, 1, 1)
+    return (pred * scale) + shift
+
+def resize_aa(img, scale: int):
+    if scale == 0:
+        return img
+    scaled = torch.nn.functional.interpolate(
+        img,
+        scale_factor=1/(2**scale),
+        mode='bilinear',
+        align_corners=True,
+        antialias=True
+    )
+    return scaled
+
+class ImageDerivative(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.num_scales = num_scales
+        tap_3 = torch.tensor([
+            [0.425287, -0.0000, -0.425287],
+            [0.229879, 0.540242, 0.229879]])
+        self.register_buffer('kernel_p', tap_3[1:2, ...])
+        self.register_buffer('kernel_d', tap_3[0:1, ...])
 
-        # Register Sobel kernels as buffers for efficiency (registered as 1,1,3,3)
-        kernel_x = torch.tensor([[-1, 0, 1],
-                                 [-2, 0, 2],
-                                 [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        kernel_y = torch.tensor([[-1, -2, -1],
-                                 [ 0,  0,  0],
-                                 [ 1,  2,  1]], dtype=torch.float32).view(1, 1, 3, 3)
-        self.register_buffer('kernel_x', kernel_x, persistent=False)
-        self.register_buffer('kernel_y', kernel_y, persistent=False)
-
-    def compute_gradient(self, x):
-        """
-        Compute image gradients using Sobel-like filters.
-        Args:
-            x: (N, C, H, W)
-        Returns:
-            grad_x, grad_y: (N, C, H, W) horizontal and vertical gradients
-        """
-        # Apply per-channel gradients in one grouped convolution pass.
-        C = x.shape[1]
-        weight_x = self.kernel_x.repeat(C, 1, 1, 1).to(x.dtype)
-        weight_y = self.kernel_y.repeat(C, 1, 1, 1).to(x.dtype)
-        grad_x = F.conv2d(x, weight_x, padding=1, groups=C)
-        grad_y = F.conv2d(x, weight_y, padding=1, groups=C)
-
+    def forward(self, img):
+        grad_x = kn_filters.filter2d_separable(
+            img,
+            self.kernel_p,
+            self.kernel_d,
+            border_type='reflect',
+            normalized=False,
+            padding='same'
+        )
+        grad_y = kn_filters.filter2d_separable(
+            img,
+            self.kernel_d,
+            self.kernel_p,
+            border_type='reflect',
+            normalized=False,
+            padding='same'
+        )
         return grad_x, grad_y
 
-    def forward(self, pred, target, mask=None):
-        """
-        Args:
-            pred: (N, C, H, W) prediction
-            target: (N, C, H, W) ground truth
-            mask: (N, 1, H, W) valid pixel mask
-        Returns:
-            Multi-scale gradient loss (scalar)
-        """
-        diff = pred - target
+class MultiScaleGradientLoss(nn.Module):
+    def __init__(self, scales=4):
+        super().__init__()
+        self.n_scale = scales
+        self.imgDerivative = ImageDerivative()
         
+        # Hardcode taps=1 (which corresponds to tap_3 in chrislib)
+        self.erod_kernels = [torch.ones(3, 3) for _ in range(scales)]
+
+    def forward(self, output, target, mask=None, p=1):
+        diff = output - target
+
         if mask is None:
             mask = torch.ones(diff.shape[0], 1, diff.shape[2], diff.shape[3], device=diff.device)
             
+        # Ensure erod_kernels are on the right device
+        erod_kernels = [k.to(diff.device) for k in self.erod_kernels]
+
         loss = 0.0
+        for i in range(self.n_scale):
+            mask_resized = torch.floor(resize_aa(mask, i) + 0.001)
+            mask_resized = kn_morph.erosion(mask_resized, erod_kernels[i])
+            diff_resized = resize_aa(diff, i)
 
-        for scale in range(self.num_scales):
-            # Scale 0 is original size
-            if scale > 0:
-                scale_factor = 1.0 / (2 ** scale)
-                diff_scaled = F.interpolate(
-                    diff, 
-                    scale_factor=scale_factor, 
-                    mode='bilinear', 
-                    align_corners=True, 
-                    antialias=True
-                )
-                mask_scaled = F.interpolate(
-                    mask, 
-                    scale_factor=scale_factor, 
-                    mode='bilinear', 
-                    align_corners=True, 
-                    antialias=True
-                )
-                # Ensure mask is strictly binary or near-binary after interpolation
-                mask_scaled = torch.floor(mask_scaled + 0.001).clamp(0, 1)
-            else:
-                diff_scaled = diff
-                mask_scaled = mask
+            grad_x, grad_y = self.imgDerivative(diff_resized)
 
-            # Erosion of the mask could go here, but omitted to prevent overly shrinking 
-            # the valid area on small objects unless strictly required by the use case.
+            # Gradient magnitude: always L2 Euclidean norm of the gradient vector.
+            # This matches chrislib's gradient_mag() exactly.
+            grad_mag = torch.sqrt(torch.pow(grad_x, 2) + torch.pow(grad_y, 2) + 1e-8)
 
-            # Compute gradients of difference
-            diff_gx, diff_gy = self.compute_gradient(diff_scaled)
-            
-            # Gradient Magnitude per channel: torch.sqrt(dx^2 + dy^2 + eps)
-            grad_mag = torch.sqrt(diff_gx.pow(2) + diff_gy.pow(2) + 1e-8)
-            
-            # Mean over channels (C)
-            grad_mag_mean = torch.mean(grad_mag, dim=1, keepdim=True)
-            
-            # Mask sum
-            mask_sum = torch.sum(mask_scaled)
-            
+            # Mean over channels (C) before aggregation.
+            grad_mag = torch.mean(grad_mag, dim=1, keepdim=True)
+
+            # p controls the aggregation norm, not the magnitude formula:
+            #   p=1 -> L1 mean of magnitudes (constant gradient, preserves sharp edges)
+            #   p=2 -> MSE mean of squared magnitudes (larger errors penalized harder,
+            #          enforces smoothness; appropriate for chroma/smooth signals)
+            if p == 2:
+                grad_mag = grad_mag.pow(2)
+
+            mask_sum = torch.sum(mask_resized)
             if mask_sum > 0:
-                # Average per pixel diffs across the masked area
-                loss += torch.sum(mask_scaled * grad_mag_mean) / (mask_sum * grad_mag.shape[1])
+                loss += torch.sum(mask_resized * grad_mag) / mask_sum
 
-        return loss / self.num_scales
-
-
-if __name__ == '__main__':
-    # Test
-    loss_fn = MultiScaleGradientLoss(num_scales=4)
-    pred = torch.randn(2, 3, 256, 256)
-    target = torch.randn(2, 3, 256, 256)
-
-    loss = loss_fn(pred, target)
-    print(f"MSG Loss: {loss.item()}")
-
+        return loss / self.n_scale

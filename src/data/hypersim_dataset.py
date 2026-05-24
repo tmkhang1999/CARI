@@ -14,14 +14,14 @@ Disk layout (unchanged — do NOT reorganise):
     ...
 
 Returns per __getitem__ (raw arrays — scale matching happens in training loop):
-    rgb:        (3, H, W)  float32  tonemapped linear [0,1]   ← encoder input
-    albedo_raw: (3, H, W)  float32  raw linear HDR albedo     ← for scale_match()
-    illum_raw:  (3, H, W)  float32  linear illumination normalized by RGB percentile scale
-    normals:    (3, H, W)  float32  unit vectors
-    valid_mask: (1, H, W)  bool
-    seg:        (1, H, W)  long     NYU-40 labels (0-40)
-    M_diffuse:  tensor(1.0)
-    M_albedo:   tensor(1.0)
+    rgb:           (3, H, W)  float32  tonemapped linear [0,1]   ← encoder input
+    albedo_raw:    (3, H, W)  float32  raw linear HDR albedo     ← for scale_match()
+    albedo_scaled: (3, H, W)  float32  per-sample scaled albedo  ← for masks/metrics
+    illum_raw:     (3, H, W)  float32  linear illumination normalized by RGB percentile scale
+    normals:       (3, H, W)  float32  unit vectors
+    loss_mask:     (1, H, W)  bool
+    seg:           (1, H, W)  long     NYU-40 labels (0-40)
+    M_diffuse:     tensor(1.0)
 
 Dataset mixing: keep each dataset in its own sibling directory.
   ../datasets/hypersim/      ← this dataset
@@ -52,9 +52,9 @@ from torch.utils.data import Dataset
 import json
 from collections import OrderedDict
 from src.data.augmentations import (
-    random_scaling_red_blue_channels,
     apply_physical_augmentations,
     random_segmentation_degradation,
+    random_exposure_jitter,
 )
 
 
@@ -82,24 +82,22 @@ def _load_hdf5(path: str, retries: int = 0) -> np.ndarray:
     ) from last_exc
 
 
-def _compute_tonemap_scale(rgb: np.ndarray, percentile: float = 99.0) -> float:
-    """Compute robust positive scale used for RGB/illum normalization."""
-    # Use float32 to save memory/compute.
-    rgb_flat = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False).reshape(-1)
-    
-    # Fast O(n) approximation of percentile using partition
-    k = int(len(rgb_flat) * (percentile / 100.0))
-    if k >= len(rgb_flat):
-        k = len(rgb_flat) - 1
-    
-    # np.partition is O(N) compared to np.percentile which is O(N log N) via full sort
-    scale = float(np.partition(rgb_flat, k)[k])
-    
-    if not np.isfinite(scale) or scale <= 0.0:
-        return 1e-6
-    return max(scale, 1e-6)
+def _compute_tonemap_scale(
+    rgb: np.ndarray,
+    percentile: float = 90.0,
+    target_brightness: float = 0.8,
+) -> float:
+    """Compute a brightness-based scale so the given percentile maps to 0.8."""
+    rgb32 = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+    brightness = (0.3 * rgb32[..., 0]) + (0.59 * rgb32[..., 1]) + (0.11 * rgb32[..., 2])
+    brightness_flat = brightness.reshape(-1)
 
-def _tonemap_linear(rgb: np.ndarray, percentile: float = 99.0, scale: float | None = None) -> np.ndarray:
+    scale_at_percentile = float(np.percentile(brightness_flat, percentile))
+    if not np.isfinite(scale_at_percentile) or scale_at_percentile <= 0.0:
+        return 1e-6
+    return max(float(target_brightness) / scale_at_percentile, 1e-6)
+
+def _tonemap_linear(rgb: np.ndarray, percentile: float = 90.0, scale: float | None = None) -> np.ndarray:
     """
     Compress linear HDR to [0,1] without gamma and with robust numeric guards.
     rgb: (H, W, 3) float32
@@ -135,7 +133,7 @@ class HypersimDataset(Dataset):
     """
     Hypersim dataset for Stage 1 intrinsic decomposition training.
 
-    M_diffuse = 1, M_albedo = 1 (Hypersim provides full supervision).
+    M_diffuse = 1 (Hypersim provides diffuse supervision).
 
     Args:
         root_dir:    Path to Hypersim root (contains ai_XXX_YYY/ subdirs).
@@ -259,7 +257,7 @@ class HypersimDataset(Dataset):
         A frame is included only when:
           - color, diffuse_reflectance, diffuse_illumination, residual all exist
           - normal_cam and semantic exist (or require_all=False)
-        render_entity_id is optional — valid_mask falls back to albedo>0.02.
+        render_entity_id is optional — loss_mask is derived from scaled albedo.
         Frames where geometry files exist for only a subset of the trajectory
         (incomplete camera, e.g. scene_cam_01 in ai_001_002) are skipped.
         """
@@ -455,36 +453,27 @@ class HypersimDataset(Dataset):
         illum = np.clip(illum, 0.0, None)
         norm = _sanitize_normals(norm)
 
-        # ── Valid mask (before augmentation, in numpy) ────────────────────────
-        # Rule A: Drop Skybox using Render Entity ID
-        if rid is not None:
-            sky_mask = (rid != -1)
-        else:
-            sky_mask = np.ones(rgb.shape[:2], dtype=bool)
+        # Loss mask: Trust the V-Ray Physics Engine!
+        # Glass, mirrors, and sky have 0.0 Albedo.
+        # Threshold must be applied to albedo_raw (absolute HDR values), not albedo_scaled.
+        # Using scaled values makes the mask image-dependent: the same physical surface
+        # (e.g., dark wall with alb=0.1) could be masked in one scene but not another
+        # purely because a bright emitter raises max_val. The 0.004 threshold is an
+        # absolute physical boundary between transparent (alb~0) and diffuse (alb>0).
+        alb_mask = alb.mean(axis=-1) >= 0.004
 
-        # Rule B: Identify non-diffuse classes using Semantic IDs
-        # In NYU-40: window/glass = 9, mirror = 19, tv/screen = 25
-        if seg is not None:
-            diffuse_mask = (seg != 9) & (seg != 19) & (seg != 25)
-        else:
-            diffuse_mask = np.ones(rgb.shape[:2], dtype=bool)
-
-        # Rule C: Drop unreliable albedo pixels (paper threshold)
-        # 0.004 linear is ~0.066 in sRGB; filters sky/glass/mirror compression artifacts.
-        alb_mask = alb.min(axis=-1) > 0.004
-        # valid_np = (sky_mask & alb_mask).astype(np.float32)  # (H,W)
-
-        # Valid mask for model input/stats
-        # (keeps non-diffuse pixels visible, but MUST drop the sky void)
-        valid_np = (alb_mask).astype(np.float32)
-        # Loss mask excludes non-diffuse and sky pixels during supervision
-        loss_np = (alb_mask).astype(np.float32)
+        # albedo_scaled is computed ONLY for the CCR edge supervisor in train.py,
+        # where Sobel operates more stably on [0,1]-bounded values.
+        max_val = alb.max()
+        albedo_scaled = alb / max_val if max_val > 1.0 else alb
+        
+        loss_np = alb_mask.astype(np.float32)
 
         # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
         # Use one shared percentile scale so routed illum and fallback rgb/albedo
         # produce targets in the same numeric regime.
-        tonemap_scale = _compute_tonemap_scale(rgb, percentile=99.0)
-        rgb_tm = _tonemap_linear(rgb, percentile=99.0, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
+        tonemap_scale = _compute_tonemap_scale(rgb)
+        rgb_tm = _tonemap_linear(rgb, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
         illum_norm = illum / tonemap_scale
 
         # ── Stack for joint spatial augmentation ─────────────────────────────
@@ -493,14 +482,12 @@ class HypersimDataset(Dataset):
         #   3:6   albedo raw
         #   6:9   illum raw
         #   9:12  normals
-        #   12:13 valid mask
         combined = np.concatenate([
             rgb_tm.astype(np.float32),
             alb.astype(np.float32),
             illum_norm,
             norm.astype(np.float32),
-            valid_np[..., None],
-        ], axis=-1)   # (H,W,13)
+        ], axis=-1)   # (H,W,12)
 
         # ── Crop policy ───────────────────────────────────────────────────────
         H, W = combined.shape[:2]
@@ -539,19 +526,13 @@ class HypersimDataset(Dataset):
             mode='bilinear', align_corners=False
         ).squeeze(0)                                              # (12,H,W)
 
-        t_mask = torch.from_numpy(combined[..., 12:13]).permute(2, 0, 1).unsqueeze(0).float()
-        t_mask = F.interpolate(
-            t_mask, size=(self.input_size, self.input_size),
-            mode='nearest'
-        ).squeeze(0)                                              # (1,H,W)
-
         t_loss_mask = torch.from_numpy(loss_crop[..., None]).permute(2, 0, 1).unsqueeze(0).float()
         t_loss_mask = F.interpolate(
             t_loss_mask, size=(self.input_size, self.input_size),
             mode='nearest'
         ).squeeze(0)                                              # (1,H,W)
 
-        t = torch.cat([t_img, t_mask], dim=0)                     # (13,H,W)
+        t = t_img                                                 # (12,H,W)
 
         seg_t = torch.from_numpy(seg_crop.astype(np.float32)).unsqueeze(0).unsqueeze(0)
         seg_t = F.interpolate(
@@ -563,23 +544,31 @@ class HypersimDataset(Dataset):
         if self.split == 'train':
             seg_t = random_segmentation_degradation(seg_t, p_degrade=0.6)
 
-        # ── Physical Augmentations (train only) ──────────────────
+        # ---- Physical Augmentations (train only) ----
         if self.split == 'train':
             t, seg_t = apply_physical_augmentations(
                 t, seg_t,
                 p_hflip=0.5, p_vflip=0.5
             )
+            # Exposure jitter with global max normalization.
+            # t = random_exposure_jitter(t, p=0.3)
+
+        alb_t = t[3:6]
+        max_val_t = alb_t.max()
+        if max_val_t > 1.0:
+            albedo_scaled_t = alb_t / max_val_t
+        else:
+            albedo_scaled_t = alb_t
 
         return {
-            'rgb':        t[0:3],               # (3,H,W) tonemapped linear [0,1]
-            'albedo_raw': t[3:6],               # (3,H,W) raw HDR  → scale_match()
-            'illum_raw':  t[6:9],               # (3,H,W) normalized by shared RGB scale
-            'normals':    t[9:12],              # (3,H,W) unit vectors
-            'valid_mask': t[12:13].bool(),      # (1,H,W)
-            'loss_mask':  t_loss_mask.bool(),   # (1,H,W) excludes non-diffuse
-            'seg':        seg_t,                # (1,H,W) long, NYU-40
-            'M_diffuse':  torch.tensor(1.0),
-            'M_albedo':   torch.tensor(1.0),
+            'rgb':           t[0:3],               # (3,H,W) tonemapped linear [0,1]
+            'albedo_raw':    t[3:6],               # (3,H,W) raw HDR  → scale_match()
+            'albedo_scaled': albedo_scaled_t,      # (3,H,W) scaled for masks/metrics
+            'illum_raw':     t[6:9],               # (3,H,W) normalized by shared RGB scale
+            'normals':       t[9:12],              # (3,H,W) unit vectors
+            'loss_mask':     t_loss_mask.bool(),   # (1,H,W) excludes non-diffuse
+            'seg':           seg_t,                # (1,H,W) long, NYU-40
+            'M_diffuse':     torch.tensor(1.0),
         }
 
 
@@ -654,15 +643,17 @@ if __name__ == '__main__':
         else:
             print(f"  {k:15s}: {v}")
 
-    # Verify valid_mask is not all-zero
-    vm = sample['valid_mask']
-    print(f"\nValid pixels: {vm.sum().item()} / {vm.numel()} "
-          f"({100*vm.float().mean().item():.1f}%)")
+        # Verify loss_mask is not all-zero
+        lm = sample['loss_mask']
+        print(f"\nValid loss pixels: {lm.sum().item()} / {lm.numel()} "
+            f"({100*lm.float().mean().item():.1f}%)")
 
     # Verify albedo_raw is not clipped
-    alb = sample['albedo_raw']
-    print(f"albedo_raw   range: [{alb.min():.4f}, {alb.max():.4f}]  "
-          f"(expect mostly 0-1 for Hypersim diffuse_reflectance)")
+        alb = sample['albedo_raw']
+        alb_scaled = sample['albedo_scaled']
+        print(f"albedo_raw   range: [{alb.min():.4f}, {alb.max():.4f}]  "
+            f"(expect mostly 0-1 for Hypersim diffuse_reflectance)")
+        print(f"albedo_scaled range: [{alb_scaled.min():.4f}, {alb_scaled.max():.4f}]")
     rgb = sample['rgb']
     print(f"rgb (tonemapped) range: [{rgb.min():.4f}, {rgb.max():.4f}]  "
           f"(should be [0,1])")

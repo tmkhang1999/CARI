@@ -11,8 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .msg_loss import MultiScaleGradientLoss
-from .perceptual_loss import PerceptualLoss
-from .semantic_tv_loss import SemanticTVLoss, NormalGuidedTVLoss
 
 
 class FlexibleLoss(nn.Module):
@@ -37,287 +35,205 @@ class FlexibleLoss(nn.Module):
 
         # Loss weights (plan Section 3.3)
         self.lambda_msg = config.get('lambda_msg', 0.8)
-        self.lambda_tv = config.get('lambda_tv', 0.05)
-        self.lambda_perceptual = config.get('lambda_perceptual', 0.05)
-        self.lambda_dssim = config.get('lambda_dssim', 0.4)
-        self.lambda_semvar = config.get('lambda_semvar', 0.0)
-        self.enable_dssim_a_d = config.get('enable_dssim_a_d', False)
-        self.tv_type = self._normalize_tv_type(config.get('tv_type', 'segmentation'))
-        self.tv_target_classes = config.get('tv_target_classes', [1, 22])
-        self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22])
+        self.lambda_dssim_c = config.get('lambda_dssim', 0.15)
         
-        # New V13 Loss Weights
+        # V13 auxiliary losses
         self.lambda_boundary = config.get('lambda_boundary', 0.0)
+        self.lambda_semvar = config.get('lambda_semvar', 0.0)
+        self.lambda_exclusion = config.get('lambda_exclusion', 0.0)
+        self.semantic_var_classes = config.get('semantic_var_classes', [1, 2, 22]) # Walls, floors, ceiling
+
+        # V15 cross-decoder reconstruction constraint: L1(a_d * s_c - rgb).
+        # Ties Dec C (albedo) and Dec A/B (colorful shading) into a self-consistent
+        # pair. Unlike derive_albedo which is trivially zero, this uses the
+        # *predicted* albedo against the fixed cascade shading.
         self.lambda_recon = config.get('lambda_recon', 0.0)
-        self.lambda_edge = config.get('lambda_edge', 0.0)
 
-        # Loss modules
-        self.msg_loss = MultiScaleGradientLoss(num_scales=4)
-        self.perceptual_loss = PerceptualLoss()
-        self.semantic_tv_loss = SemanticTVLoss(target_classes=self.tv_target_classes)
-        self.normal_tv_loss = NormalGuidedTVLoss()
+        # Auxiliary CCR Edge Loss (PIE-Net style edge supervision)
+        self.lambda_ccr_edge = config.get('lambda_ccr_edge', 0.0)
 
-        # Base Gaussian DSSIM window registered as buffer for safe device moves.
-        window_size = 11
-        sigma = 1.5
-        coords = torch.arange(window_size, dtype=torch.float32)
-        gauss = torch.exp(-((coords - window_size // 2) ** 2) / (2.0 * sigma ** 2))
-        gauss = gauss / gauss.sum()
-        window_2d = (gauss.unsqueeze(1) @ gauss.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
-        self.register_buffer('dssim_base_window', window_2d, persistent=False)
+        # Multi-scale gradient loss for structural fidelity
+        self.msg_loss = MultiScaleGradientLoss(scales=4)
+        self.bce_logits = nn.BCEWithLogitsLoss(reduction='none')
 
-    @staticmethod
-    def _normalize_tv_type(tv_type):
-        """Normalize TV mode. Supports disabling via None/'none'/'off'."""
-        if tv_type is None:
-            return None
-        if isinstance(tv_type, str):
-            mode = tv_type.strip().lower()
-            if mode in ('none', 'off', ''):
-                return None
-            if mode in ('segmentation', 'normals'):
-                return mode
-        return tv_type
+        # DSSIM window (registered as buffer so it moves to GPU with .to())
+        self._dssim_win_size = 11
+        self._dssim_sigma = 1.5
+        self._dssim_win = None  # lazily created on first use
 
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
-    def _masked_l1(self, pred, target, mask):
-        """Element-wise L1 masked by valid * routing mask."""
-        diff = F.l1_loss(pred, target, reduction='none')
-        return (diff * mask).sum() / (mask.sum() + 1e-7)
-
     def _masked_mse(self, pred, target, mask):
         """Element-wise MSE masked by valid * routing mask."""
         diff = F.mse_loss(pred, target, reduction='none')
         return (diff * mask).sum() / (mask.sum() + 1e-7)
 
-    def _get_dssim_window(self, channels):
-        return self.dssim_base_window.expand(channels, 1, -1, -1).contiguous()
+    def _masked_l1(self, pred, target, mask):
+        """Element-wise L1 masked by valid * routing mask."""
+        diff = F.l1_loss(pred, target, reduction='none')
+        return (diff * mask).sum() / (mask.sum() + 1e-7)
 
-    def _compute_dssim(self, pred, target, window_size=11):
-        pred = pred.to(torch.float32)
-        target = target.to(torch.float32)
-        C1, C2 = 0.01 ** 2, 0.03 ** 2
+    def _get_dssim_window(self, channels, device, dtype):
+        """Lazily create/cache the Gaussian SSIM window."""
+        if (self._dssim_win is not None
+                and self._dssim_win.shape[0] == channels
+                and self._dssim_win.device == device
+                and self._dssim_win.dtype == dtype):
+            return self._dssim_win
+
+        win_size = self._dssim_win_size
+        sigma = self._dssim_sigma
+        coords = torch.arange(win_size, dtype=dtype, device=device) - win_size // 2
+        g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+        g = g / g.sum()
+        window = g.unsqueeze(1) @ g.unsqueeze(0)  # (win, win)
+        window = window.unsqueeze(0).unsqueeze(0).expand(channels, 1, -1, -1).contiguous()
+        self._dssim_win = window
+        return window
+
+    def _compute_dssim(self, pred, target, mask=None):
+        """Compute masked DSSIM = (1 - SSIM) / 2 for [0, 1] bounded signals.
+
+        Uses a conservative approach: SSIM is computed over the full image,
+        then the per-pixel SSIM map is masked before averaging. This avoids
+        boundary artifacts from masked convolutions.
+        """
         C = pred.shape[1]
-        window = self._get_dssim_window(C).to(device=pred.device, dtype=pred.dtype)
-        pad = window_size // 2
+        win = self._get_dssim_window(C, pred.device, pred.dtype)
+        pad = self._dssim_win_size // 2
 
-        mu1 = F.conv2d(pred, window, padding=pad, groups=C)
-        mu2 = F.conv2d(target, window, padding=pad, groups=C)
-        
-        mu1_sq = mu1.pow(2)
-        mu2_sq = mu2.pow(2)
-        mu1_mu2 = mu1 * mu2
+        mu_x = F.conv2d(pred, win, padding=pad, groups=C)
+        mu_y = F.conv2d(target, win, padding=pad, groups=C)
 
-        # Calculate sigma1_sq, sigma2_sq, sigma12 and combine immediately to free memory
-        num = (2 * mu1_mu2 + C1)
-        den = (mu1_sq + mu2_sq + C1)
-        
-        # Use in-place ops or immediate reuse to save VRAM
-        sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C).sub_(mu1_sq)
-        sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C).sub_(mu2_sq)
-        sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C).sub_(mu1_mu2)
+        mu_x_sq = mu_x * mu_x
+        mu_y_sq = mu_y * mu_y
+        mu_xy = mu_x * mu_y
 
-        num = num * (2 * sigma12 + C2)
-        den = den * (sigma1_sq.clamp_min_(0.0) + sigma2_sq.clamp_min_(0.0) + C2)
-        
-        ssim_map = num / den
-        return (0.5 - 0.5 * ssim_map).mean()
+        sigma_x_sq = F.conv2d(pred * pred, win, padding=pad, groups=C) - mu_x_sq
+        sigma_y_sq = F.conv2d(target * target, win, padding=pad, groups=C) - mu_y_sq
+        sigma_xy = F.conv2d(pred * target, win, padding=pad, groups=C) - mu_xy
 
-    def loss_boundary_consistency(self, a_d_pred, ccr=None, edge_pred=None, valid_mask=None):
-        if edge_pred is not None:
-            ccr_edge = F.interpolate(edge_pred, size=a_d_pred.shape[-2:], mode='bilinear', align_corners=False)
-            ccr_edge = ccr_edge.clamp(0, 1)
-        else:
-            ccr_mag   = ccr[:, :3].abs().max(dim=1, keepdim=True).values
-            ccr_edge  = torch.sigmoid((ccr_mag - 0.25) * 20.0)
-        non_edge  = (1.0 - ccr_edge) * valid_mask.float()
-    
-        dx = (a_d_pred[:,:,:,1:] - a_d_pred[:,:,:,:-1]).abs()
-        dy = (a_d_pred[:,:,1:,:] - a_d_pred[:,:,:-1,:]).abs()
-        dx = F.pad(dx, (0,1)).mean(dim=1, keepdim=True)
-        dy = F.pad(dy, (0,0,0,1)).mean(dim=1, keepdim=True)
-        return ((dx + dy) / 2.0 * non_edge).sum() / (non_edge.sum() + 1e-7)
+        # Clamp variances for numerical stability
+        sigma_x_sq = sigma_x_sq.clamp(min=0)
+        sigma_y_sq = sigma_y_sq.clamp(min=0)
 
-    def loss_reconstruction(self, a_d_pred, pi_pred, rgb, valid_mask):
-        """Penalize A*S ≠ I on valid diffuse pixels."""
-        s_d_pred = 1.0 / (pi_pred.clamp(min=1e-4) + 1e-4) - 1.0
-        recon = a_d_pred * s_d_pred.clamp(1e-3, 20.0)
-        # Tonemap both to [0,1] for fair comparison
-        scale = torch.quantile(rgb[valid_mask.expand_as(rgb)].reshape(-1), 0.99).clamp_min(1e-4)
-        recon_tm = (recon / scale).clamp(0, 1)
-        rgb_tm = (rgb / scale).clamp(0, 1)
-        mask = valid_mask.float()
-        return ((recon_tm - rgb_tm).abs() * mask).sum() / (mask.sum() * 3 + 1e-7)
+        C1 = 0.01 ** 2  # data_range=1.0
+        C2 = 0.03 ** 2
 
-    # ------------------------------------------------------------------
-    # Per-decoder losses
-    # ------------------------------------------------------------------
+        ssim_map = ((2 * mu_xy + C1) * (2 * sigma_xy + C2)) / \
+                   ((mu_x_sq + mu_y_sq + C1) * (sigma_x_sq + sigma_y_sq + C2))
 
-    def _compute_scale_and_shift(self, prediction, target, mask):
-        pred = prediction.squeeze(1)
-        tgt = target.squeeze(1)
-        msk = mask.squeeze(1)
-        
-        a_00 = torch.sum(msk * pred * pred, (1, 2))
-        a_01 = torch.sum(msk * pred, (1, 2))
-        a_11 = torch.sum(msk, (1, 2))
+        dssim_map = (1.0 - ssim_map) / 2.0
 
-        b_0 = torch.sum(msk * pred * tgt, (1, 2))
-        b_1 = torch.sum(msk * tgt, (1, 2))
+        if mask is not None:
+            return (dssim_map * mask).sum() / (mask.sum() + 1e-7)
+        return dssim_map.mean()
 
-        x_0 = torch.zeros_like(b_0)
-        x_1 = torch.zeros_like(b_1)
+    @staticmethod
+    def _detect_segment_boundaries(seg_map):
+        """Detect pixels at segment boundaries via finite-difference on IDs.
 
-        det = a_00 * a_11 - a_01 * a_01
-        valid = det != 0
-
-        x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
-        x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
-
-        return x_0.view(-1, 1, 1, 1), x_1.view(-1, 1, 1, 1)
-
-    def loss_a(self, D_g_pred, D_g_star, valid_mask):
+        Args:
+            seg_map: (N, 1, H, W) or (N, H, W) integer segment IDs.
+        Returns:
+            (N, 1, H, W) float tensor, 1.0 at boundaries, 0.0 interior.
+            Dilated by 3x3 max-pool to cover the boundary region.
         """
-        Dec A loss: Gray shading in inverse space.
-        Always active on valid pixels when pseudo-GT albedo is available.
-        Uses scale-and-shift invariant MSE (SSI-MSE).
-        """
-        mask = valid_mask.float()
-        
-        # scale, shift = self._compute_scale_and_shift(D_g_pred, D_g_star, mask)
-        # scale = F.relu(scale)
-        # D_g_pred_ssi = D_g_pred * scale + shift
-        
-        mse = self._masked_mse(D_g_pred, D_g_star, mask)
-        
-        if self.lambda_msg > 0:
-            msg = self.msg_loss(D_g_pred * mask, D_g_star * mask)
+        if seg_map.dim() == 3:
+            seg = seg_map.unsqueeze(1).float()
+        elif seg_map.dim() == 4:
+            seg = seg_map[:, 0:1].float()
         else:
-            msg = D_g_pred.new_tensor(0.0)
+            seg = seg_map.float()
 
-        # Conditionally restore DSSIM for sharp cast shadows
-        if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            dssim = self._compute_dssim(D_g_pred * mask, D_g_star * mask)
+        # Boundary: adjacent pixels with different segment IDs
+        dx = (seg[:, :, :, 1:] != seg[:, :, :, :-1]).float()
+        dy = (seg[:, :, 1:, :] != seg[:, :, :-1, :]).float()
+        dx = F.pad(dx, (0, 1))
+        dy = F.pad(dy, (0, 0, 0, 1))
+        boundary = (dx + dy).clamp(0.0, 1.0)
+
+        # Dilate slightly to cover the transition region
+        boundary = F.max_pool2d(boundary, kernel_size=3, stride=1, padding=1)
+        return boundary
+
+    def loss_boundary_consistency(self, a_d_pred, ccr_edge_gt, valid_mask, seg_map=None):
+        """GT-guided albedo gradient suppression.
+        
+        Penalizes albedo spatial gradients where the Ground Truth albedo
+        indicates no material boundary (ccr_edge_gt is low).
+        This is perfectly illumination-invariant and highly stable.
+        """
+        if seg_map is not None:
+            seg_boundary = self._detect_segment_boundaries(seg_map)
+            if seg_boundary.shape[-2:] != ccr_edge_gt.shape[-2:]:
+                seg_boundary = F.interpolate(
+                    seg_boundary, size=ccr_edge_gt.shape[-2:], mode="nearest"
+                )
+            # Boost the edge map at semantic boundaries to be even more permissive
+            # of gradients there, while relying on the clean GT albedo edges elsewhere.
+            edge_map = torch.clamp(ccr_edge_gt + seg_boundary * 0.2, 0.0, 1.0)
         else:
-            dssim = D_g_pred.new_tensor(0.0)
-        
-        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
-        
-        details = {
-            'loss_a_mse': mse.detach(),
-        }
-        if self.lambda_msg > 0:
-            details['loss_a_msg'] = msg.detach()
-        if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            details['loss_a_dssim'] = dssim.detach()
+            edge_map = ccr_edge_gt
             
-        return total, details
+        non_edge = (1.0 - edge_map) * valid_mask.float()
 
-
-    def loss_b(self, xi_pred, xi_star, valid_mask):
-        """
-        Dec B loss: Chroma in bounded ratio space.
-        Always active on valid pixels when pseudo-GT albedo is available.
-        """
-        mask = valid_mask.float()
-        mse = self._masked_mse(xi_pred, xi_star, mask)
-
-        if self.lambda_msg > 0:
-            msg = self.msg_loss(xi_pred * mask, xi_star * mask)
-        else:
-            msg = xi_pred.new_tensor(0.0)
-
-        total = mse + self.lambda_msg * msg
-        details = {
-            'loss_b_mse': mse.detach(),
-        }
-        if self.lambda_msg > 0:
-            details['loss_b_msg'] = msg.detach()
-        return total, details
-
-
-    def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, m_albedo, seg_map=None, normals=None):
-        """Dec C loss with per-term details for logging/debugging."""
-        zero = (a_d_pred * 0.0).sum()
-        if m_albedo.sum() == 0:
-            details = {'loss_c_l1': zero}
-            if self.lambda_msg > 0:
-                details['loss_c_msg'] = zero
-            if self.lambda_tv > 0 and self.tv_type is not None:
-                details['loss_c_tv'] = zero
-            if self.lambda_perceptual > 0:
-                details['loss_c_perceptual'] = zero
-            if self.lambda_dssim > 0:
-                details['loss_c_dssim'] = zero
-            if self.lambda_semvar > 0:
-                details['loss_c_semvar'] = zero
-            return zero, details
-
-        route = m_albedo.view(-1, 1, 1, 1).to(valid_mask.device)
-        mask = valid_mask.float() * route
-
-        l1 = self._masked_mse(a_d_pred, A_d_star, mask)
+        # 3. Use the same discrete Laplacian cross-kernel as CCR for albedo
+        kernel = torch.tensor(
+            [[0, 1, 0],
+             [1, 0, -1], 
+             [0, -1, 0]], dtype=torch.float32, device=a_d_pred.device
+        ).view(1, 1, 3, 3)
         
-        if self.lambda_msg > 0:
-            msg = self.msg_loss(a_d_pred * mask, A_d_star * mask)
-        else:
-            msg = zero
+        r, g, b = a_d_pred[:, 0:1], a_d_pred[:, 1:2], a_d_pred[:, 2:3]
+        diff_r = F.conv2d(r, kernel, padding=1).abs()
+        diff_g = F.conv2d(g, kernel, padding=1).abs()
+        diff_b = F.conv2d(b, kernel, padding=1).abs()
+        
+        a_grad = torch.max(torch.max(diff_r, diff_g), diff_b)
 
-        if self.tv_type is None or self.lambda_tv <= 0:
-            tv = zero
-        elif self.tv_type == 'normals' and normals is not None:
-            tv = self.normal_tv_loss(a_d_pred, normals, valid_mask=mask)
-        else:
-            tv = self.semantic_tv_loss(a_d_pred, seg_map) if seg_map is not None else zero
+        return (a_grad * non_edge).sum() / (non_edge.sum() + 1e-7)
 
-        route_idx = (m_albedo > 0.5)
-        if route_idx.any() and (self.lambda_perceptual > 0 or self.lambda_dssim > 0):
-            route_mask = valid_mask[route_idx].float()
-            route_pred = a_d_pred[route_idx] * route_mask
-            route_tgt = A_d_star[route_idx] * route_mask
-
-            # Apply gamma to align linear albedo with VGG's sRGB training distribution
-            pred_gamma = (route_pred.clamp(0, 1) + 1e-6).pow(1.0 / 2.2)
-            tgt_gamma  = (route_tgt.clamp(0, 1) + 1e-6).pow(1.0 / 2.2)
-
+    def loss_gradient_exclusion(self, a_d_pred, pi_pred, valid_mask):
+        """
+        Soft Gradient Exclusion Loss (w-L1).
+        Penalizes albedo gradients where diffuse shading is smooth.
+        Uses an exponential escape hatch to forgive overlapping physical edges.
+        """
+        # 1. Use the true Diffuse Shading prediction, safely inverted to linear space.
+        s_d_pred = (1.0 / pi_pred.clamp(min=1e-4) - 1.0).detach()
+        
+        # 2. Align the mask dimensions safely
+        mask = valid_mask.float()
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(1)
             
-            if self.lambda_perceptual > 0:
-                perceptual = self.perceptual_loss(pred_gamma, tgt_gamma)
-            else:
-                perceptual = zero
-                
-            if self.lambda_dssim > 0:
-                dssim = self._compute_dssim(route_pred, route_tgt)
-            else:
-                dssim = zero
-        else:
-            perceptual = zero
-            dssim = zero
-
-        total = (
-            l1
-            + self.lambda_msg * msg
-            + self.lambda_tv * tv
-            + self.lambda_perceptual * perceptual
-            + self.lambda_dssim * dssim
-        )
-
-        details = {
-            'loss_c_l1': l1.detach(),
-        }
-        if self.lambda_msg > 0:
-            details['loss_c_msg'] = msg.detach()
-        if self.lambda_tv > 0 and self.tv_type is not None:
-            details['loss_c_tv'] = tv.detach()
-        if self.lambda_perceptual > 0:
-            details['loss_c_perceptual'] = perceptual.detach()
-        if self.lambda_dssim > 0:
-            details['loss_c_dssim'] = dssim.detach()
-        if self.lambda_semvar > 0:
-            details['loss_c_semvar'] = zero.detach()
-        return total, details
+        # 3. Calculate spatial gradients
+        grad_a_x = (a_d_pred[:,:,:,1:] - a_d_pred[:,:,:,:-1]).abs().mean(dim=1, keepdim=True)
+        grad_a_y = (a_d_pred[:,:,1:,:] - a_d_pred[:,:,:-1,:]).abs().mean(dim=1, keepdim=True)
+        
+        grad_s_x = (s_d_pred[:,:,:,1:] - s_d_pred[:,:,:,:-1]).abs().mean(dim=1, keepdim=True)
+        grad_s_y = (s_d_pred[:,:,1:,:] - s_d_pred[:,:,:-1,:]).abs().mean(dim=1, keepdim=True)
+        
+        # Pad back to original dimensions
+        grad_a_x = F.pad(grad_a_x, (0,1))
+        grad_a_y = F.pad(grad_a_y, (0,0,0,1))
+        grad_s_x = F.pad(grad_s_x, (0,1))
+        grad_s_y = F.pad(grad_s_y, (0,0,0,1))
+        
+        # 4. The Soft Exclusion Formulation
+        alpha = 10.0
+        
+        # Where Shading Gradient is HIGH, weight drops to ZERO (Escape Hatch)
+        # Where Shading Gradient is LOW, weight is 1.0 (Full Penalty applied to Albedo)
+        weight_x = torch.exp(-alpha * grad_s_x)
+        weight_y = torch.exp(-alpha * grad_s_y)
+        
+        excl_x = grad_a_x * weight_x
+        excl_y = grad_a_y * weight_y
+        
+        return ((excl_x + excl_y) * mask).sum() / (mask.sum() + 1e-7)
 
     def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask):
         if seg_map is None or not self.semantic_var_classes:
@@ -354,10 +270,103 @@ class FlexibleLoss(nn.Module):
             
         return total_var / float(valid_batches)
 
+
+    def loss_recon(self, a_d_pred, s_c, rgb, valid_mask):
+        """L1 reconstruction constraint: a_d * s_c should equal the input rgb.
+
+        Uses predicted albedo (a_d_pred from Dec C) and the detached colorful
+        shading (s_c from Dec A+B). This is NOT trivially zero because a_d_pred
+        is independently predicted, not derived from s_c.
+        """
+        recon = a_d_pred * s_c.clamp(min=1e-4)
+        return self._masked_l1(recon, rgb.clamp(0.0, 1.0), valid_mask.float())
+
+    # ------------------------------------------------------------------
+    # Per-decoder losses
+    # ------------------------------------------------------------------
+    def loss_a(self, D_g_pred, D_g_star, valid_mask):
+        """
+        Dec A loss: Gray shading in inverse space.
+        Always active on valid pixels when pseudo-GT albedo is available.
+        Uses scale-and-shift invariant MSE (SSI-MSE).
+        """
+        mask = valid_mask.float()
+        
+        mse = self._masked_mse(D_g_pred, D_g_star, mask)
+        
+        if self.lambda_msg > 0:
+            msg = self.msg_loss(D_g_pred, D_g_star, mask=mask, p=1)
+        else:
+            msg = D_g_pred.new_tensor(0.0)
+
+        total = mse + self.lambda_msg * msg
+        
+        details = {
+            'loss_a_mse': mse.detach(),
+        }
+        if self.lambda_msg > 0:
+            details['loss_a_msg'] = msg.detach()
+            
+        return total, details
+
+
+    def loss_b(self, xi_pred, xi_star, valid_mask):
+        """
+        Dec B loss: Chroma in bounded ratio space.
+        Always active on valid pixels when pseudo-GT albedo is available.
+        """
+        mask = valid_mask.float()
+        mse = self._masked_mse(xi_pred, xi_star, mask)
+
+        if self.lambda_msg > 0:
+            # Chroma uses p=2 (L2 MSG) for smooth gradients
+            msg = self.msg_loss(xi_pred, xi_star, mask=mask, p=2)
+        else:
+            msg = xi_pred.new_tensor(0.0)
+
+        total = mse + self.lambda_msg * msg
+        details = {
+            'loss_b_mse': mse.detach(),
+        }
+        if self.lambda_msg > 0:
+            details['loss_b_msg'] = msg.detach()
+        return total, details
+
+
+    def loss_c_with_details(self, a_d_pred, A_d_star, valid_mask, seg_map=None, normals=None):
+        """Dec C loss with per-term details for logging/debugging."""
+        zero = (a_d_pred * 0.0).sum()
+        mask = valid_mask.float()
+        mse = self._masked_mse(a_d_pred, A_d_star, mask)
+        
+        if self.lambda_msg > 0:
+            # Albedo uses p=1 (L1 MSG) to preserve sharp material discontinuities
+            msg = self.msg_loss(a_d_pred, A_d_star, mask=mask, p=1)
+        else:
+            msg = zero
+
+        total = mse + self.lambda_msg * msg
+
+        # DSSIM: structural fidelity for sharp albedo textures
+        if self.lambda_dssim_c > 0:
+            dssim = self._compute_dssim(a_d_pred, A_d_star, mask)
+            total = total + self.lambda_dssim_c * dssim
+        else:
+            dssim = zero
+
+        details = {
+            'loss_c_l1': mse.detach(),
+        }
+        if self.lambda_msg > 0:
+            details['loss_c_msg'] = msg.detach()
+        if self.lambda_dssim_c > 0:
+            details['loss_c_dssim'] = dssim.detach()
+        return total, details
+
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
-        L_D = M_diffuse * ( MSE(π, π*) + λ_msg * L_MSG(π, π*) + λ_dssim * DSSIM )
+        L_D = M_diffuse * ( MSE(π, π*) + λ_msg * L_MSG(π, π*) )
         Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
         with no additional conversion.
         No reconstruction loss — avoids absorbing specular residual R.
@@ -367,8 +376,6 @@ class FlexibleLoss(nn.Module):
             details = {'loss_d_mse': zero}
             if self.lambda_msg > 0:
                 details['loss_d_msg'] = zero
-            if self.enable_dssim_a_d and self.lambda_dssim > 0:
-                details['loss_d_dssim'] = zero
             return zero, details
 
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
@@ -377,113 +384,103 @@ class FlexibleLoss(nn.Module):
         mse = self._masked_mse(pi_pred, pi_star, mask)
         
         if self.lambda_msg > 0:
-            msg = self.msg_loss(pi_pred * mask, pi_star * mask)
+            # Diffuse Shading uses p=1 (L1 MSG) according to CD-IID
+            msg = self.msg_loss(pi_pred, pi_star, mask=mask, p=1)
         else:
             msg = zero
         
-        if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            dssim = self._compute_dssim(pi_pred * mask, pi_star * mask)
-        else:
-            dssim = pi_pred.new_tensor(0.0)
-        
-        total = mse + self.lambda_msg * msg + self.lambda_dssim * dssim
+        total = mse + self.lambda_msg * msg
         
         details = {
             'loss_d_mse': mse.detach(),
         }
         if self.lambda_msg > 0:
             details['loss_d_msg'] = msg.detach()
-        if self.enable_dssim_a_d and self.lambda_dssim > 0:
-            details['loss_d_dssim'] = dssim.detach()
             
         return total, details
 
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
-    def forward(self, predictions, targets, m_diffuse, m_albedo, valid_mask, seg_map=None, normals=None, rgb=None, ccr=None, edge_pred=None, edge_gt=None):
+    def forward(self, predictions, targets, m_diffuse, loss_mask, seg_map=None, normals=None, rgb=None, ccr=None):
         # V11 supervision uses only albedo (a_d) and diffuse shading (pi).
         zero = predictions['a_d'].new_tensor(0.0)
 
-        # 1. Albedo Loss (L1, MSG, DSSIM, and Semantic Variance)
+        # 1. Albedo Loss (L1, MSG)
         if targets.get('A_d_star') is not None:
             lc, lc_details = self.loss_c_with_details(
                 predictions['a_d'],
                 targets['A_d_star'],
-                valid_mask,
-                m_albedo,
+                loss_mask,
                 seg_map,
                 normals,
             )
-            
-            # Add the new Physics Prior!
-            if self.lambda_semvar > 0.0 and seg_map is not None:
-                lc_var = self._loss_semantic_variance(predictions['a_d'], seg_map, valid_mask)
-                lc = lc + self.lambda_semvar * lc_var
-                lc_details['loss_c_semvar'] = lc_var.detach()
-                
-            # LNorm is intentionally disabled for V11 because it can leak colored illumination into albedo.
         else:
             lc = zero
             lc_details = {}
 
-        # 2. Shading Loss (MSE, MSG, DSSIM)
+        # 2. Shading Loss (MSE, MSG)
         if targets.get('pi_star') is not None:
-            ld, ld_details = self.loss_d(predictions['pi'], targets['pi_star'], valid_mask, m_diffuse)
+            ld, ld_details = self.loss_d(predictions['pi'], targets['pi_star'], loss_mask, m_diffuse)
         else:
             ld = zero
             ld_details = {}
 
-        # 3. New V13 Losses
-        if self.lambda_boundary > 0.0 and ccr is not None:
-            l_boundary = self.loss_boundary_consistency(predictions['a_d'], ccr.detach(), edge_pred, valid_mask)
+        # 3. Auxiliary losses (V13)
+        if self.lambda_boundary > 0.0 and 'ccr_edge_gt' in targets:
+            l_boundary = self.loss_boundary_consistency(predictions['a_d'], targets['ccr_edge_gt'], loss_mask, seg_map=seg_map)
             lc = lc + self.lambda_boundary * l_boundary
             lc_details['loss_c_boundary'] = l_boundary.detach()
-            
+
+        if self.lambda_semvar > 0.0 and seg_map is not None:
+            l_semvar = self._loss_semantic_variance(predictions['a_d'], seg_map, loss_mask)
+            lc = lc + self.lambda_semvar * l_semvar
+            lc_details['loss_c_semvar'] = l_semvar.detach()
+        else:
+            lc_details['loss_c_semvar'] = zero.detach()
+
+        if self.lambda_exclusion > 0:
+            exclusion_loss = self.loss_gradient_exclusion(predictions['a_d'], predictions['pi'], loss_mask)
+            lc = lc + self.lambda_exclusion * exclusion_loss
+            lc_details['loss_c_exclusion_pi'] = exclusion_loss.detach()
+
+        # 4. V15 reconstruction constraint: L1(a_d * s_c - rgb)
         l_recon = zero
-        if self.lambda_recon > 0.0 and rgb is not None:
-            # We add recon loss loosely to total, or track it separately
-            l_recon = self.loss_reconstruction(predictions['a_d'], predictions['pi'], rgb, valid_mask)
-            ld = ld + self.lambda_recon * l_recon
-            ld_details['loss_d_recon'] = l_recon.detach()
+        if self.lambda_recon > 0.0 and rgb is not None and 's_c' in predictions:
+            l_recon = self.loss_recon(predictions['a_d'], predictions['s_c'], rgb, loss_mask)
+            lc = lc + self.lambda_recon * l_recon
+            lc_details['loss_c_recon'] = l_recon.detach()
+
+        # 5. V15 auxiliary edge supervision for CCR Encoder
+        # Moved out of loss_c so it is not affected by w_c multiplier.
+        l_ccr_edge = zero
+        ccr_edge_details = {'loss_ccr_edge': zero.detach()}
+        if self.lambda_ccr_edge > 0.0 and 'ccr_edge_pred' in predictions and 'ccr_edge_gt' in targets:
+            pred = predictions['ccr_edge_pred']
+            gt = targets['ccr_edge_gt']
+            # Compute BCE over valid pixels
+            bce = self.bce_logits(pred, gt)
+            bce_masked = bce * loss_mask.float()
+            l_ccr_edge = bce_masked.sum() / (loss_mask.float().sum() + 1e-6)
+            
+            l_ccr_edge = self.lambda_ccr_edge * l_ccr_edge
+            ccr_edge_details['loss_ccr_edge'] = l_ccr_edge.detach()
 
         la, la_details = zero, {}
         lb, lb_details = zero, {}
         
         if self.w_a > 0.0 and 'd_g' in predictions and targets.get('D_g_star') is not None:
-            la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], valid_mask)
+            la, la_details = self.loss_a(predictions['d_g'], targets['D_g_star'], loss_mask)
             la = self.w_a * la
 
         if self.w_b > 0.0 and 'xi' in predictions and targets.get('xi_star') is not None:
-            lb, lb_details = self.loss_b(predictions['xi'], targets['xi_star'], valid_mask)
+            lb, lb_details = self.loss_b(predictions['xi'], targets['xi_star'], loss_mask)
             lb = self.w_b * lb
 
         lc = self.w_c * lc
         ld = self.w_d * ld
-        loss_total = la + lb + lc + ld
+        loss_total = la + lb + lc + ld + l_ccr_edge
         
-        if self.lambda_edge > 0 and edge_pred is not None and edge_gt is not None:
-            # 1. Balanced BCE: dynamically weight rare edge pixels to prevent
-            # the network from collapsing to "predict all zeros".
-            num_pos = edge_gt.sum() + 1e-4
-            num_neg = (1.0 - edge_gt).sum() + 1e-4
-            total = num_pos + num_neg
-            weight_pos = num_neg / total   # high weight for rare edges
-            weight_neg = num_pos / total   # low weight for abundant background
-            pixel_weights = edge_gt * weight_pos + (1.0 - edge_gt) * weight_neg
-            l_bce = F.binary_cross_entropy(edge_pred, edge_gt, weight=pixel_weights)
-            
-            # 2. Dice Loss: While BCE fixes imbalance, it heavily penalizes minor 
-            # spatial shifts. Dice loss directly maximizes shape intersection,
-            # encouraging crisp, contiguous boundaries.
-            intersection = (edge_pred * edge_gt).sum()
-            union = edge_pred.sum() + edge_gt.sum()
-            l_dice = 1.0 - (2.0 * intersection + 1e-4) / (union + 1e-4)
-            
-            l_edge = l_bce + l_dice
-            loss_total = loss_total + self.lambda_edge * l_edge
-            la_details['loss_edge'] = l_edge.detach()
-            
         out = {
             # Keep both keys for compatibility with old and new callers.
             'loss': loss_total,
@@ -498,4 +495,5 @@ class FlexibleLoss(nn.Module):
         out.update(lb_details)
         out.update(lc_details)
         out.update(ld_details)
+        out.update(ccr_edge_details)
         return out

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train —  supported versions: V9 / V10 / V11 / V12 / V13
+# Train -  supported versions: V9 / V10 / V11 / V12 / V13 / V14 / V15 / V16
 #
 # Usage:
 #   bash scripts/train.sh                                  # V10 (default), CUDA auto
@@ -16,9 +16,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Default to version 10 if no --version or --config flag is given
-VERSION=10
-RUN_DEVICE="cuda"          # forwarded to train_stage1.py --device
+# Default to version 15 if no --version or --config flag is given
+VERSION=15
+RUN_DEVICE="cuda"          # forwarded to train.py --device
 CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
 RESUME_MODE=""            # forwarded as --resume <path|latest>
@@ -77,8 +77,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?)$ ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13 (and 12.x, 13.x)"
+if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?)$ ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13, 14, 15, 16 (and their .x variants)"
     exit 1
 fi
 
@@ -100,15 +100,10 @@ elif [[ "${VERSION}" == 12* ]]; then
     else
         CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     fi
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v12.py"
-elif [[ "${VERSION}" == 13* ]]; then
-    if [[ "${VERSION}" == "13" ]]; then
-        CONFIG="${ROOT_DIR}/src/configs/v13.yaml"
-        TRAIN_SCRIPT="${ROOT_DIR}/src/train_v13.py"
-    else
-        CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-        TRAIN_SCRIPT="${ROOT_DIR}/src/train_v${VERSION}.py"
-    fi
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
+elif [[ "${VERSION}" == 13* || "${VERSION}" == 14* || "${VERSION}" == 15* || "${VERSION}" == 16* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
 else
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"  # legacy

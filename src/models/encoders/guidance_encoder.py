@@ -1,7 +1,7 @@
 """Guidance encoder mirroring NormalEncoder with configurable input channels."""
 
+import torch
 import torch.nn as nn
-
 
 class _DWBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -16,8 +16,6 @@ class _DWBlock(nn.Module):
             bias=False,
         )
         self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        # self.norm = nn.GroupNorm(1, out_channels)
-        # self.act = nn.GELU()
         self.norm = nn.BatchNorm2d(out_channels)  
         self.act = nn.ReLU(inplace=True)         
   

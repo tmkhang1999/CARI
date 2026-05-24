@@ -14,14 +14,14 @@ Input: 6-channel descriptor from compute_ccr():
 Standard conv (not DW) — CCR is spatially rich and needs full channel mixing (PIE-Net validated).
 """
 
+import torch
 import torch.nn as nn
+
 
 
 def _conv_gn_gelu(in_c, out_c, stride):
     return nn.Sequential(
         nn.Conv2d(in_c, out_c, kernel_size=3, stride=stride, padding=1, bias=False),
-        # nn.GroupNorm(1, out_c),
-        # nn.GELU()
         nn.BatchNorm2d(out_c),
         nn.ReLU(inplace=True),
     )
@@ -49,6 +49,8 @@ class CCREncoder(nn.Module):
         # Stage 4: H/8 → H/16
         self.conv4 = _conv_gn_gelu(c3, c4, stride=2)
 
+
+
     def forward(self, ccr):
         """
         Args:
@@ -62,10 +64,10 @@ class CCREncoder(nn.Module):
               [4] c4: H/16, 512ch
         """
         x0 = self.conv0(ccr)   # H,   64ch  (stride-1, full-res)
-        c1 = self.conv1(x0)    # H/2, 64ch
-        c2 = self.conv2(c1)    # H/4, 128ch
-        c3 = self.conv3(c2)    # H/8, 256ch
-        c4 = self.conv4(c3)    # H/16,512ch
+        c1 = self.conv1(x0)
+        c2 = self.conv2(c1)
+        c3 = self.conv3(c2)
+        c4 = self.conv4(c3)
         return [x0, c1, c2, c3, c4]
 
 
