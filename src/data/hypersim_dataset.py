@@ -56,6 +56,7 @@ from src.data.augmentations import (
     random_segmentation_degradation,
     random_exposure_jitter,
 )
+from src.data.shared_transforms import prepare_training_tensors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -392,6 +393,7 @@ class HypersimDataset(Dataset):
             rid = self._load_or_cache(key('rid'), s['rid'])
 
         out = self._process(rgb, alb, illum, norm, seg, rid)
+        out['m_residual'] = torch.tensor(1.0, dtype=torch.float32)
         out['sample_idx'] = torch.tensor(idx, dtype=torch.long)
         return out
 
@@ -445,131 +447,22 @@ class HypersimDataset(Dataset):
         rid:   np.ndarray | None,  # (H,W) int32, optional
     ) -> dict:
 
-        # Sanitize all modalities before any downstream math.
-        rgb = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
-        alb = np.nan_to_num(alb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
-        alb = np.clip(alb, 0.0, None)
-        illum = np.nan_to_num(illum, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
-        illum = np.clip(illum, 0.0, None)
-        norm = _sanitize_normals(norm)
-
-        # Loss mask: Trust the V-Ray Physics Engine!
-        # Glass, mirrors, and sky have 0.0 Albedo.
-        # Threshold must be applied to albedo_raw (absolute HDR values), not albedo_scaled.
-        # Using scaled values makes the mask image-dependent: the same physical surface
-        # (e.g., dark wall with alb=0.1) could be masked in one scene but not another
-        # purely because a bright emitter raises max_val. The 0.004 threshold is an
-        # absolute physical boundary between transparent (alb~0) and diffuse (alb>0).
-        alb_mask = alb.mean(axis=-1) >= 0.004
-
-        # albedo_scaled is computed ONLY for the CCR edge supervisor in train.py,
-        # where Sobel operates more stably on [0,1]-bounded values.
-        max_val = alb.max()
-        albedo_scaled = alb / max_val if max_val > 1.0 else alb
-        
-        loss_np = alb_mask.astype(np.float32)
-
-        # ── Tonemap RGB input (linear, no gamma) ─────────────────────────────
-        # Use one shared percentile scale so routed illum and fallback rgb/albedo
-        # produce targets in the same numeric regime.
-        tonemap_scale = _compute_tonemap_scale(rgb)
-        rgb_tm = _tonemap_linear(rgb, scale=tonemap_scale)    # (H,W,3) float32, [0,1]
-        illum_norm = illum / tonemap_scale
-
-        # ── Stack for joint spatial augmentation ─────────────────────────────
-        # Layout (channel-last, axis=-1):
-        #   0:3   rgb tonemapped
-        #   3:6   albedo raw
-        #   6:9   illum raw
-        #   9:12  normals
-        combined = np.concatenate([
-            rgb_tm.astype(np.float32),
-            alb.astype(np.float32),
-            illum_norm,
-            norm.astype(np.float32),
-        ], axis=-1)   # (H,W,12)
-
-        # ── Crop policy ───────────────────────────────────────────────────────
-        H, W = combined.shape[:2]
-        max_crop = min(H, W)
-        min_crop = 128
-
         crop_mode = self.crop_mode_train if self.split == 'train' else self.crop_mode_val
         if crop_mode == 'hybrid':
             crop_mode = 'center' if np.random.rand() < 0.2 else 'random'
 
-        if crop_mode == 'full':
-            # Evaluation mode: keep the full frame, then resize to input_size.
-            seg_crop = seg
-            loss_crop = loss_np
-        else:
-            if crop_mode == 'center':
-                size = max_crop
-                top = (H - size) // 2
-                left = (W - size) // 2
-            else:
-                if max_crop < min_crop:
-                    size = max_crop
-                else:
-                    size = np.random.randint(min_crop, max_crop + 1)
-                top = np.random.randint(0, max(1, H - size + 1))
-                left = np.random.randint(0, max(1, W - size + 1))
-
-            combined = combined[top:top+size, left:left+size]        # (size,size,13)
-            seg_crop = seg[top:top+size, left:left+size]             # (size,size)
-            loss_crop = loss_np[top:top+size, left:left+size]
-
-        # ── Resize to input_size ──────────────────────────────────────────────
-        t_img = torch.from_numpy(combined[..., :12]).permute(2, 0, 1).unsqueeze(0).float()
-        t_img = F.interpolate(
-            t_img, size=(self.input_size, self.input_size),
-            mode='bilinear', align_corners=False
-        ).squeeze(0)                                              # (12,H,W)
-
-        t_loss_mask = torch.from_numpy(loss_crop[..., None]).permute(2, 0, 1).unsqueeze(0).float()
-        t_loss_mask = F.interpolate(
-            t_loss_mask, size=(self.input_size, self.input_size),
-            mode='nearest'
-        ).squeeze(0)                                              # (1,H,W)
-
-        t = t_img                                                 # (12,H,W)
-
-        seg_t = torch.from_numpy(seg_crop.astype(np.float32)).unsqueeze(0).unsqueeze(0)
-        seg_t = F.interpolate(
-            seg_t, size=(self.input_size, self.input_size),
-            mode='nearest'
-        ).squeeze(0).long()                                       # (1,H,W)
-
-        # ── Segmentation Augmentation (train only) ───────────────
-        if self.split == 'train':
-            seg_t = random_segmentation_degradation(seg_t, p_degrade=0.6)
-
-        # ---- Physical Augmentations (train only) ----
-        if self.split == 'train':
-            t, seg_t = apply_physical_augmentations(
-                t, seg_t,
-                p_hflip=0.5, p_vflip=0.5
-            )
-            # Exposure jitter with global max normalization.
-            # t = random_exposure_jitter(t, p=0.3)
-
-        alb_t = t[3:6]
-        max_val_t = alb_t.max()
-        if max_val_t > 1.0:
-            albedo_scaled_t = alb_t / max_val_t
-        else:
-            albedo_scaled_t = alb_t
-
-        return {
-            'rgb':           t[0:3],               # (3,H,W) tonemapped linear [0,1]
-            'albedo_raw':    t[3:6],               # (3,H,W) raw HDR  → scale_match()
-            'albedo_scaled': albedo_scaled_t,      # (3,H,W) scaled for masks/metrics
-            'illum_raw':     t[6:9],               # (3,H,W) normalized by shared RGB scale
-            'normals':       t[9:12],              # (3,H,W) unit vectors
-            'loss_mask':     t_loss_mask.bool(),   # (1,H,W) excludes non-diffuse
-            'seg':           seg_t,                # (1,H,W) long, NYU-40
-            'M_diffuse':     torch.tensor(1.0),
-        }
+        out = prepare_training_tensors(
+            rgb=rgb,
+            alb=alb,
+            illum=illum,
+            norm=norm,
+            seg=seg,
+            crop_mode=crop_mode,
+            input_size=self.input_size,
+            split=self.split,
+        )
+        out['M_diffuse'] = torch.tensor(1.0)
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

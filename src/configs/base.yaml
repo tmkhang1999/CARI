@@ -21,8 +21,8 @@ train:
 
   # Two-phase curriculum (global-iteration based)
   phase1_iterations: 20000
-  phase2_iterations: 50000
-  extend_iterations: 75000
+  phase2_iterations: 15000
+  extend_iterations: 40000
 
   sampling_weights_phase1:
     hypersim: 1.0
@@ -78,11 +78,7 @@ data:
 # Loss weights
 loss:
   lambda_msg: 0.5
-  lambda_tv: 0.1
-  lambda_perceptual: 0.05 #0.05 
   lambda_dssim: 0.4 #0.4
-  tv_type: 'segmentation' # options: 'segmentation', 'normals', null (disable TV)
-  tv_target_classes: [1, 22] # NYU40 IDs, default wall(1) + ceiling(22)
 
 # Paths  (relative to repo root when run from IR-IID/)
 paths:
