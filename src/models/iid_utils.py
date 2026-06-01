@@ -32,14 +32,21 @@ def rgb_to_iuv(rgb, eps=1e-4):
 
 
 def iuv_to_rgb(iuv, eps=1e-4):
+    # Force FP32: the uninvert -> divide chain overflows in FP16
+    # because uninvert(x) = 1/x - 1 produces large values near x=0,
+    # and the subsequent division by a sum of small terms can exceed FP16 max.
+    orig_dtype = iuv.dtype
+    iuv = iuv.float()
+
     l = uninvert(iuv[:, 0:1], eps=eps)
     u = uninvert(iuv[:, 1:2], eps=eps)
     v = uninvert(iuv[:, 2:3], eps=eps)
 
-    g = l / ((u * 0.299) + (v * 0.114) + 0.587)
+    denom = (u * 0.299) + (v * 0.114) + 0.587
+    g = l / denom.clamp(min=eps)
     r = g * u
     b = g * v
-    return torch.cat([r, g, b], dim=1)
+    return torch.cat([r, g, b], dim=1).to(orig_dtype)
 
 
 def resize_to_base(x, base_size):
@@ -57,21 +64,36 @@ def resize_to_base(x, base_size):
         return F.interpolate(x, size=(new_h, new_w), mode='bilinear', align_corners=False)
 
 # def derive_albedo(rgb, shading):
-#         # In FP16, 1e-6 can sometimes underflow to 0.0.
-#         # 1e-5 is much safer for FP16 math.
-#         eps = 1e-5 
-        
-#         # Remove upper bound to preserve specular highlights and HDR
-#         albedo = rgb / shading.clamp(min=eps)
-#         albedo = torch.nan_to_num(albedo, nan=0.0, posinf=0.0, neginf=0.0)
-#         return albedo.clamp(0.0, 1.0)
+#     """
+#     Derives albedo using I / S. 
+#     Applies Q99 normalization to safely scale the HDR albedo into the [0, 1] range 
+#     without causing a massive gradient ceiling ceiling early in training.
+#     """
+#     eps = 1e-5
+#     raw = rgb / shading.clamp(min=eps)
+#     raw = torch.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+    
+#     b = raw.shape[0]
+#     # Compute single Q99 scalar per image across all channels to preserve color ratios
+#     q99 = torch.quantile(raw.float().reshape(b, -1), 0.99, dim=1).view(b, 1, 1, 1)
+    
+#     # Scale such that the 99th percentile hits 0.75 (safe headroom)
+#     return (raw * (0.75 / q99.clamp(min=eps))).clamp(0.0, 1.0)
 
 def derive_albedo(rgb, shading):
     # In FP16, 1e-6 can sometimes underflow to 0.0.
-    # 1e-5 is much safer for FP16 math.
-    eps = 1e-5 
-    
-    # Remove upper bound to preserve specular highlights and HDR
+    eps = 1e-5
+
     albedo = rgb / shading.clamp(min=eps)
     albedo = torch.nan_to_num(albedo, nan=0.0, posinf=0.0, neginf=0.0)
-    return albedo.clamp(0.0, 1.0)
+
+    # Q99 normalization: scale so 99th percentile maps to 0.8.
+    # Hard clamp to [0,1] saturates albedo in dim regions (S << 1) where
+    # true albedo A = I/S can exceed 1 in linear space. Q99 preserves
+    # relative color ratios across the image.
+    B = albedo.shape[0]
+    q99 = torch.quantile(
+        albedo.float().reshape(B, -1), 0.99, dim=1
+    ).view(B, 1, 1, 1).clamp(min=eps)
+    albedo = (albedo * (0.8 / q99)).clamp(0.0, 1.0)
+    return albedo

@@ -37,3 +37,5 @@ preprocessor/infer_m2f_ins.py
 preprocessor/inputs
 preprocessor/outputs
 tests/visualizations
+tests/testing_data
+tests/realistic_samples

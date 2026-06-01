@@ -1,11 +1,12 @@
 model:
-  version: 16
+  version: 17
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
   backbone_lr_multiplier: 1
   pretrained: true
   num_seg_classes: 41
+  max_residual: 5.0
 
 train:
   batch_size: 8
@@ -45,27 +46,26 @@ data:
   midintrinsic_train_max_images: 0
 
 loss:
-  lambda_branch_a: 1.0
-  lambda_branch_b: 1.0
+  # V17: no cascade branches, use direct albedo/shading/residual losses
+  lambda_branch_a: 0.0
+  lambda_branch_b: 0.0
   lambda_branch_c: 1.0
   lambda_branch_d: 1.0
 
-  # MSG weight: with Sobel kernels restored, 0.5 matches the original
-  # proven setting. Increase to 1.0 for stronger gradient fidelity.
   lambda_msg: 0.5
-  lambda_semvar: 0.05
-
   lambda_ccr_edge: 0.0
-  lambda_boundary: 0.0
 
-  # DSSIM re-enabled: prevents albedo over-smoothing from MSE
-  # regression-to-mean. Was zeroed out, causing blurry albedo.
+  lambda_boundary: 0.0
   enable_dssim_a_d: true
   lambda_dssim: 0.2
 
   lambda_perceptual: 0
-  lambda_recon: 0.0
-  
+
+  # Reconstruction loss: the physics coupling constraint (I = A*S + R)
+  # Active on all datasets regardless of GT availability
+  lambda_recon: 0.5
+
+  lambda_semvar: 0.0
   lambda_tv: 0.0
   lambda_edge: 0.0
   tv_type: 'none'

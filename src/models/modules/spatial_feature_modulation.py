@@ -26,7 +26,7 @@ class SpatialFeatureModulation(nn.Module):
 
         self.proj = nn.Sequential(
             nn.Conv2d(input_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(8, hidden_channels), #nn.BatchNorm2d(hidden_channels),
+            nn.BatchNorm2d(hidden_channels), #nn.GroupNorm(8, hidden_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_channels, x_channels * 2, kernel_size=3, padding=1),
         )

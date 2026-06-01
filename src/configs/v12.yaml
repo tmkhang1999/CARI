@@ -1,5 +1,9 @@
+# Stage 1 V12_single — Hypersim only
+# - Set all loss weights to 0 except MSE (1.0) and MSG (0.5)
+# - Focus purely on gradient alignment and magnitude
+
 model:
-  version: 16
+  version: 12
   backbone: convnextv2_base
   z_channels: 1024
   freeze_stages: [1, 2]
@@ -22,13 +26,13 @@ train:
   val_interval_iters: 2000
   checkpoint_interval_iters: 500
   val_example_images: 3
-  val_example_indices: [25, 50, 75]
+  val_example_indices: [25, 50,75] #[120, 200, 300]
   max_val_batches: 100
   compute_val_losses: false
   seed: 42
   deterministic: true
 
-  extend_iterations: 20000
+  extend_iterations: 31000
 
   sampling_weights_phase1:
     hypersim: 1
@@ -39,6 +43,7 @@ train:
 
 data:
   datasets: ['hypersim']
+  validate_midintrinsic: false
   hypersim_strict_split: false
   subset_seed: 42
   hypersim_train_max_images: 0
@@ -47,25 +52,20 @@ data:
 loss:
   lambda_branch_a: 1.0
   lambda_branch_b: 1.0
-  lambda_branch_c: 1.0
-  lambda_branch_d: 1.0
+  lambda_branch_c: 2
+  lambda_branch_d: 1.5
 
-  # MSG weight: with Sobel kernels restored, 0.5 matches the original
-  # proven setting. Increase to 1.0 for stronger gradient fidelity.
-  lambda_msg: 0.5
-  lambda_semvar: 0.05
+  lambda_msg: 0.8
 
-  lambda_ccr_edge: 0.0
   lambda_boundary: 0.0
-
-  # DSSIM re-enabled: prevents albedo over-smoothing from MSE
-  # regression-to-mean. Was zeroed out, causing blurry albedo.
-  enable_dssim_a_d: true
-  lambda_dssim: 0.2
-
-  lambda_perceptual: 0
-  lambda_recon: 0.0
-  
-  lambda_tv: 0.0
-  lambda_edge: 0.0
+  lambda_ccr_edge: 0.0
+      
+  enable_dssim_a_d: false   
+  lambda_dssim: 0.0
+        
+  lambda_perceptual: 0      
+  lambda_recon: 0.0         
+  lambda_semvar: 0.0        
+  lambda_tv: 0.0   
+  lambda_edge: 0.0          
   tv_type: 'none'

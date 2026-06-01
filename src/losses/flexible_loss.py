@@ -13,6 +13,38 @@ import torch.nn.functional as F
 from .msg_loss import MultiScaleGradientLoss
 
 
+def _scale_shift_align(pred, target, mask, eps=1e-6):
+    """Align pred to target via least-squares scale and shift.
+
+    Solves: argmin_{a,b} || mask * (a*pred + b - target) ||^2
+    Returns the aligned prediction. Used for SSI loss on shading branches.
+    """
+    B = pred.shape[0]
+    p_flat = pred.reshape(B, -1)
+    t_flat = target.reshape(B, -1)
+    # Expand mask to match pred channels (e.g. for RGB diffuse shading)
+    m_flat = mask.expand_as(pred).reshape(B, -1).float()
+
+    sum_m = m_flat.sum(dim=1, keepdim=True).clamp(min=1.0)
+    p_mean = (p_flat * m_flat).sum(dim=1, keepdim=True) / sum_m
+    t_mean = (t_flat * m_flat).sum(dim=1, keepdim=True) / sum_m
+
+    p_cen = (p_flat - p_mean) * m_flat
+    t_cen = (t_flat - t_mean) * m_flat
+
+    covar = (p_cen * t_cen).sum(dim=1, keepdim=True)
+    var_p = (p_cen * p_cen).sum(dim=1, keepdim=True)
+
+    # Scale must be non-negative (shading is non-negative)
+    a = F.relu(covar / (var_p + eps)) + eps
+    b = t_mean - a * p_mean
+
+    # Reshape for broadcasting against (B, C, H, W)
+    ndim = pred.ndim
+    shape = [-1] + [1] * (ndim - 1)
+    return pred * a.view(shape) + b.view(shape)
+
+
 class FlexibleLoss(nn.Module):
     """
     Flexible loss that routes gradients based on available ground truth.
@@ -235,40 +267,63 @@ class FlexibleLoss(nn.Module):
         
         return ((excl_x + excl_y) * mask).sum() / (mask.sum() + 1e-7)
 
-    def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask):
+    def _loss_semantic_variance(self, a_d_pred, seg_map, valid_mask,
+                                 lf_size=48):
+        """Low-frequency semantic variance loss.
+
+        Illumination leakage is a low-frequency phenomenon (smooth gradient
+        across a wall), while real material texture is high-frequency (brick,
+        wood grain). By downsampling albedo to lf_size before computing
+        per-class variance, we penalize illumination gradients without
+        destroying texture detail.
+
+        Args:
+            lf_size: spatial resolution for low-frequency check. 48 covers
+                     ~8x8 pixel patches at 384 input. Lower = more aggressive
+                     smoothing assumption. Higher = more texture destruction.
+        """
         if seg_map is None or not self.semantic_var_classes:
             return (a_d_pred * 0.0).sum()
 
         if seg_map.ndim == 4:
             seg_map = seg_map.squeeze(1)
-        
+
         valid = valid_mask.bool().squeeze(1)
-        
-        # 1. Create a unified binary mask for ALL target structural classes
-        # Use torch.isin for fast vectorized matching
-        target_tensor = torch.tensor(self.semantic_var_classes, device=seg_map.device)
+
+        target_tensor = torch.tensor(
+            self.semantic_var_classes, device=seg_map.device
+        )
         struct_mask = torch.isin(seg_map, target_tensor) & valid
-        
-        # 2. Compute variance globally over structural pixels per batch item
-        # a_d_pred: (B, 3, H, W) -> (B, 3, H*W)
-        B, C, H, W = a_d_pred.shape
-        flat_a = a_d_pred.view(B, C, -1)
-        flat_mask = struct_mask.view(B, 1, -1).expand(-1, C, -1)
-        
+
+        # Downsample albedo and mask to low-frequency resolution.
+        # This preserves illumination gradients but discards texture.
+        a_lf = F.interpolate(
+            a_d_pred, size=(lf_size, lf_size),
+            mode='bilinear', align_corners=False,
+        )
+        mask_lf = F.interpolate(
+            struct_mask.unsqueeze(1).float(), size=(lf_size, lf_size),
+            mode='nearest',
+        ).squeeze(1).bool()
+
+        B, C = a_lf.shape[:2]
+        flat_a = a_lf.view(B, C, -1)
+        flat_mask = mask_lf.view(B, 1, -1).expand(-1, C, -1)
+
         total_var = a_d_pred.new_tensor(0.0)
-        valid_batches = 0
-        
+        valid_count = 0
+
         for b in range(B):
             for c in range(C):
-                pixel_vals = flat_a[b, c, flat_mask[b, c]]
-                if pixel_vals.numel() > 16:  # Only compute if enough pixels exist
-                    total_var += pixel_vals.var(unbiased=False)
-                    valid_batches += 1
-                    
-        if valid_batches == 0:
+                vals = flat_a[b, c, flat_mask[b, c]]
+                if vals.numel() > 4:
+                    total_var = total_var + vals.var(unbiased=False)
+                    valid_count += 1
+
+        if valid_count == 0:
             return (a_d_pred * 0.0).sum()
-            
-        return total_var / float(valid_batches)
+
+        return total_var / float(valid_count)
 
 
     def loss_recon(self, a_d_pred, s_c, rgb, valid_mask):
@@ -287,39 +342,40 @@ class FlexibleLoss(nn.Module):
     def loss_a(self, D_g_pred, D_g_star, valid_mask):
         """
         Dec A loss: Gray shading in inverse space.
-        Always active on valid pixels when pseudo-GT albedo is available.
-        Uses scale-and-shift invariant MSE (SSI-MSE).
+        Uses pure MSE (no SSI alignment) because downstream cascade steps
+        depend on the absolute magnitude of the prediction.
+        Uses MSG p=2 for smooth shading.
         """
         mask = valid_mask.float()
-        
+
         mse = self._masked_mse(D_g_pred, D_g_star, mask)
-        
+
         if self.lambda_msg > 0:
-            msg = self.msg_loss(D_g_pred, D_g_star, mask=mask, p=1)
+            # p=2: penalize gradient errors quadratically for smooth shading
+            msg = self.msg_loss(D_g_pred, D_g_star, mask=mask, p=2)
         else:
             msg = D_g_pred.new_tensor(0.0)
 
         total = mse + self.lambda_msg * msg
-        
+
         details = {
             'loss_a_mse': mse.detach(),
         }
         if self.lambda_msg > 0:
             details['loss_a_msg'] = msg.detach()
-            
+
         return total, details
 
 
     def loss_b(self, xi_pred, xi_star, valid_mask):
         """
         Dec B loss: Chroma in bounded ratio space.
-        Always active on valid pixels when pseudo-GT albedo is available.
+        Uses MSG p=2 for smooth chroma transitions.
         """
         mask = valid_mask.float()
         mse = self._masked_mse(xi_pred, xi_star, mask)
 
         if self.lambda_msg > 0:
-            # Chroma uses p=2 (L2 MSG) for smooth gradients
             msg = self.msg_loss(xi_pred, xi_star, mask=mask, p=2)
         else:
             msg = xi_pred.new_tensor(0.0)
@@ -366,10 +422,8 @@ class FlexibleLoss(nn.Module):
     def loss_d(self, pi_pred, pi_star, valid_mask, m_diffuse):
         """
         Dec D loss: Diffuse shading in inverse space.
-        L_D = M_diffuse * ( MSE(π, π*) + λ_msg * L_MSG(π, π*) )
-        Both terms are applied directly on inverse shading tensors (pi_pred, pi_star)
-        with no additional conversion.
-        No reconstruction loss — avoids absorbing specular residual R.
+        Uses SSI alignment before error computation.
+        Uses MSG p=2 for smooth shading.
         """
         if m_diffuse.sum() == 0:
             zero = (pi_pred * 0.0).sum()
@@ -381,22 +435,25 @@ class FlexibleLoss(nn.Module):
         route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
         mask = valid_mask.float() * route
 
-        mse = self._masked_mse(pi_pred, pi_star, mask)
-        
+        # SSI alignment for scale-ambiguous shading
+        pi_aligned = _scale_shift_align(pi_pred, pi_star, mask)
+
+        mse = self._masked_mse(pi_aligned, pi_star, mask)
+
         if self.lambda_msg > 0:
-            # Diffuse Shading uses p=1 (L1 MSG) according to CD-IID
-            msg = self.msg_loss(pi_pred, pi_star, mask=mask, p=1)
+            # p=2: smooth shading
+            msg = self.msg_loss(pi_aligned, pi_star, mask=mask, p=2)
         else:
-            msg = zero
-        
+            msg = pi_pred.new_tensor(0.0)
+
         total = mse + self.lambda_msg * msg
-        
+
         details = {
             'loss_d_mse': mse.detach(),
         }
         if self.lambda_msg > 0:
             details['loss_d_msg'] = msg.detach()
-            
+
         return total, details
 
     # ------------------------------------------------------------------
@@ -497,3 +554,71 @@ class FlexibleLoss(nn.Module):
         out.update(ld_details)
         out.update(ccr_edge_details)
         return out
+
+    # ------------------------------------------------------------------
+    # V17 loss methods (parallel architecture: albedo, shading, residual)
+    # ------------------------------------------------------------------
+    def loss_v17_shading(self, shading_pred, shading_gt, valid_mask, m_diffuse):
+        """SSI-aligned shading loss with MSG p=2 for V17.
+
+        Operates in linear shading space (softplus output, non-negative).
+        """
+        if m_diffuse.sum() == 0:
+            zero = (shading_pred * 0.0).sum()
+            return zero, {'loss_shading_mse': zero}
+
+        route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
+        mask = valid_mask.float() * route
+
+        s_aligned = _scale_shift_align(shading_pred, shading_gt, mask)
+        mse = self._masked_mse(s_aligned, shading_gt, mask)
+
+        msg = self.msg_loss(s_aligned, shading_gt, mask=mask, p=2) if self.lambda_msg > 0 else shading_pred.new_tensor(0.0)
+
+        total = mse + self.lambda_msg * msg
+        details = {'loss_shading_mse': mse.detach()}
+        if self.lambda_msg > 0:
+            details['loss_shading_msg'] = msg.detach()
+        return total, details
+
+    def loss_v17_residual(self, residual_pred, residual_gt, valid_mask, m_diffuse):
+        """SSI-aligned residual loss with MSG p=1 for V17.
+
+        Specular residual uses L1 MSG to preserve sharp specular edges.
+        """
+        if m_diffuse.sum() == 0:
+            zero = (residual_pred * 0.0).sum()
+            return zero, {'loss_residual_mse': zero}
+
+        route = m_diffuse.view(-1, 1, 1, 1).to(valid_mask.device)
+        mask = valid_mask.float() * route
+
+        r_aligned = _scale_shift_align(residual_pred, residual_gt, mask)
+        mse = self._masked_mse(r_aligned, residual_gt, mask)
+
+        msg = self.msg_loss(r_aligned, residual_gt, mask=mask, p=1) if self.lambda_msg > 0 else residual_pred.new_tensor(0.0)
+
+        total = mse + self.lambda_msg * msg
+        details = {'loss_residual_mse': mse.detach()}
+        if self.lambda_msg > 0:
+            details['loss_residual_msg'] = msg.detach()
+        return total, details
+
+    def loss_v17_reconstruction(self, rgb_reconstructed, rgb_input, valid_mask):
+        """Photometric reconstruction: L1(A*S+R, I) + MSG(A*S+R, I).
+
+        This is the physics coupling constraint. Active on all datasets
+        regardless of GT availability. MSG p=1 for sharp reconstruction.
+        """
+        mask = valid_mask.float()
+        l1 = self._masked_l1(rgb_reconstructed, rgb_input, mask)
+
+        msg = self.msg_loss(rgb_reconstructed, rgb_input, mask=mask, p=1) if self.lambda_msg > 0 else rgb_input.new_tensor(0.0)
+
+        total = l1 + 0.5 * msg
+        details = {
+            'loss_recon_l1': l1.detach(),
+        }
+        if self.lambda_msg > 0:
+            details['loss_recon_msg'] = msg.detach()
+        return total, details
