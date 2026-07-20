@@ -83,9 +83,10 @@ documents/thesis/Mesh Reconstruction via Differentiable Rendering Pipelines.pdf
 *.synctex.gz
 *.toc
 
-# Compiled thesis PDF: rebuildable from source, 14 MB per revision.
-# Comment this line out to archive the final submitted version.
-documents/thesis/Main.pdf
+# Compiled thesis PDF (14 MB/revision). Tracked because the README links to it.
+# Re-enable this ignore if frequent rebuilds start bloating history, and attach
+# the PDF to a GitHub Release instead.
+# documents/thesis/Main.pdf
 
 # 3D-FRONT smoke-test scene assets (third-party .glb, 12 MB)
 tests/viz/front3d_smoke_glbs/
