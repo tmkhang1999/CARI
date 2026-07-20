@@ -52,7 +52,8 @@ preprocessor/outputs/
 preprocessor/.env
 
 # ============================================================
-#  documents/ — the thesis IS tracked. Only ignore bulk & builds.
+#  
+ts/ — the thesis IS tracked. Only ignore bulk & builds.
 # ============================================================
 
 # Third-party reference papers (581 MB)

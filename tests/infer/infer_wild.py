@@ -15,7 +15,11 @@ sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 sys.path.insert(0, str(ROOT_DIR / "tests" / "viz"))   # visualize_hdf5 moved here
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from src.models import IntrinsicDecompositionV17
+from src.models import (
+    IntrinsicDecompositionV12,
+    IntrinsicDecompositionV16,
+    IntrinsicDecompositionV17,
+)
 try:
     from tests.viz.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES   # moved into tests/viz/
 except ImportError:
@@ -390,8 +394,12 @@ def _build_model(model_config: dict, version: str, device: str):
     cfg_v = str(model_config.get("version", "")).strip().lower()
     if v in ["17", "17.0"] or cfg_v in ["17", "17.0"]:
         return IntrinsicDecompositionV17(model_config).to(device)
+    if v in ["16", "16.0"]:
+        return IntrinsicDecompositionV16(model_config).to(device)
+    if v in ["12", "12.0"]:
+        return IntrinsicDecompositionV12(model_config).to(device)
     raise ValueError(f"_build_model: unsupported model version {version!r} "
-                     f"(only V17 is retained; see git history for V12/V16/V17.27/V20)")
+                     f"(have V12/V16/V17; see git history for V17.27/V18/V20)")
 
 
 # ====================================================================
