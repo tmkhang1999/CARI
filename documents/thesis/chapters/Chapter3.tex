@@ -1,0 +1,351 @@
+% ============================================================
+%  Chapter 3 — Method
+% ============================================================
+\chapter{Method}
+\label{ch:method}
+
+This chapter describes how our model works.
+We start with the physical model that underlies IID (\secref{sec:physics}),
+then describe the network architecture (\secref{sec:architecture}),
+and finally explain the CARI training strategy (\secref{sec:cari}).
+
+
+\section{Physical Model}
+\label{sec:physics}
+
+\subsection{The Standard IID Equation}
+
+Under the Lambertian reflectance model with a single distant light source,
+the intensity at a pixel $p$ in an image is:
+\begin{equation}
+  \mathbf{I}(p) = \mathbf{A}(p) \cdot S(p)
+  \label{eq:iid}
+\end{equation}
+where $\mathbf{A}(p) \in [0,1]^3$ is the three-channel albedo (material
+reflectance) and $S(p) \in \mathbb{R}_{>0}$ is a non-negative scalar shading
+value. Shading describes the illumination arriving at the surface point after
+geometry, visibility, and shadows have had their effect. Albedo describes the
+fraction and colour of that light that the material diffusely reflects. The
+camera observes the reflected result, not either factor in isolation.
+
+Under the assumption of a grey (achromatic) illuminant, $S$ is a scalar and the
+product in \eqnref{eq:iid} is a simple element-wise multiplication: each colour
+channel of $\mathbf{I}$ is scaled by the same amount.
+This makes the colour of each pixel determined entirely by $\mathbf{A}$.
+
+\subsection{Why Achromatic Shading Fails with Coloured Light}
+
+When the illuminant has colour, the scaling is no longer the same across channels.
+A red lamp makes the $R$ channel brighter relative to $G$ and $B$.
+A correct model would encode this in the shading, but scalar shading cannot express
+different scalings per channel.
+What actually happens in practice is that the model absorbs the channel imbalance
+into the albedo, because the albedo is the only RGB term in the equation.
+The predicted albedo therefore reflects the combined colour of the surface
+\emph{and} the illuminant, rather than just the surface.
+
+\figref{fig:formulation} demonstrates that this is a limitation of the
+representation, not a particular network. Even when the scalar model is given
+the luminance of the true RGB shading, dividing the image by that scalar can
+change brightness but cannot remove the lamp's hue.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/formulation/formulation.jpg}
+  \caption[Why scalar shading leaks illuminant colour into albedo.]{%
+    Why scalar shading must leak illuminant colour into albedo. From left: a
+    warm-lit MID frame; pseudo-ground-truth albedo; the RGB shading implied by
+    the data; and the albedo recovered with the luminance of that true shading.
+    The favourable scalar construction still produces a
+    visibly tinted albedo (mean chroma error $2.31$, versus $0.22$ when shading
+    has three channels), because a scalar can alter brightness but not hue. The
+    remaining RGB error comes from clipping and the display-domain conversion,
+    not from an inability to represent channel-dependent illumination.
+  }
+  \label{fig:formulation}
+\end{figure}
+
+To model coloured illumination correctly, the shading must therefore be a
+three-channel (RGB) quantity $\mathbf{S}_d(p) \in \mathbb{R}_{>0}^3$, so each
+colour channel can be scaled independently.
+The model additionally keeps an explicit non-diffuse term for the light that the
+Lambertian product cannot represent (specular highlights, visible light sources,
+clipped pixels), giving the full decomposition:
+\begin{equation}
+  \mathbf{I}(p) = \mathbf{A}(p) \odot \mathbf{S}_d(p) + \mathbf{R}(p)
+  \label{eq:iid_color}
+\end{equation}
+where $\odot$ is element-wise multiplication, $\mathbf{S}_d$ is the colored
+\emph{diffuse} shading, and $\mathbf{R} \geq 0$ is the non-diffuse residual.
+The model predicts $\mathbf{A}$ and $\mathbf{S}_d$ with two network heads and derives
+the residual \emph{analytically} as
+$\mathbf{R} = \bigl(\mathbf{I} - \mathbf{A} \odot \mathbf{S}_d\bigr)_{+}$,
+so the reconstruction $\mathbf{A} \odot \mathbf{S}_d + \mathbf{R}$ matches the
+input by construction wherever the diffuse product does not overshoot it.
+
+A three-channel shading solves the representation problem but not the
+\emph{ambiguity} problem: single-image supervision cannot say how much of a hue
+belongs to the albedo and how much to the shading colour, and the standard
+ground-truth datasets (including Hypersim) supervise shading only up to this
+ambiguity.
+This is where CARI comes in: by constraining the albedo to be identical across
+images of the same scene under different illuminants, the colour split stops
+being a free choice: any illuminant colour that the model puts into the albedo
+now violates the invariance constraint, so it is forced into $\mathbf{S}_d$,
+which is exactly where the physics says it belongs.
+
+\subsection{The Shading Parameterisation}
+
+A practical challenge in predicting shading is that it can take any positive
+value, which is an unbounded output range; worse, its distribution in
+real scenes is heavily skewed.
+Specular surfaces and bright light sources produce very large shading values,
+so linear shading concentrates almost all pixels in a narrow band near zero
+with a long tail (\figref{fig:inverse_shading}): a regression loss on this
+representation is dominated by a few extreme pixels while the mid-range
+values that carry the shadow structure receive almost no gradient.
+Working in the logarithmic domain balances the distribution but still has no
+well-defined range for a network output.
+Following the inverse-shading parameterisation of \mycitetext{careaga23ordinal},
+which was introduced to solve exactly this conditioning problem,
+the network predicts a bounded quantity
+$\boldsymbol{\pi}(p) = 1 / \bigl(\mathbf{S}_d(p) + 1\bigr) \in (0, 1)$
+per channel using a sigmoid activation, and the shading is recovered by
+inverting this mapping:
+\begin{equation}
+  \mathbf{S}_d(p) = \frac{1 - \boldsymbol{\pi}(p)}{\boldsymbol{\pi}(p)}
+  \label{eq:uninvert}
+\end{equation}
+The prediction is clamped to
+$\boldsymbol{\pi} \in [5 \times 10^{-3},\, 1 - 10^{-4}]$, which bounds the
+recovered shading to $\mathbf{S}_d \in [10^{-4},\, 199]$, providing enough headroom to
+represent bright high-dynamic-range illumination while keeping the division
+numerically safe.
+The inversion is differentiable, so gradients flow through it during training.
+Losses that supervise the shading pattern are computed on $\boldsymbol{\pi}$
+(bounded, well-conditioned), while physics losses that need the actual light
+intensity (reconstruction, the residual) use the linear $\mathbf{S}_d$.
+
+\input{./chapters/fig_inverse_shading}
+
+
+\section{Network Architecture}
+\label{sec:architecture}
+
+Our model is built on two components: a frozen DINOv2-Large visual encoder and a
+DPT-style decoder with separate output heads for albedo and shading.
+
+\subsection{DINOv2 Encoder}
+
+The encoder is DINOv2-Large \mycite{oquab24dinov2}, a Vision Transformer (ViT)
+with a patch size of 14 pixels and approximately 304 million parameters.
+DINOv2 was trained with self-supervised learning on a large and diverse image
+corpus, and it produces patch-level feature representations that capture
+rich semantic and geometric information.
+
+We use DINOv2 in a frozen state, meaning its weights are not updated during
+IID training.
+This is a deliberate design choice for two reasons.
+First, DINOv2's representations are already very strong; fine-tuning them would
+require careful learning rate scheduling and risks destroying useful features
+learned during self-supervised pre-training.
+Second, keeping the encoder frozen reduces GPU memory during training, which
+allows us to use a larger batch size.
+
+For an input image of size $H \times W$, DINOv2 divides it into $(H/14) \times (W/14)$
+patches and produces a token embedding for each patch.
+We extract the intermediate features from four roughly evenly-spaced transformer
+blocks (blocks 5, 12, 18, and 24 of the 24-block ViT-L, the last of which is the
+final block).
+These multi-depth features capture information at different levels of abstraction:
+earlier blocks retain more local texture and colour, while later blocks encode
+semantic and structural information.
+One consequence of DINOv2's heavily augmented self-supervised training is
+directly useful for IID: because its objective is invariant to strong
+photometric augmentation, its patch tokens are expected to be robust to
+low-level appearance changes including illumination, so a shadowed and a lit
+patch of the same material tend to map to similar tokens, which is a helpful prior for
+assigning the same albedo across a shadow boundary.
+
+\subsection{DPT Decoder}
+
+The Dense Prediction Transformer (DPT) decoder \mycite{ranftl21dpt} was designed
+to reconstruct full-resolution feature maps from the patch tokens of a ViT.
+The key idea is to re-assemble the patch tokens from each layer into a spatial
+feature map, then fuse the maps from all layers through a series of convolutional
+feature fusion blocks.
+The fusion progressively upsamples the features to the input resolution,
+combining coarse semantic information from deep layers with fine spatial details
+from early layers.
+
+We use a single DPT decoder that takes all four feature levels as input.
+Each level is first \emph{reassembled}: the patch tokens are projected and
+reshaped into a spatial feature map at a level-specific resolution.
+The four maps are then merged by a chain of \emph{fusion} blocks, each of
+which upsamples the coarser map, adds the next finer one, and refines the sum
+with residual convolutions, so semantic context from deep blocks and spatial
+precision from early blocks accumulate into one representation.
+Because the ViT operates on $14 \times 14$ patches, even the finest token map
+is far below pixel resolution; a lightweight convolutional \emph{detail stem}
+therefore processes the raw input image in parallel and injects genuine
+high-frequency edge information that the token path cannot carry.
+The decoder output is a shared full-resolution feature map, which is fed to
+two separate output heads.
+
+\subsection{Output Heads}
+
+The albedo head takes the DPT feature map, concatenates a full-resolution
+\emph{RGB skip} (the gamma-encoded input image), and passes the result through
+a small convolutional block followed by a sigmoid activation:
+\begin{equation}
+  \mathbf{A} = \sigma\Bigl(\text{Conv}\bigl(\mathbf{F}_{\text{DPT}},\,
+               \mathbf{I}^{1/2.2}\bigr)\Bigr) \in [0, 1]^{H \times W \times 3}
+  \label{eq:albedo_head}
+\end{equation}
+The sigmoid bounds the albedo to $[0,1]^3$, the correct range for a reflectance
+value.
+The RGB skip is motivated by a practical risk of using a frozen semantic encoder:
+its tokens need not retain all of the local, absolute colour information required
+for albedo prediction. We did not directly probe DINOv2 for illumination
+invariance, so this is a design hypothesis rather than an established property of
+the encoder. Feeding image colour directly into the head restores that capacity.
+Crucially, this skip is only safe \emph{in combination with} the CARI invariance
+loss: with a direct colour path and no invariance constraint, the illuminant
+colour would flow straight through the skip into the albedo.
+This coupling is one of the ablation axes in \chapref{ch:experiments}.
+
+The shading head applies its own convolutional block and sigmoid and outputs the
+three-channel inverse shading:
+\begin{equation}
+  \boldsymbol{\pi} = \sigma\bigl(\text{Conv}(\mathbf{F}_{\text{DPT}})\bigr)
+  \in (0, 1)^{H \times W \times 3}
+  \label{eq:shading_head}
+\end{equation}
+The colored diffuse shading $\mathbf{S}_d$ is recovered from $\boldsymbol{\pi}$
+using \eqnref{eq:uninvert}, and the non-diffuse residual follows analytically:
+\begin{equation}
+  \mathbf{R} = \bigl(\mathbf{I} - \mathbf{A} \odot \mathbf{S}_d\bigr)_{+}
+  \label{eq:residual}
+\end{equation}
+There is no third head: the residual costs no parameters, and the reconstruction
+$\mathbf{A} \odot \mathbf{S}_d + \mathbf{R}$ is exact wherever the diffuse
+product does not overshoot the image.
+
+Both heads share the same DPT feature map as input.
+This encourages the two predictions to be consistent with each other, since they
+are both derived from the same underlying scene representation.
+
+\input{./chapters/fig_architecture}
+
+
+\section{Cross-Render Albedo Invariance (CARI)}
+\label{sec:cari}
+
+\subsection{The Core Idea}
+
+CARI is a training strategy, not a change to the network.
+It adds two loss terms that operate on \emph{pairs} of images of the same scene
+photographed under different illuminants.
+
+Let $(\mathbf{I}_1, \mathbf{I}_2)$ be such a pair, where $\mathbf{I}_1$ and
+$\mathbf{I}_2$ show the same scene under two different coloured light sources.
+Let $\mathbf{A}_1 = \mathbf{A}(\mathbf{I}_1)$ and $\mathbf{A}_2 = \mathbf{A}(\mathbf{I}_2)$
+be the albedos predicted by the model for each image, and let $S_1$ and $S_2$ be
+the corresponding shadings.
+
+\subsection{Invariance Loss}
+
+The albedo must be the same for both images, because the physical material has not
+changed.
+We encode this as a masked $\ell_1$ loss:
+\begin{equation}
+  \mathcal{L}_{\text{inv}} =
+  \frac{1}{|\Omega_v|} \sum_{p \in \Omega_v}
+  \bigl\| \mathbf{A}_1(p) - \mathbf{A}_2(p) \bigr\|_1
+  \label{eq:linv}
+\end{equation}
+where $\Omega_v \subset \Omega$ is the set of \emph{valid paired pixels}.
+The validity mask matters in practice: MID frames are high-dynamic-range captures
+that are clipped per frame, so a pixel can be saturated in one frame and not the
+other, and deep shadows carry mostly sensor noise.
+$\Omega_v$ excludes clipped and near-black pixels in either frame (roughly 75\%
+of pixels survive the mask on average), so the invariance constraint is only
+applied where both observations are trustworthy.
+This loss is zero only when the model predicts identical albedo for both images.
+Minimising it forces the model to make the albedo independent of the illuminant
+colour.
+
+\subsection{Explanation Loss}
+
+The invariance loss alone is not enough.
+A degenerate model could satisfy \eqnref{eq:linv} by predicting a flat, constant
+albedo (the same grey image for every input).
+To prevent this, we add a companion loss that requires the shading to \emph{explain}
+the pixel-level difference between the two images.
+
+Under the diffuse model $\mathbf{I} \approx \mathbf{A} \odot \mathbf{S}_d$, the
+ratio of corresponding pixels in the two images equals the ratio of their
+shadings wherever the albedo is shared:
+\begin{equation}
+  \frac{\mathbf{I}_1(p)}{\mathbf{I}_2(p)} = \frac{\mathbf{S}_{d,1}(p)}{\mathbf{S}_{d,2}(p)},
+  \qquad \text{if } \mathbf{A}_1(p) = \mathbf{A}_2(p)
+  \label{eq:explain_ratio}
+\end{equation}
+The material term cancels in the ideal diffuse image ratio, making the ratio a
+useful lighting cue wherever registration is valid and non-diffuse effects are
+small. Saturation, shadows, and specularities violate that idealisation; the
+validity mask limits rather than eliminates those failures.
+We enforce the constraint on the \emph{luminance} of both ratios, in the log
+domain for numerical robustness:
+\begin{equation}
+  \mathcal{L}_{\text{expl}} =
+  \frac{1}{|\Omega_v|} \sum_{p \in \Omega_v}
+  \Bigl|
+    \log\frac{L(\mathbf{I}_1(p)) + \varepsilon}{L(\mathbf{I}_2(p)) + \varepsilon}
+  - \log\frac{L(\mathbf{S}_{d,1}(p)) + \varepsilon}{L(\mathbf{S}_{d,2}(p)) + \varepsilon}
+  \Bigr|
+  \label{eq:lexpl}
+\end{equation}
+where $L(\cdot)$ is the Rec.~601 luminance, $\varepsilon = 10^{-3}$, and
+$\Omega_v$ is the same validity mask as in \eqnref{eq:linv}.
+Using luminance makes this term supervise the achromatic \emph{intensity} change
+between the frames. Colour separation is produced by the interaction of the
+three-channel decomposition, albedo/reconstruction supervision, and
+$\mathcal{L}_{\text{inv}}$; the invariance term alone does not identify where the
+rejected colour must go.
+This loss is zero only when the shading ratio matches the image ratio at every
+valid pixel, which means the shading is absorbing the lighting difference rather
+than the albedo.
+
+\subsection{Why Raw (Un-White-Balanced) Pairs Are Necessary}
+\label{sec:raw_pairs}
+
+A subtle but important point about applying CARI is the role of white balance.
+Standard image pre-processing in most datasets applies automatic white balance,
+which estimates the illuminant and rescales the colour channels so that neutral
+surfaces appear neutral. A common heuristic is the \emph{grey-world} assumption:
+the average scene reflectance is treated as grey. It fails when the scene itself
+is not colour-balanced. For example, in a room dominated by a red painted wall,
+the average red signal can come from the material rather than the lamp; forcing
+that average to grey removes genuine wall colour. White balance is therefore an
+estimate, not ground truth.
+After white balance, the two images $\mathbf{I}_1$ and $\mathbf{I}_2$ of the same
+scene under different illuminants will look very similar in terms of global colour,
+because the illuminant colour has been removed.
+
+This is precisely the wrong input for CARI.
+The luminance explanation loss in \eqnref{eq:lexpl} needs the intensity change,
+whereas the colour variation is needed by the RGB invariance and reconstruction
+constraints. If both images are white-balanced to look neutral, much of that RGB
+variation is removed before training, so CARI can no longer teach the model which
+colour belongs to the illuminant rather than the surface.
+
+We confirm this by measuring the chromaticity spread of the MID dataset with and
+without white balance.
+The ground-truth illuminant probes show 15--25\% variation in chromaticity across
+the different illuminant conditions; this variation is almost entirely removed by
+white balance.
+We therefore set the \texttt{mid\_raw\_color\_pair} flag to \texttt{true} in our
+training configuration, which disables white balance for MID pairs.
+
+\input{./chapters/fig_cari}

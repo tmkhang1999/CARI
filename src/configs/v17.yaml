@@ -1,73 +1,200 @@
 model:
   version: 17
-  backbone: convnextv2_base
-  z_channels: 1024
-  freeze_stages: [1, 2]
-  backbone_lr_multiplier: 1
-  pretrained: true
-  num_seg_classes: 41
-  
+
+  # ── Frozen DINOv2 backbone (the domain-gap + shadow fix) ──────────────────
+  # DINOv2-L/14 self-supervised on LVD-142M. Patch tokens are illumination-
+  # invariant: a shadowed and a lit patch of the same material map to similar
+  # tokens, so the DPT decoder emits the SAME albedo across a shadow boundary.
+  # Completely frozen — no gradients, excluded from the optimizer automatically.
+  dino_variant: large        # small (384d) | base (768d) | large (1024d)
+  dino_pretrained: true
+
+  # ── DPT decoder (modestly widened — uses 24GB headroom; ~2× the base) ──────
+  # DINOv2-L emits 1024-d features; wider reassemble/fusion preserves more of
+  # them when translating to sharp albedo/shading. Trainable part still small.
+  dpt_feat_ch: 512           # reassemble projection width (was 256)
+  dpt_fusion_ch: 256         # RefineNet fusion-path width (was 128)
+  dpt_out_ch: 256            # shared trunk width fed to both heads (was 128)
+  detail_ch: 64              # trainable conv detail stem (high-freq edges) (was 48)
+  head_mid: 128              # albedo/shading head hidden width (was 64)
+  pi_floor: 5.0e-3           # π clamp floor → S_d max ≈ 199 (HDR headroom)
+
+  # ── Physics-typed input skips (DISABLED — kept only as an ablation lever) ──
+  # Earlier hypothesis: re-inject chroma c(I)=I/(R+G+B)→albedo, luminance L(I)→shading
+  # to fight DINOv2's color-invariance desaturation. DROPPED as a default because:
+  #   (1) the asymmetry was wrong — the shading head is 3-ch (COLORED) yet got only a
+  #       1-ch luminance skip, while albedo got the colored chroma skip → color hint on
+  #       the wrong head;  (2) c(I) only cancels WHITE shading, so colored light/clipping
+  #       leaks the illuminant straight into albedo (the pink smear in the chroma viz);
+  #   (3) the model ALREADY models colored illumination — S_d is 3-ch and the recon
+  #       target A·S_d carries illuminant color, so a hand-crafted color skip adds no
+  #       capability, only a white-light failure mode.
+  # Real-image desaturation is a TRAINING-SIGNAL gap (DINOv2 discards absolute color and
+  # synthetic recon can't correct it on real photos), addressed by a real-image signal
+  # (planned Phase-3 MLLM-judge), not a 2D input prior. Toggle true only for the ablation.
+  albedo_chroma_skip: false
+  shading_lum_skip: false
+  # albedo_rgb_skip: pass gamma-encoded raw RGB directly into the albedo head (A2 fix).
+  # Gives the head full-resolution color at full capacity — fixes desaturation on
+  # high-chroma objects. REQUIRES L_inv to avoid re-leaking illuminant color back into
+  # albedo. ENABLED for the full-CARI (row-4) relaunch from 19k. NOTE: this widens
+  # albedo_head.refine input (mid → mid+32), so that one conv re-inits fresh on resume
+  # (filtered loader drops the mismatched key) — expect a brief loss bump at restart.
+  # Row-2 artifacts (30k/36k ckpts) were trained with this false.
+  albedo_rgb_skip: true
+
+  # Albedo is a plain-sigmoid head (no rgI split): the albedo loss scale-matches
+  # GT to the prediction with a per-image SCALAR, so chroma is already constrained
+  # — there is no per-channel scale freedom to desaturate into. No normal prior:
+  # DINOv2 encodes surface orientation, and inference has no normals (train/test
+  # mismatch). See src/models/v17.py docstring.
+
+  backbone_lr_multiplier: 1.0   # no separate backbone group (DINOv2 frozen)
+
 train:
-  batch_size: 8
-  input_size: 384
+  batch_size: 4              # measured ~21.8GB peak at bs8/512 with typed skips (only ~2GB
+                             # margin → risky); bs6 ≈ 16.5GB, comfortable. Raise to 8 if a
+                             # whole 24GB card is free and validation doesn't spike.
+  input_size: 512            # DINOv2 sees the /14-floored size (504 → 36×36 tokens);
+                             # sharper albedo/shadows + smaller train/test res gap (infer ≤1280)
   num_workers: 4
-  grad_accum_steps: 4
+  lr: 2.0e-4                 # decoder-only training tolerates a higher LR than backbone-FT
+  grad_accum_steps: 8        # 6×5=30 effective batch (≈ old 8×4)
   grad_clip_max_norm: 1.0
   use_cosine_lr: true
-  
-  # Two-phase curriculum
-  phase1_iterations: 20000
-  phase2_iterations: 15000
+
+  # ── CARI curriculum (V19) — RESUME FROM THE 19k SYNTHETIC CHECKPOINT ──────────
+  # The 19k ckpt already has absolute albedo color/scale (the "supervised warmup" the
+  # cross-render losses require so L_inv does not collapse to gray). So we do NOT retrain
+  # from scratch — resume and turn CARI on. Phase boundaries are set so that:
+  #  Phase 1 [0     .. 15000) — Hypersim only (DONE in the 19k ckpt).
+  #  Phase 2 [15000 .. 25000) — +InteriorVerse, synthetic only.
+  #  Phase 3 [25000 .. 40000) — CARI: add MID RAW PAIRS (cross-render L_inv/L_explain),
+  #           KEEP synthetic (Hypersim+IV) running to anchor absolute color / prevent
+  #           prior drift (expert consensus). Shading sign-prior is on for all phases.
+  # Resume-safe: train_v17 selects the correct phase from the checkpoint step.
+  phase1_iterations: 15000
+  phase2_iterations: 19000
   extend_iterations: 40000
-  
-  # Data Mix for Phase 1
+
   sampling_weights_phase1:
     hypersim: 1.0
     midintrinsic: 0.0
     interiorverse: 0.0
 
-  # Data Mix for Phase 2
   sampling_weights_phase2:
     hypersim: 0.6
-    midintrinsic: 0.4
-    interiorverse: 0.0
-    
+    midintrinsic: 0.0
+    interiorverse: 0.4
+
+  # Phase 3 = CARI. MID provides the cross-render pairs (the disambiguation signal);
+  # synthetic stays the majority so absolute albedo color is continuously re-anchored.
+  sampling_weights_phase3:
+    hypersim: 0.4
+    midintrinsic: 0.3
+    interiorverse: 0.3
+
   reset_lr: false
   skip_optimizer: false
   log_interval: 500
-  val_interval_iters: 2000
-  checkpoint_interval_iters: 5000
+  val_interval_iters: 2500
+  checkpoint_interval_iters: 1000
   val_example_images: 3
-  val_example_indices: [25, 50, 75]
-  max_val_batches: 100
-  compute_val_losses: false
+  val_example_indices: [0, 20, 40]
+  max_val_batches: 10
+  compute_val_losses: true
   seed: 42
   deterministic: true
 
 data:
-  # Base paths for datasets
-  hypersim_root: '../../../datasets/hypersim'
-  midintrinsic_root: '../../../datasets/MIDIntrinsics'
+  hypersim_root: '../datasets/hypersim'
+  midintrinsic_root: '../datasets/MIDIntrinsics'
+  interiorverse_root: '../datasets/IndoorInverseRendering/interiorverse/interiorverse/interverse'
   hypersim_strict_split: false
   subset_seed: 42
   hypersim_train_max_images: 0
+  # ── CARI: MID cross-render pairs (V19) ───────────────────────────────────────
+  # use_mid_paired=true → MID emits rgb2 (a SECOND illumination of the same scene) +
+  # m_invariant + pair_valid, consumed by the cross-render losses. mid_pair_mode:
+  #   'raw'   — two RAW measured frames dir_a/dir_b (the real CARI signal; verified
+  #             I_a/I_b decorrelates from albedo texture, corr 0.51→0.14).
+  #   'synth' — second synthesized illumination (WB+Lab) — weaker, for the ablation.
+  use_mid_paired: true
+  mid_pair_mode: raw
+  # ── THE WHITE-BALANCE FIX (2026-06-15, documents/evals/eval_arap_indoor_analysis.md) ──
+  # raw_color_pair=true → the cross-render PAIR uses RAW (un-white-balanced) frames, so
+  # L_inv must be invariant to MID's REAL colored-illuminant variation (probe chromaticity
+  # MEASURED to vary ~15-25% across dirs — MID flashes are NOT white). The supervised
+  # primary frame stays WB'd (matches the WB'd pseudo-GT albedo.exr). This is the PRIMARY
+  # color signal now — it replaces the synthetic chromatic_aug, which measurably HURT
+  # (indoor ARAP Cast_RMS 0.035→0.078 at 40k: the synthetic U[0.6,1.4] tint distribution
+  # mismatches real illuminants). Ablation: raw_color_pair vs chromatic_aug.
+  mid_raw_color_pair: true
+  # Chromatic pair augmentation (§2.3) — DISABLED now that raw_color_pair carries the real
+  # color signal. Ignored when raw_color_pair=true (the pair extra frame is raw, not tinted).
+  # Set true + raw_color_pair false to reproduce the old (worse) synthetic-cast recipe.
+  mid_chromatic_aug: false
 
 loss:
-  # Reconstruction (Always Active)
-  lambda_recon: 1.0
-  
-  # Albedo (Always Active)
+  # ── Albedo (primary; GT on BOTH datasets) ─────────────────────────────────
+  # MSG + DSSIM match predicted gradients/structure TO GT (the CRefNet recipe) — the safe
+  # edge-ownership fix (puts each edge where GT says, no false "edges don't overlap"
+  # assumption). DSSIM enabled (was 0) to sharpen albedo structure / reduce the regression
+  # haze on chromatic scenes. lambda_a stays the dominant ABSOLUTE-color anchor for CARI.
   lambda_a: 1.0
   lambda_dssim: 0.2
-  
-  # Shading (Always Active)
+  lambda_msg_albedo: 0.5
+  # Chroma-direction L1 on albedo: normalised albedo vector vs GT — penalises hue/saturation
+  # error independently of brightness. Makes desaturation expensive (the MSE-cheap escape).
+  # ENABLED for the full-CARI relaunch (row-4) alongside albedo_rgb_skip.
+  lambda_a_chroma: 0.2
+
+  # ── Shading SSI (π-domain, Hypersim-gated via M_diffuse) ──────────────────
   lambda_s: 1.0
   ssi_warmup_iters: 3000
-  
-  # Residual (Hypersim Only)
-  lambda_r: 1.0
+  lambda_msg_shading: 0.5
 
-  # MSG Weight
-  lambda_msg: 1.0
+  # ── Diffuse reconstruction A·S_d ≈ A_gt·S_d_gt (two-sided coupling) ────────
+  # 'diffuse' mode: residual is analytic R=(I−A·S_d)₊, so full-I recon would be
+  # one-sided; supervise the diffuse product instead. On InteriorVerse S_d=I/A ⇒
+  # target = I (genuine full reconstruction).
+  recon_mode: diffuse
+  lambda_recon: 1.0
+  lambda_msg_recon: 0.25
 
+  # ── DINOv2 material consistency (GT-free; ~free since tokens are computed) ─
+  # Flattens albedo chroma within a material using DINOv2's invariant similarity.
+  lambda_mat_consist: 0.05
+  mat_sim_threshold: 0.0
 
+  # ── CARI cross-render supervision (V19 — the contribution) ────────────────
+  # Active in Phase 3 (MID raw pairs present). The second forward on rgb2 runs in the
+  # train loop; masked by loss_mask · m_invariant · pair_valid. See V19_CARI_design.md §4.
+  #   L_inv     — albedo invariant across lightings (kills the free chroma split →
+  #               fixes desaturation + shadow-in-albedo). Start moderate; we resume from a
+  #               color-anchored ckpt so gray-collapse risk is lower, but keep synthetic
+  #               albedo MSE dominant (lambda_a=1.0) as the absolute-color anchor.
+  lambda_alb_invariance: 0.5
+  #   L_explain — inter-frame image ratio must be explained by shading ratio (forces light
+  #               change into shading → fixes texture-in-shading). Log-domain, robust.
+  lambda_explain: 0.25
+  #   shade_sign — relu(A·S_d − I): "anything brightening is albedo." Data-free, all phases.
+  lambda_shade_sign: 0.05
+
+  # ── Disabled (machinery removed: analytic R, no derive_albedo, no CCR) ────
+  # grad_decorr stays 0 — REJECTED (assumes albedo/shading edges don't overlap; false for
+  # IID, erases genuinely-shared edges). Edge ownership is handled by MSG-to-GT + CARI.
+  # Residual closure (row-4 fix 3). NOTE: lambda_r multiplies the WHOLE residual block
+  # (L1-to-R_star + msg + sparsity), so it must be >0 for any of them to fire — at 0.0
+  # the m_residual/sparsity changes below are dead code. On MID rows R_star = I − A*·(I/A*)
+  # = 0 BY CONSTRUCTION (compute_targets routes S_d_star=I/A* when M_diffuse=0), so the
+  # L1-to-GT there IS the undershoot penalty |R−0| — closes the "dump red into R" hatch.
+  # On Hypersim R_star = true specular/emissive (redundant with diffuse recon, harmless).
+  lambda_r: 0.5
+  # Residual sparsity: push R→0 inside the valid mask so A·S must explain the image.
+  # MID rows now have m_residual=1.0 (R≈0 is physically true away from specular flash).
+  lambda_res_sparse: 0.02
+  lambda_msg_residual: 0.0
+  lambda_albedo_init: 0.0
+  lambda_edge: 0.0
+  lambda_grad_decorr: 0.0

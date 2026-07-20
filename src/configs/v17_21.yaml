@@ -1,0 +1,46 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.21 — UNIFIED TABLE-B · ROW "flat": chroma-gated LF albedo-flatness lever ONLY.
+#
+# UNIFIED TABLE-B (v2, one recipe, 2026-07-02): every row resumes base@50k and trains 10k
+# steps with the SAME recipe — fresh Adam @ CONSTANT 2e-5 (true/true; see v17_20 note) and
+# the RESTORED base phase-3 mix (hyp 0.4 / mid 0.3 / IV 0.3). Rows differ by LEVERS ONLY:
+#   v17_20 ctrl (levers off) · v17_21 flat (this) · v17_22 sh_inv · v17_23 flat+sh_inv
+#   · v17_24 sh_inv+explain (kill-gate demonstration row)
+# Supersedes the first sweep (v17_2/3/30/31/32), which shared a flawed recipe (IV dropped,
+# never-annealed lr) — internally consistent but not comparable to base@50k. In THAT sweep
+# this lever was the clear gate-passer (ARAP colored C_arap −21%, si-RMSE improved, WHDR ok).
+#
+# RUN:  bash scripts/train.sh --version 17.21 --cuda 0 \
+#           --resume checkpoints/v17_old/checkpoint_iter_50000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  # true/true REQUIRED: this arch matches base@50k exactly, so false/false would load the
+  # ckpt's fully-annealed lr 1e-7 and run frozen (see v17_23.yaml post-mortem).
+  reset_lr: true
+  skip_optimizer: true
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=50k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one
+  # (replaces the old phase1_iterations:999999 sentinel).
+  sampling_weights_phase3:
+    hypersim: 0.4
+    midintrinsic: 0.3
+    interiorverse: 0.3
+
+loss:
+  # ── lever 1 ON: chroma-gated low-frequency albedo flatness (values from the first sweep) ──
+  lambda_alb_flat_lf: 4.0
+  alb_flat_lf_down: 8           # avg-pool factor: 512→64 low-res grid (light-pools are large)
+  alb_flat_lf_chroma_gate: 2.0  # PIE-Net gate strength: relu(|∇lum| − 2·|∇chroma|)
+
+  # ── lever 2 OFF ──
+  lambda_shadow_inv: 0.0
+  lambda_shadow_explain: 0.0

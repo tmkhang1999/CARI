@@ -1,8 +1,8 @@
 import random
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-import cv2
 
 def random_color_shift(image, mean=0.5, std=0.05):
     """
@@ -46,59 +46,45 @@ def random_scaling_red_blue_channels(albedo, scale_range=(0.8, 1.2)):
 
     return (albedo * gain).clamp(0, 1)
 
-def random_segmentation_degradation(seg_t, p_degrade=0.7):
-    """
-    Randomly erodes or dilates segmentation masks to simulate imperfect boundaries.
-    Also adds translation shifts to simulate misaligned masks.
-    Args:
-        seg_t: Tensor (1, H, W) or (H, W)
-    """
-    if np.random.rand() > p_degrade:
-        return seg_t
-        
-    device = seg_t.device
-    seg_np = seg_t.detach().cpu().numpy().squeeze()
-    
-    classes = np.unique(seg_np)
-    if len(classes) <= 1:
-        return seg_t
-        
-    # Pick a few classes to distort
-    counts = [np.sum(seg_np == c) for c in classes]
-    dominant_class = classes[np.argmax(counts)]
-    target_candidates = [c for c in classes if c != dominant_class]
-    
-    if not target_candidates:
-        return seg_t
-        
-    # STRONGER: Distort more classes (up to 10)
-    num_to_distort = min(np.random.randint(4, 10), len(target_candidates))
-    targets = np.random.choice(target_candidates, num_to_distort, replace=False)
-    
-    seg_aug = seg_np.copy()
-    for c in targets:
-        bin_mask = (seg_np == c).astype(np.uint8)
-        
-        # STRONGER: Even larger kernel sizes (up to 20)
-        kernel_size = np.random.randint(10, 20)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        
-        if np.random.rand() > 0.5:
-            # Erosion: class shrinks
-            eroded = cv2.erode(bin_mask, kernel)
-            seg_aug[(bin_mask == 1) & (eroded == 0)] = dominant_class
-        else:
-            # Dilation: class expands
-            dilated = cv2.dilate(bin_mask, kernel)
-            seg_aug[(bin_mask == 0) & (dilated == 1)] = c
-            
-    return torch.from_numpy(seg_aug).to(device=device, dtype=seg_t.dtype).reshape(seg_t.shape)
+def random_colored_illumination(S_diff, max_tint=0.25, p_spatial=0.5):
+    """Simulate colored shadows / multi-illuminant lighting on the shading layer.
 
-def apply_physical_augmentations(t, seg_t, 
+    CCR (cross color ratio) cancels a GLOBAL colored cast (its zero-sum kernel
+    differentiates a constant away) but provably CANNOT cancel SPATIALLY-VARYING
+    colored illumination — at a single boundary a material edge and an
+    illumination-color edge are indistinguishable. So colored shadows leak into
+    albedo unless the decoder is shown such cases with flat-albedo / colored-shading
+    supervision. Two modes:
+      - 'ambient' (additive): a constant ambient color vector. Where shading is
+        bright the color barely changes; where it is dark (shadow) it takes on the
+        ambient tint — a first-order colored-shadow model.
+      - 'spatial' (multiplicative): a smooth low-frequency per-channel gain field so
+        different regions carry different illumination color (e.g. warm interior vs
+        cool window light) — the case CCR cannot disentangle.
+    Per-pixel luminance is preserved so albedo scale-matching stays stable.
+    """
+    C, H, W = S_diff.shape
+    device, dtype = S_diff.device, S_diff.dtype
+    if random.random() < p_spatial:
+        # smooth 3x3 colored gain field, upsampled; chroma-only (luminance preserved)
+        low = 1.0 + (torch.rand(1, 3, 3, 3, device=device, dtype=dtype) - 0.5) * 2.0 * max_tint
+        field = F.interpolate(low, size=(H, W), mode='bilinear', align_corners=True)[0]
+        field = field / field.mean(dim=0, keepdim=True).clamp_min(1e-6)
+        return (S_diff * field).clamp_min(1e-4)
+    tint = (torch.rand(3, 1, 1, device=device, dtype=dtype) - 0.25) * max_tint
+    return (S_diff + tint).clamp_min(1e-4)
+
+
+def apply_physical_augmentations(t, seg_t,
                                  p_hflip=0.5, p_vflip=0.5,
-                                 force_type=None):
+                                 force_type=None, apply_photometric=True):
     """
     Applies a structured suite of physical augmentations to the intrinsic image tensors.
+
+    apply_photometric: when False, only the spatial flips run (they apply uniformly
+    to every channel of t, including an appended rgb2). The photometric shifts
+    (white balance / albedo / shadow) are skipped because they modify t[0:3] using
+    the albedo/shading channels and would desynchronise a same-albedo image pair.
     """
     # ── 1. Spatial Augmentations (Can happen concurrently) ──
     if force_type == 'spatial' or (force_type is None and np.random.rand() < p_hflip):
@@ -107,6 +93,9 @@ def apply_physical_augmentations(t, seg_t,
     if force_type == 'spatial' or (force_type is None and np.random.rand() < p_vflip):
         t     = torch.flip(t,     dims=[1])
         seg_t = torch.flip(seg_t, dims=[1])
+
+    if not apply_photometric:
+        return t, seg_t
 
     # ── MUTUALLY EXCLUSIVE PHYSICAL AUGMENTATIONS ──
     # Default training: only apply ONE major photometric shift per image.
@@ -179,19 +168,18 @@ def apply_physical_augmentations(t, seg_t,
         # Raise upper cap from 5.0 to preserve HDR illumination targets near lights.
         S_new = S_new.clamp(min=1e-4).pow(gamma).clamp(max=60000.0)
 
-        # 4b. Ambient Tint (Trains CCR to ignore colored shadows)
+        # 4b. Colored illumination (teaches the decoder to keep albedo flat under
+        # colored shadows / multi-illuminant scenes — CCR alone cannot, since it
+        # only cancels a global cast, not spatially-varying illumination color).
         if force_type is None:
-            if np.random.rand() < 0.5:
-                ambient_tint = torch.tensor([
-                                   np.random.uniform(-0.02, 0.05),
-                                   np.random.uniform(-0.02, 0.05),
-                                   np.random.uniform(-0.02, 0.05)
-                               ], dtype=torch.float32, device=S_new.device).view(3, 1, 1)
-                S_new = (S_new + ambient_tint).clamp_min(1e-4)
+            if np.random.rand() < 0.8:
+                S_new = random_colored_illumination(S_new, max_tint=0.25, p_spatial=0.5)
         else:
-            # For forced visualization, add a noticeable but realistic tint
-            ambient_tint = torch.tensor([0.05, 0.01, 0.05], dtype=torch.float32, device=S_new.device).view(3, 1, 1)
-            S_new = (S_new + ambient_tint).clamp_min(1e-4)
+            # Forced visualization: spatial field for 'strong', ambient tint for 'weak'
+            S_new = random_colored_illumination(
+                S_new, max_tint=0.25,
+                p_spatial=1.0 if force_type == 'shadow_strong' else 0.0,
+            )
 
         # Recombine physically
         I_new = (A_orig * S_new) + R_specular
@@ -204,10 +192,6 @@ def apply_physical_augmentations(t, seg_t,
         else:
             t[0:3] = I_new
             t[6:9] = S_new
-        
-    # ── 5. Segmentation Augmentation ──
-    if force_type == 'seg_degrade':
-        seg_t = random_segmentation_degradation(seg_t, p_degrade=1.0)
         
     return t, seg_t
 

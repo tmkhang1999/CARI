@@ -80,20 +80,37 @@ def resize_to_base(x, base_size):
 #     # Scale such that the 99th percentile hits 0.75 (safe headroom)
 #     return (raw * (0.75 / q99.clamp(min=eps))).clamp(0.0, 1.0)
 
-def derive_albedo(rgb, shading):
-    # In FP16, 1e-6 can sometimes underflow to 0.0.
+def derive_albedo(rgb, shading, anneal=0.0, q_target=0.8):
+    """Derive albedo a = I/S, scale-normalised, clamped to [0,1].
+
+    ANNEALED Q99 (residual-tautology fix, 2026-06-23). The scale applied is target/q99 where
+    target = (1-anneal)*q_target + anneal*q99, i.e. the scale anneals from q_target/q99 (warmup)
+    toward 1.0 (the identity derive a=I/S) as anneal→1:
+      • anneal=0 (warmup): scale = 0.8/q99 ≪ 1 keeps the clamp OFF its rail early, so I/S stays
+        small and gradient flows to S (a pure clamp(I/S) would saturate on random early S → dead).
+      • anneal=1 (steady/eval): scale = 1 ⇒ a·S = I on diffuse ⇒ analytic R=(I−a·S)₊ → 0 except
+        where I/S>1 (true speculars) → R becomes SPARSE, not a ~20% haze; and the 0.8 target no
+        longer fights albedo-L1 (which wants a to match GT albedo, whose q99 varies per scene).
+    Default anneal=0.0 preserves the old 0.8/q99 behaviour for legacy callers (v16). V20 controls it
+    explicitly: v20.forward defaults derive_anneal=1.0 (eval = clean identity derive), and the train
+    loop passes a ramp 0→1 (train_v17.train_one_step). Output stays clamped [0,1] regardless.
+
+    FP32 forced: under autocast the (I/S) divide overflows in dim regions (S<<1 → I/S>65504 → inf),
+    then nan_to_num(posinf->0) would SILENTLY ZERO albedo. eps=1e-5 (1e-6 underflows in FP16).
+    """
+    orig_dtype = rgb.dtype
+    rgb = rgb.float()
+    shading = shading.float()
     eps = 1e-5
 
     albedo = rgb / shading.clamp(min=eps)
     albedo = torch.nan_to_num(albedo, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Q99 normalization: scale so 99th percentile maps to 0.8.
-    # Hard clamp to [0,1] saturates albedo in dim regions (S << 1) where
-    # true albedo A = I/S can exceed 1 in linear space. Q99 preserves
-    # relative color ratios across the image.
     B = albedo.shape[0]
     q99 = torch.quantile(
         albedo.float().reshape(B, -1), 0.99, dim=1
     ).view(B, 1, 1, 1).clamp(min=eps)
-    albedo = (albedo * (0.8 / q99)).clamp(0.0, 1.0)
-    return albedo
+    a = float(max(0.0, min(1.0, anneal)))
+    target = (1.0 - a) * q_target + a * q99          # → q99 (scale→1, identity) as anneal→1
+    albedo = (albedo * (target / q99)).clamp(0.0, 1.0)
+    return albedo.to(orig_dtype)

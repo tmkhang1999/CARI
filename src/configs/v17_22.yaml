@@ -1,0 +1,44 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.22 — UNIFIED TABLE-B · ROW "sh_inv": shadow-invariance lever ONLY (explain OFF).
+#
+# UNIFIED TABLE-B (v2, one recipe, 2026-07-02): every row resumes base@50k and trains 10k
+# steps with the SAME recipe — fresh Adam @ CONSTANT 2e-5 (true/true; see v17_20 note) and
+# the RESTORED base phase-3 mix (hyp 0.4 / mid 0.3 / IV 0.3). Rows differ by LEVERS ONLY:
+#   v17_20 ctrl · v17_21 flat · v17_22 sh_inv (this) · v17_23 flat+sh_inv · v17_24 +explain
+# In the first sweep (v17_31) this lever passed the gate vs its control (ARAP colored −11%,
+# best Cast_RMS, WHDR ok); its explain-paired sibling (v17_3) failed 4/4 benchmarks.
+# NOTE: the shadow self-sup is Hypersim-gated → fires on ~0.4 of batches under this mix.
+#
+# RUN:  bash scripts/train.sh --version 17.22 --cuda 0 \
+#           --resume checkpoints/v17_old/checkpoint_iter_50000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  # true/true REQUIRED: this arch matches base@50k exactly, so false/false would load the
+  # ckpt's fully-annealed lr 1e-7 and run frozen (see v17_23.yaml post-mortem).
+  reset_lr: true
+  skip_optimizer: true
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=50k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one
+  # (replaces the old phase1_iterations:999999 sentinel).
+  sampling_weights_phase3:
+    hypersim: 0.4
+    midintrinsic: 0.3
+    interiorverse: 0.3
+
+loss:
+  # ── lever 1 OFF ──
+  lambda_alb_flat_lf: 0.0
+
+  # ── lever 2 ON: shadow-invariance only (explain stays OFF — failed the first-sweep gate) ──
+  lambda_shadow_inv: 1.0
+  lambda_shadow_explain: 0.0
+  shadow_start_iter: 0          # resume @50k → past warmup, start immediately

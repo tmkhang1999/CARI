@@ -1,0 +1,94 @@
+\chapter{Additional Quantitative Results}
+\label{ch:appendix}
+
+This appendix provides additional quantitative details that supplement the main
+experiment results in \chapref{ch:experiments}.
+
+
+\section{ARAP Per-Scene Constancy}
+
+\tabref{tab:arap_perscene} reports $C_{\text{arap}}$ and $\text{Cast}_{\text{RMS}}$
+for every scene in the ARAP dataset separately.
+We include results for our full model and Marigold-App.
+Scenes flagged as degenerate (those containing conference-room glass, extreme
+specular highlights, or other physical edge cases that produce near-infinite colour
+spread) are excluded from the aggregate numbers reported in \chapref{ch:experiments};
+they are listed at the end of the table with a $\dagger$ marker.
+
+% A long-table environment so the 40-row scene list flows across pages
+% automatically rather than being forced to fit one page.
+\begingroup
+\small
+\begin{longtable}{@{}lcccc@{}}
+  \caption{%
+    Per-scene ARAP constancy results for our full model (``Ours'') and
+    Marigold-App.
+    $C_{\text{arap}}$ and $\text{Cast}_{\text{RMS}}$ are lower-is-better
+    constancy metrics.
+    Scenes marked with $\dagger$ are degenerate scenes excluded from the
+    aggregate in \chapref{ch:experiments}.
+  }
+  \label{tab:arap_perscene} \\
+  \toprule
+  & \multicolumn{2}{c}{Ours} & \multicolumn{2}{c}{Marigold-App} \\
+  \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+  Scene & $C_{\text{arap}}$ & $\text{Cast}_{\text{RMS}}$ & $C_{\text{arap}}$ & $\text{Cast}_{\text{RMS}}$ \\
+  \midrule
+  \endfirsthead
+  \multicolumn{5}{c}{{\small\itshape (\tabref{tab:arap_perscene} continued)}} \\
+  \toprule
+  & \multicolumn{2}{c}{Ours} & \multicolumn{2}{c}{Marigold-App} \\
+  \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+  Scene & $C_{\text{arap}}$ & $\text{Cast}_{\text{RMS}}$ & $C_{\text{arap}}$ & $\text{Cast}_{\text{RMS}}$ \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  alley        & - & - & - & - \\
+  amsterdam    & - & - & - & - \\
+  bedroom      & - & - & - & - \\
+  bedroom2     & - & - & - & - \\
+  blenderscene & - & - & - & - \\
+  bread        & - & - & - & - \\
+  breakfast    & - & - & - & - \\
+  butterfly    & - & - & - & - \\
+  camera       & - & - & - & - \\
+  chocofur     & - & - & - & - \\
+  classroom    & - & - & - & - \\
+  classroom2   & - & - & - & - \\
+  corner       & - & - & - & - \\
+  corridor     & - & - & - & - \\
+  cream        & - & - & - & - \\
+  hunter       & - & - & - & - \\
+  iron         & - & - & - & - \\
+  katie        & - & - & - & - \\
+  kitchen      & - & - & - & - \\
+  livingroom   & - & - & - & - \\
+  office       & - & - & - & - \\
+  oldclassroom & - & - & - & - \\
+  postit       & - & - & - & - \\
+  redhead      & - & - & - & - \\
+  restroom     & - & - & - & - \\
+  revolution   & - & - & - & - \\
+  skyscraper   & - & - & - & - \\
+  street       & - & - & - & - \\
+  vaulted      & - & - & - & - \\
+  villa        & - & - & - & - \\
+  violin       & - & - & - & - \\
+  whiteroom    & - & - & - & - \\
+  \midrule
+  caterpillar$^\dagger$  & - & - & - & - \\
+  conference$^\dagger$   & - & - & - & - \\
+  strawberries$^\dagger$ & - & - & - & - \\
+  tiger$^\dagger$        & - & - & - & - \\
+  workshop$^\dagger$     & - & - & - & - \\
+\end{longtable}
+\endgroup
+
+
+\section{MID Per-Scene Constancy}
+
+The 30-scene MID test split used for \tabref{tab:mid} covers a variety of room
+types, surface materials, and illuminant colour combinations.
+Per-scene $C_{\text{mat}}$ results can be derived from the per-scene breakdown
+of the evaluation output accompanying the code release.

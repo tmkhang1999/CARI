@@ -175,13 +175,13 @@ def compute_targets(predictions, batch):
     D_g_star = torch.nan_to_num(D_g_star, nan=1.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
     
     # ── Auxiliary Edge GT for CCR Encoder ──
-    # Using albedo_scaled ensures soft edges are extracted from a somewhat normalized [0, 1] 
-    # intensity space, making the arbitrary `edge_mag * 10.0` clamp stable.
-    alb_for_edge = batch.get('albedo_scaled', batch['albedo_raw']).to(device)
-    alb_gray = 0.299 * alb_for_edge[:, 0:1] + 0.587 * alb_for_edge[:, 1:2] + 0.114 * alb_for_edge[:, 2:3]
+    # Using the dynamically scaled A_star ensures edges are extracted from the aligned target space.
+    alb_gray = A_star.mean(dim=1, keepdim=True)
     edge_mag = kornia.filters.sobel(alb_gray)
-    # Soft edge target: 0.1 Sobel magnitude -> 1.0 (strong edge), 0.05 -> 0.5 (weak edge).
-    ccr_edge_gt = torch.clamp(edge_mag * 10.0, 0.0, 1.0)
+    # Dynamic 99th-percentile normalization per-image creates a stable, anti-aliased soft target
+    # that suppresses texture noise while perfectly capturing material boundaries.
+    q99 = torch.quantile(edge_mag.reshape(edge_mag.shape[0], -1), 0.99, dim=1).view(-1, 1, 1, 1).clamp(min=1e-6)
+    ccr_edge_gt = (edge_mag / q99).clamp(0.0, 1.0)
         
     return {
         'D_g_star': D_g_star,

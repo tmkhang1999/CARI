@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train -  supported versions: V9 / V10 / V11 / V12 / V13 / V14 / V15 / V16
+# Train -  supported versions: V9 / V10 / V11 / V12 / V13 / V14 / V15 / V16 / V17 / V18 / V19 / V20
 #
 # Usage:
-#   bash scripts/train.sh                                  # V10 (default), CUDA auto
+#   bash scripts/train.sh                                  # V20 / MICC (default), CUDA auto
 #   bash scripts/train.sh --version 13.1 --cuda 0          # train V13.1 on GPU 0
-#   bash scripts/train.sh --version 11 --cuda 1           # use GPU 1
+#   bash scripts/train.sh --version 20 --cuda 1           # use GPU 1
 #   bash scripts/train.sh --version 9 --device cpu        # force CPU
 #   bash scripts/train.sh --version 13.1 --resume checkpoints/v13.1/checkpoint_latest.pth
 #   bash scripts/train.sh --version 9 --auto-resume
@@ -16,8 +16,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Default to version 15 if no --version or --config flag is given
-VERSION=15
+# Default to version 20 (MICC) if no --version or --config flag is given.
+# V20 routes to src/train_v20.py, which reuses src/train_v17.py's model build / losses
+# / train step verbatim (the MICC model is IntrinsicDecompositionV20 in src/models/v20.py).
+VERSION=20
 RUN_DEVICE="cuda"          # forwarded to train.py --device
 CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
@@ -77,8 +79,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?)$ ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13, 14, 15, 16 (and their .x variants)"
+if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?|17([._][0-9]+)?|18([._][0-9]+)?|19([._][0-9]+)?|20([._][0-9]+)?)$ ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 (and their .x variants)"
     exit 1
 fi
 
@@ -101,6 +103,18 @@ elif [[ "${VERSION}" == 12* ]]; then
         CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     fi
     TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
+elif [[ "${VERSION}" == 17* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v17.py"
+elif [[ "${VERSION}" == 18* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v18.py"
+elif [[ "${VERSION}" == 19* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v19.py"
+elif [[ "${VERSION}" == 20* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v20.py"
 elif [[ "${VERSION}" == 13* || "${VERSION}" == 14* || "${VERSION}" == 15* || "${VERSION}" == 16* ]]; then
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
@@ -119,6 +133,9 @@ fi
 if [[ -n "$CUDA_IDS" && "$RUN_DEVICE" != "cpu" ]]; then
     export CUDA_VISIBLE_DEVICES="$CUDA_IDS"
 fi
+
+# Reduce CUDA allocator fragmentation (helps V18 full-FT fit on 24GB). Harmless elsewhere.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [[ "$AUTO_RESUME" -eq 1 && -n "$RESUME_MODE" ]]; then
     echo "ERROR: Use either --resume or --auto-resume, not both."

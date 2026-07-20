@@ -1,0 +1,365 @@
+% =============================================================
+%  References for V17 CARI thesis
+% =============================================================
+
+% ---- Classic / foundational ----
+
+@article{land71retinex,
+  title     = {Lightness and {Retinex} Theory},
+  author    = {Land, Edwin H and McCann, John J},
+  journal   = {Journal of the Optical Society of America},
+  volume    = {61},
+  number    = {1},
+  pages     = {1--11},
+  year      = {1971},
+  publisher = {Optica Publishing Group},
+  doi       = {10.1364/JOSA.61.000001}
+}
+
+@inproceedings{grosse09mit,
+  title     = {Ground Truth Dataset and Baseline Evaluations for
+               Intrinsic Images Algorithms},
+  author    = {Grosse, Roger and Johnson, Micah K and Adelson, Edward H
+               and Freeman, William T},
+  booktitle = {Proceedings of the IEEE International Conference on
+               Computer Vision (ICCV)},
+  pages     = {2335--2342},
+  year      = {2009},
+  doi       = {10.1109/ICCV.2009.5459428}
+}
+
+% ---- Optimization-based IID ----
+
+@article{barron15sirfs,
+  title     = {Shape, Illumination, and Reflectance from Shading},
+  author    = {Barron, Jonathan T and Malik, Jitendra},
+  journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume    = {37},
+  number    = {8},
+  pages     = {1670--1687},
+  year      = {2015},
+  publisher = {IEEE},
+  doi       = {10.1109/TPAMI.2014.2377712}
+}
+
+% ---- Learning-based IID ----
+
+@article{bell14iiw,
+  title   = {Intrinsic Images in the Wild},
+  author  = {Bell, Sean and Bala, Kavita and Snavely, Noah},
+  journal = {ACM Transactions on Graphics},
+  volume  = {33},
+  number  = {4},
+  pages   = {159:1--159:12},
+  year    = {2014},
+  doi     = {10.1145/2601097.2601206}
+}
+
+@inproceedings{li18cgintrinsics,
+  title     = {{CGIntrinsics}: Better Intrinsic Image Decomposition
+               through Physically-Based Rendering},
+  author    = {Li, Zhengqi and Snavely, Noah},
+  booktitle = {Proceedings of the European Conference on Computer Vision (ECCV)},
+  pages     = {371--387},
+  year      = {2018}
+}
+
+@inproceedings{li18bigtime,
+  title     = {Learning Intrinsic Image Decomposition from Watching the World},
+  author    = {Li, Zhengqi and Snavely, Noah},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  pages     = {9039--9048},
+  year      = {2018}
+}
+
+% Authors CORRECTED 2026-07-13: the previous entry listed a fabricated author list
+% ("Luo, Jun-Jia and Li, Zhen and Wang, Jue and Fu, Chi-Wing"). Verified against the
+% official project page (https://zju3dv.github.io/niid/) and the ZJU3DV repository.
+@article{luo20niid,
+  title     = {{NIID-Net}: Adapting Surface Normal Knowledge for Intrinsic Image
+               Decomposition in Indoor Scenes},
+  author    = {Luo, Jundan and Huang, Zhaoyang and Li, Yijin and Zhou, Xiaowei
+               and Zhang, Guofeng and Bao, Hujun},
+  journal   = {IEEE Transactions on Visualization and Computer Graphics},
+  volume    = {26},
+  number    = {12},
+  pages     = {3434--3445},
+  year      = {2020},
+  publisher = {IEEE},
+  doi       = {10.1109/TVCG.2020.3023565}
+}
+
+% ---- Diffusion-based IID ----
+
+@article{marigoldiid24,
+  title   = {Marigold: Affordable Adaptation of Diffusion-Based Image
+             Generators for Image Analysis},
+  author  = {Ke, Bingxin and Qu, Kevin and Wang, Tianfu and Metzger, Nando
+             and Huang, Shengyu and Li, Bo and Obukhov, Anton
+             and Schindler, Konrad},
+  journal = {arXiv preprint arXiv:2505.09358},
+  year    = {2025}
+}
+
+% ---- Multi-illuminant / colour constancy ----
+
+% REPLACED 2026-07-13. The previous entry at this key ("Reflectance and Chromaticity
+% Inconsistency for Illumination Estimation in HDR Photographs", Sato/Okabe/Sato) does
+% not exist: arXiv:2111.04506 is in fact the Kinoshita & Kiya paper below, and no paper
+% with the claimed title/authors could be found. The real paper at that identifier is
+% genuinely relevant prior work (reflectance consistency under a colour-illuminant
+% model), so it replaces the fabricated citation rather than simply being deleted.
+% TYPE CORRECTED 2026-07-14: was an inproceedings entry with an arXiv id in `booktitle`.
+@article{kinoshita21consistency,
+  title   = {Self-Supervised Intrinsic Image Decomposition Network Considering
+             Reflectance Consistency},
+  author  = {Kinoshita, Yuma and Kiya, Hitoshi},
+  journal = {arXiv preprint arXiv:2111.04506},
+  year    = {2021}
+}
+
+@article{beigpour13miid,
+  title   = {Multi-Illuminant Estimation with Conditional Random Fields},
+  author  = {Beigpour, Shida and Riess, Christian and van de Weijer, Joost
+             and Angelopoulou, Elli},
+  journal = {IEEE Transactions on Image Processing},
+  volume  = {23},
+  number  = {1},
+  pages   = {83--96},
+  year    = {2014},
+  doi     = {10.1109/TIP.2013.2286327}
+}
+
+% ---- Datasets used for training ----
+
+@inproceedings{roberts21hypersim,
+  title     = {Hypersim: A Photorealistic Synthetic Dataset for Holistic
+               Indoor Scene Understanding},
+  author    = {Roberts, Mike and Ramapuram, Jason and Ranjan, Anurag
+               and Kumar, Atulit and Bautista, Miguel Angel and Paczan, Nathan
+               and Webb, Russ and Susskind, Joshua M},
+  booktitle = {Proceedings of the IEEE International Conference on
+               Computer Vision (ICCV)},
+  pages     = {10912--10922},
+  year      = {2021}
+}
+
+@inproceedings{zhu22interiorverse,
+  title     = {Learning-Based Inverse Rendering of Complex Indoor Scenes with
+               Differentiable Monte Carlo Raytracing},
+  author    = {Zhu, Jingsen and Luan, Fujun and Huo, Yuchi and Lin, Zihao
+               and Zhong, Zhihua and Xi, Dianbing and Zheng, Jiaxiang
+               and Tang, Rui and Bao, Hujun and Wang, Rui},
+  booktitle = {SIGGRAPH Asia 2022 Conference Papers},
+  articleno = {6},
+  numpages  = {8},
+  year      = {2022},
+  publisher = {ACM},
+  doi       = {10.1145/3550469.3555407}
+}
+
+% TYPE CORRECTED 2026-07-14: was an article entry with a conference name in `journal`.
+@inproceedings{fu213dfront,
+  title     = {3D-FRONT: 3D Furnished Rooms with layOuts and semaNTics},
+  author    = {Fu, Huan and Cai, Bowen and Gao, Lin and Zhang, Ling-Xiao
+               and Wang, Jiaming and Li, Cao and Zeng, Qixun and Sun, Chengyue
+               and Jia, Rongfei and Zhao, Binqiang and Zhang, Hao},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on
+               Computer Vision (ICCV)},
+  pages     = {10933--10942},
+  year      = {2021}
+}
+
+@inproceedings{midintrinsics,
+  title     = {A Dataset of Multi-Illumination Images in the Wild},
+  author    = {Murmann, Lukas and Gharbi, Micha{\"e}l and Aittala, Miika
+               and Durand, Fr{\'e}do},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on
+               Computer Vision (ICCV)},
+  pages     = {4080--4089},
+  year      = {2019},
+  note      = {Base multi-illumination capture. Dense pseudo-albedo used in
+               this thesis comes from the later MID Intrinsics extension,
+               not from the original release}
+}
+
+% ---- Evaluation benchmarks ----
+
+@article{arap,
+  title   = {Intrinsic Decompositions for Image Editing},
+  author  = {Bonneel, Nicolas and Kovacs, Balazs and Paris, Sylvain
+             and Bala, Kavita},
+  journal = {Computer Graphics Forum},
+  volume  = {36},
+  number  = {2},
+  pages   = {593--609},
+  year    = {2017},
+  doi     = {10.1111/cgf.13149},
+  note    = {Eurographics State of the Art Report; introduces the
+             ``As Real As Possible'' (ARAP) evaluation dataset}
+}
+
+% VENUE CORRECTED 2026-07-14: this was filed as CVPR 2023. It is not. MAW appeared at
+% the IEEE International Conference on Computational Photography (ICCP) 2023;
+% arXiv:2306.15662. Verified against measuredalbedo.github.io and the arXiv record.
+@inproceedings{maw,
+  title     = {Measured Albedo in the Wild: Filling the Gap in
+               Intrinsics Evaluation},
+  author    = {Wu, Jiaye and Chowdhury, Sanjoy and Shanmugaraja, Hariharmano
+               and Jacobs, David and Sengupta, Soumyadip},
+  booktitle = {Proceedings of the IEEE International Conference on
+               Computational Photography (ICCP)},
+  pages     = {1--12},
+  year      = {2023},
+  note      = {arXiv:2306.15662}
+}
+
+% ---- Backbone and decoder ----
+
+@article{oquab24dinov2,
+  title   = {{DINOv2}: Learning Robust Visual Features without Supervision},
+  author  = {Oquab, Maxime and Darcet, Timoth{\'e}e and Moutakanni, Th{\'e}o
+             and Vo, Huy V and Szafraniec, Marc and Khalidov, Vasil
+             and Fernandez, Pierre and Haziza, Daniel and Massa, Francisco
+             and El-Nouby, Alaaeldin and others},
+  journal = {Transactions on Machine Learning Research},
+  year    = {2024},
+  url     = {https://openreview.net/forum?id=a68SUt6zFt}
+}
+
+@inproceedings{ranftl21dpt,
+  title     = {Vision Transformers for Dense Prediction},
+  author    = {Ranftl, Ren{\'e} and Bochkovskiy, Alexey and Koltun, Vladlen},
+  booktitle = {Proceedings of the IEEE International Conference on
+               Computer Vision (ICCV)},
+  pages     = {12179--12188},
+  year      = {2021}
+}
+
+% ---- Colour science ----
+
+% ---- Colorful-shading line (added 2026-07-02) ----
+
+@article{careaga23ordinal,
+  title     = {Intrinsic Image Decomposition via Ordinal Shading},
+  author    = {Careaga, Chris and Aksoy, Ya{\u{g}}{\i}z},
+  journal   = {ACM Transactions on Graphics},
+  volume    = {43},
+  number    = {1},
+  pages     = {12:1--12:24},
+  year      = {2023},
+  publisher = {ACM},
+  doi       = {10.1145/3630750}
+}
+
+@article{careaga24cdiid,
+  title     = {Colorful Diffuse Intrinsic Image Decomposition in the Wild},
+  author    = {Careaga, Chris and Aksoy, Ya{\u{g}}{\i}z},
+  journal   = {ACM Transactions on Graphics},
+  volume    = {43},
+  number    = {6},
+  pages     = {178:1--178:12},
+  year      = {2024},
+  publisher = {ACM},
+  doi       = {10.1145/3687984}
+}
+
+@inproceedings{das22pienet,
+  title     = {{PIE-Net}: Photometric Invariant Edge Guided Network for
+               Intrinsic Image Decomposition},
+  author    = {Das, Partha and Karaoglu, Sezer and Gevers, Theo},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  pages     = {19790--19799},
+  year      = {2022}
+}
+
+@article{luo23crefnet,
+  title     = {{CRefNet}: Learning Consistent Reflectance Estimation with a
+               Decoder-Sharing Transformer},
+  author    = {Luo, Jundan and Zhao, Nanxuan and Li, Wenbin and Richardt, Christian},
+  journal   = {IEEE Transactions on Visualization and Computer Graphics},
+  volume    = {30},
+  number    = {9},
+  pages     = {6407--6420},
+  year      = {2024},
+  publisher = {IEEE},
+  doi       = {10.1109/TVCG.2023.3337870}
+}
+
+@article{reasonx25,
+  title     = {{ReasonX}: {MLLM}-Guided Intrinsic Image Decomposition},
+  author    = {Dirik, Alara and Wang, Tuanfeng and Ceylan, Duygu and
+               Zafeiriou, Stefanos and Fr{\"u}hst{\"u}ck, Anna},
+  journal   = {arXiv preprint arXiv:2512.04222},
+  year      = {2025}
+}
+
+@article{ranftl20midas,
+  title   = {Towards Robust Monocular Depth Estimation: Mixing Datasets for
+             Zero-Shot Cross-Dataset Transfer},
+  author  = {Ranftl, Ren{\'e} and Lasinger, Katrin and Hafner, David
+             and Schindler, Konrad and Koltun, Vladlen},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume  = {44},
+  number  = {3},
+  pages   = {1623--1637},
+  year    = {2022},
+  publisher = {IEEE},
+  doi     = {10.1109/TPAMI.2020.3019967}
+}
+
+% ---- SOTA methods cited in the benchmark tables (added 2026-07-04) ----
+
+@inproceedings{zhu22irisformer,
+  title     = {{IRISformer}: Dense Vision Transformers for Single-Image Inverse
+               Rendering in Indoor Scenes},
+  author    = {Zhu, Rui and Li, Zhengqin and Matai, Janarbek and Porikli, Fatih
+               and Chandraker, Manmohan},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  pages     = {2822--2831},
+  year      = {2022}
+}
+
+@inproceedings{kocsis24iid,
+  title     = {Intrinsic Image Diffusion for Indoor Single-view Material
+               Estimation},
+  author    = {Kocsis, Peter and Sitzmann, Vincent and Nie{\ss}ner, Matthias},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  pages     = {5198--5208},
+  year      = {2024}
+}
+
+@inproceedings{chen24intrinsicanything,
+  title     = {{IntrinsicAnything}: Learning Diffusion Priors for Inverse
+               Rendering Under Unknown Illumination},
+  author    = {Chen, Xi and Peng, Sida and Yang, Dongchen and Liu, Yuan
+               and Pan, Bowen and Lv, Chengfei and Zhou, Xiaowei},
+  booktitle = {Proceedings of the European Conference on Computer Vision (ECCV)},
+  pages     = {450--467},
+  year      = {2024},
+  doi       = {10.1007/978-3-031-73027-6_26}
+}
+
+@article{yuan25texture,
+  title   = {Texture-aware Intrinsic Image Decomposition with Model- and
+             Learning-based Priors},
+  author  = {Wang, Xiaodong and He, Zijun and Yuan, Xin},
+  journal = {arXiv preprint arXiv:2509.09352},
+  year    = {2025}
+}
+
+@article{sato25metrics,
+  title   = {Objective, Absolute and Hue-aware Metrics for Intrinsic Image
+             Decomposition on Real-World Scenes: A Proof of Concept},
+  author  = {Sato, Shogo and Tsuchida, Masaru and Yamaguchi, Mariko and
+             Kaneko, Takuhiro and Murasaki, Kazuhiko and Yoshida, Taiga
+             and Tanida, Ryuichi},
+  journal = {arXiv preprint arXiv:2505.19500},
+  year    = {2025},
+  note    = {Accepted at the IEEE International Conference on Image Processing
+             (ICIP) 2025}
+}

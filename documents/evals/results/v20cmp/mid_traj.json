@@ -1,0 +1,60 @@
+{
+  "timestamp": "2026-06-29T00:11:49.614786",
+  "split": "test",
+  "results": [
+    {
+      "label": "v20_15k",
+      "path": "/home/khang/IR-IID/checkpoints/v20/checkpoint_iter_15000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.32314131213562897,
+      "R_cast_rg": 0.060485087306803687,
+      "R_cast_bg": 0.061728197274815655,
+      "R_cast_rms": 0.09022306600901368,
+      "M_albedo": 0.44864162613948183,
+      "valid_frac": 0.81565712,
+      "sat_bin_mae": [
+        0.2592731839418411,
+        0.29666069090366365,
+        0.24852711230516433,
+        0.21996882200241089
+      ]
+    },
+    {
+      "label": "v20_20k",
+      "path": "/home/khang/IR-IID/checkpoints/v20/checkpoint_iter_20000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.40130641064703276,
+      "R_cast_rg": 0.060001724160865175,
+      "R_cast_bg": 0.07409931485159296,
+      "R_cast_rms": 0.10031072788232023,
+      "M_albedo": 0.4321838845809301,
+      "valid_frac": 0.81565712,
+      "sat_bin_mae": [
+        0.25493874832987784,
+        0.2897294771671295,
+        0.24506497204303743,
+        0.2172902163863182
+      ]
+    },
+    {
+      "label": "v17_50k",
+      "path": "/home/khang/IR-IID/checkpoints/v17/checkpoint_iter_50000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.17691041276593356,
+      "R_cast_rg": 0.061389387787210446,
+      "R_cast_bg": 0.09565244216002552,
+      "R_cast_rms": 0.11900824912525276,
+      "M_albedo": 0.5254363395770391,
+      "valid_frac": 0.81565712,
+      "sat_bin_mae": [
+        0.25786250084638596,
+        0.29598930835723875,
+        0.24716596007347108,
+        0.21732813775539397
+      ]
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "19k_row1": {
+    "checkpoint": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "scene_filter": "all",
+    "C_arap": 0.1701593515322064,
+    "Cast_RMS": 0.03632998771991179,
+    "albedo_si_rmse": 0.24701993964927296,
+    "albedo_lmse": 0.02689163876913855,
+    "n_groups": 37
+  },
+  "19k_row1__indoor": {
+    "checkpoint": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "scene_filter": "indoor",
+    "C_arap": 0.1599996586076238,
+    "Cast_RMS": 0.035003289788638724,
+    "albedo_si_rmse": 0.25594715816878727,
+    "albedo_lmse": 0.021583131236163365,
+    "n_groups": 23
+  },
+  "30k_row2": {
+    "checkpoint": "checkpoints/v17_row2/checkpoint_iter_30000.pth",
+    "scene_filter": "all",
+    "C_arap": 0.24064758668343225,
+    "Cast_RMS": 0.06276655584395067,
+    "albedo_si_rmse": 0.3129949114796981,
+    "albedo_lmse": 0.031814952549019594,
+    "n_groups": 37
+  },
+  "30k_row2__indoor": {
+    "checkpoint": "checkpoints/v17_row2/checkpoint_iter_30000.pth",
+    "scene_filter": "indoor",
+    "C_arap": 0.2347853905098005,
+    "Cast_RMS": 0.06926858333338178,
+    "albedo_si_rmse": 0.3241769002600648,
+    "albedo_lmse": 0.02782232932152291,
+    "n_groups": 23
+  },
+  "40k_row4": {
+    "checkpoint": "checkpoints/v17/checkpoint_iter_40000.pth",
+    "scene_filter": "all",
+    "C_arap": 0.15723709745163267,
+    "Cast_RMS": 0.0721637984076585,
+    "albedo_si_rmse": 0.22663726135563683,
+    "albedo_lmse": 0.029694128607753927,
+    "n_groups": 37
+  },
+  "40k_row4__indoor": {
+    "checkpoint": "checkpoints/v17/checkpoint_iter_40000.pth",
+    "scene_filter": "indoor",
+    "C_arap": 0.15020301404663108,
+    "Cast_RMS": 0.07773371692049312,
+    "albedo_si_rmse": 0.21827715322717853,
+    "albedo_lmse": 0.025202897632890648,
+    "n_groups": 23
+  },
+  "marigold_app": {
+    "checkpoint": "checkpoints/marigold-iid-appearance-v1-1",
+    "scene_filter": "all",
+    "C_arap": 0.07309143256332556,
+    "Cast_RMS": 0.03169306246487587,
+    "albedo_si_rmse": 0.15264269695158156,
+    "albedo_lmse": 0.022568090632721836,
+    "n_groups": 37
+  },
+  "marigold_app__indoor": {
+    "checkpoint": "checkpoints/marigold-iid-appearance-v1-1",
+    "scene_filter": "indoor",
+    "C_arap": 0.06644965506645596,
+    "Cast_RMS": 0.03190058252094593,
+    "albedo_si_rmse": 0.147480018715235,
+    "albedo_lmse": 0.016029708913390943,
+    "n_groups": 23
+  },
+  "marigold_light": {
+    "checkpoint": "checkpoints/marigold-iid-lighting-v1-1",
+    "scene_filter": "all",
+    "C_arap": 0.29644301048282423,
+    "Cast_RMS": 2.1981320519501923,
+    "albedo_si_rmse": 0.412645376602214,
+    "albedo_lmse": 0.11735749589795784,
+    "n_groups": 37
+  },
+  "marigold_light__indoor": {
+    "checkpoint": "checkpoints/marigold-iid-lighting-v1-1",
+    "scene_filter": "indoor",
+    "C_arap": 0.24836951587349176,
+    "Cast_RMS": 1.6310016017477518,
+    "albedo_si_rmse": 0.3973319098867219,
+    "albedo_lmse": 0.13503373545880867,
+    "n_groups": 23
+  }
+}

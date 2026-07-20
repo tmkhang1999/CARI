@@ -1,0 +1,70 @@
+# V17.34 -- clean Table-B retry: moderate 3D-Front plus gentle flatness.
+#
+# Purpose: test whether the raw-ARAP benefit of 3D-Front can be retained without
+# the MAW intensity failure of flat-LF=4.0. This is a new, matched 40k->60k
+# row, not a continuation of the old v17_34 pilot checkpoints.
+#
+# Design decisions:
+# - Keep Front3D at 0.20. The old 0.20 runs already reached a flat held-out
+#   Front3D albedo curve, so increasing its sampling weight is not justified.
+# - Restore MID to 0.30 and InteriorVerse to 0.20. Do not pay for more Front3D
+#   by aggressively removing the real-pair or real-image anchors that protect
+#   MAW colour and intensity.
+# - Reduce only the suspected washout term: flat-LF 4.0 -> 1.0. Shadow
+#   invariance remains 1.0 because it targets the hard-shadow failure directly.
+# - Keep the 60k horizon so this is comparable with the Table-B 60k rows.
+#
+# Existing checkpoints/v17_34 files predate this specification. Archive that
+# directory before the first launch; never auto-resume those pilot checkpoints.
+#
+# First launch (fresh Adam, model weights from the 40k CARI base):
+#   INITIAL_RESUME=checkpoints/v17_44/checkpoint_iter_40000.pth \
+#   INITIAL_SKIP_OPTIMIZER=1 VERSION=17.34 CUDA=1 SLEEP_SEC=90 \
+#   bash scripts/train_resilient.sh
+#
+# Restarts are handled by train_resilient.sh and load the v17_34 optimizer state.
+
+extends: 17
+
+train:
+  # The initial wrapper launch skips the base optimizer state, yielding fresh
+  # Adam at this LR. These remain false so automatic restarts retain v17_34's
+  # own optimizer state rather than resetting it after every interruption.
+  lr: 2.0e-5
+  use_cosine_lr: false
+  reset_lr: false
+  skip_optimizer: false
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+  max_val_batches: 10
+
+  # Fixed mix from the first resumed step (40k). MATCHED to v17_29/v17_33's
+  # standardized mix (2026-07-13) so (34 − 29) is a pure lever contrast and the
+  # thesis reports ONE mix for all front3d rows. Dose deliberately NOT raised:
+  # Table-B logs show both front3d gradient channels exhausted (val inv_gap
+  # 0.0013 at fine-tune start; val alb_si_rmse flat 14k steps) — more weight
+  # adds epochs over 2,496 views, not signal.
+  # RELAUNCH NOTE: clear checkpoints/v17_34/ first — the 41k/42k ckpts there
+  # were trained under a different mix and auto-resume would continue them.
+  sampling_weights_phase3:
+    hypersim: 0.3
+    midintrinsic: 0.3
+    interiorverse: 0.15
+    front3d: 0.25
+
+data:
+  front3d_root: '../datasets/front3d_iid'
+
+loss:
+  # Gentle chroma-gated low-frequency prior. At 4.0 this term caused the
+  # low-chroma albedo washout visible in v17_23/v17_33 and harmed MAW intensity.
+  lambda_alb_flat_lf: 1.0
+  alb_flat_lf_down: 8
+  alb_flat_lf_chroma_gate: 2.0
+
+  # Preserve the shadow-specific mechanism; explain is intentionally disabled.
+  lambda_shadow_inv: 1.0
+  lambda_shadow_explain: 0.0
+  shadow_start_iter: 0

@@ -80,7 +80,18 @@ def get_mixed_loader(
             input_size=input_size,
             cache_max_items=cache_max_items,
             crop_mode_train='hybrid',
-            augment_train=True
+            augment_train=True,
+            split_file=kwargs.get('split_file', 'hypersim_split.json'),
+            split_seed=kwargs.get('split_seed', 42),
+            split_ratio=kwargs.get('split_ratio', 0.9),
+            strict_split=kwargs.get('strict_split', True),
+            max_hdf5_retries=kwargs.get('max_hdf5_retries', 1),
+            skip_corrupt_samples=kwargs.get('skip_corrupt_samples', True),
+            load_geometry=kwargs.get('load_geometry', True),
+            load_normals=kwargs.get('load_normals', False),
+            color_pair_prob=kwargs.get('hypersim_color_pair_prob', 0.0),
+            color_tint_min=kwargs.get('hypersim_color_tint_min', 0.8),
+            color_tint_max=kwargs.get('hypersim_color_tint_max', 1.25),
         )
         
     if 'midintrinsic' in mix_weights and mix_weights['midintrinsic'] > 0:
@@ -89,8 +100,40 @@ def get_mixed_loader(
             split='train',
             input_size=input_size,
             crop_mode_train='hybrid',
+            use_paired=kwargs.get('use_mid_paired', False),
+            pair_mode=kwargs.get('mid_pair_mode', 'raw'),
+            chromatic_aug=kwargs.get('mid_chromatic_aug', False),
+            raw_color_pair=kwargs.get('mid_raw_color_pair', False),
         )
         
+    if 'interiorverse' in mix_weights and mix_weights['interiorverse'] > 0:
+        from src.data.interiorverse_dataset import InteriorVerseDataset
+        datasets['interiorverse'] = InteriorVerseDataset(
+            root_dir=data_roots.get('interiorverse', '../../../datasets/InteriorVerse'),
+            split='train',
+            input_size=input_size,
+            crop_mode_train='hybrid',
+        )
+
+    if 'openrooms' in mix_weights and mix_weights['openrooms'] > 0:
+        from src.data.openrooms_dataset import OpenRoomsDataset
+        datasets['openrooms'] = OpenRoomsDataset(
+            root_dir=data_roots.get('openrooms', '../../../datasets/OpenRooms'),
+            split='train',
+            input_size=input_size,
+            crop_mode_train='hybrid',
+        )
+
+    if 'front3d' in mix_weights and mix_weights['front3d'] > 0:
+        from src.data.front3d_dataset import Front3DDataset
+        datasets['front3d'] = Front3DDataset(
+            root_dir=data_roots.get('front3d', '../../../datasets/front3d_iid'),
+            split='train',
+            input_size=input_size,
+            crop_mode_train='hybrid',
+            cache_max_items=kwargs.get('front3d_cache_max_items', 0),
+        )
+
     mixed_dataset = MixedDataset(datasets, mix_weights)
     
     return DataLoader(

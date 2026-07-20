@@ -1,0 +1,157 @@
+% 
+\newcommand\eqremark[1]{\text{\textcolor{blue}{\textit{\scriptsize  \fbox{#1}}}}}
+
+
+
+% matrix and vector notation
+\renewcommand{\vec}[1]{\mathbf{\boldsymbol{#1}}}
+\newcommand{\mat}[1]{\mathbf{#1}}
+
+% vectors and matrices with 2 or 3 elements in row (and column)
+\newcommand\mattwo[4]{\left[\begin{array}{cc} #1 & #2\\ #3 & #4 \end{array} \right]}
+\newcommand\matthree[9]{\left[\begin{array}{ccc} #1 & #2 & #3\\ #4 & #5 & #6\\ #7 & #8 & #9 \end{array} \right]}
+\newcommand\vectwo[2]{\left[\begin{array}{c} #1 \\ #2 \end{array} \right]}
+\newcommand\vecthree[3]{\left[\begin{array}{c} #1 \\ #2 \\ #3 \end{array} \right]}
+
+%---------------------------------------
+% % data and features space
+%---------------------------------------
+%labels
+\newcommand\labelspace{\mathcal{Y}}
+% feature space
+\newcommand\inputspace{\Omega}
+\newcommand\dimension{D}
+% data given
+\newcommand\noe{N}
+\newcommand\numberOfExamples{\noe}
+\newcommand\numberOfClasses{M}
+\newcommand\dataset{\mathcal{D}}
+\newcommand\inputlabelvector{\vec{y}}
+\newcommand\inputdatamatrix{\mat{X}}
+\newcommand\inputsingle{\vec{x}}
+\newcommand\labelsingle{y}
+\newcommand\numPixels{n_{px}}
+
+%---------------------------------------
+% % active learning stuff
+%---------------------------------------
+\newcommand\activeLearning{\mathcal{AL}}
+\newcommand\datasetLabeled{\mathfrak{L}}
+\newcommand\datasetUnlabeled{\mathfrak{U}}
+\newcommand\datasetSelected{\mathfrak{S}}
+\newcommand\queryFct{\mathcal{Q}}
+\newcommand\model{f}
+
+%---------------------------------------
+% % incremental learning stuff
+%---------------------------------------
+\newcommand\inputnew{\inputsingle^*}
+\newcommand\labelnew{\labelsingle_*}
+
+%---------------------------------------
+% % norms, set sizes
+%---------------------------------------
+\newcommand{\vectornorm}[1]{\left|\left|#1\right|\right|}
+\newcommand{\setnorm}[1]{\left|#1\right|}
+
+%---------------------------------------
+% % differential symbol for integrals
+%---------------------------------------
+\newcommand\diffd{\operatorname{d}\!}
+
+%---------------------------------------
+% % further operators
+%---------------------------------------
+\newcommand{\argmax}{\operatorname{argmax}}
+\newcommand{\argmin}{\operatorname{argmin}}
+
+%---------------------------------------
+% % learning theory 
+%---------------------------------------
+\newcommand\loss{\mathcal{L}}
+\newcommand\prob{\operatorname{p}}
+% model and modelspace / hypothesis, hypothesisspace
+\newcommand\hypothesis{h}
+\newcommand\hypothesisspace{\mathbb{H}}
+\newcommand\risk{\mathcal{R}}
+
+%---------------------------------------
+% % GP stuff
+%---------------------------------------
+\newcommand\gpregmean{\mu_*}
+%
+\newcommand\gpregvariance{\sigma^2_*}
+\newcommand\gpregstddev{\sigma_*}
+%
+% gpregdev = gpnoise + gpregfvar
+\newcommand\gpnoise{\sigma^2_n}
+%
+\newcommand\gpregfvarnew{\sigma_{\!f_*}^2} % variance of latent function value of test sample
+\newcommand\gpregfvar{\sigma_{\!f}^2} % variance of latent function values
+%
+\newcommand\weightVecDual{\vec{\alpha}} % weight vector
+%
+\newcommand\kernelFunction{\kappa}
+\newcommand\kernelMatrix{\mat{K}}
+\newcommand\kernelVector{\vec{k}_{*}}
+\newcommand\selfsim{k_{**}+\gpnoise}
+%
+\newcommand\kernelSelf{\kernelFunction(\inputnew, \inputnew)}
+\newcommand\kernelMatrixNew{\bar{\kernelMatrix}}
+
+
+%---------------------------------------
+% % local features
+%---------------------------------------
+\newcommand\localFeat{\mathit{lf}}
+\newcommand\lfPos{\vec{p}}
+\newcommand\lfDesc{\vec{d}}
+\newcommand\lfNumFeat{\mathcal{N}}
+%---------------------------------------
+% % codebook, quantization, ...
+%---------------------------------------
+\newcommand\quant{\operatorname{vc}}
+\newcommand\codebook{\mat{C}}
+\newcommand\prototype{\vec{\mathfrak{p}}}
+\newcommand\lfNumPrototypes{\mathfrak{K}}
+
+
+%---------------------------------------
+% % some standard variables ...
+%---------------------------------------
+\newcommand\identityMatrix[1]{{\mat{I}_{#1}}}
+
+
+%---------------------------------------
+% % patch discovery
+%---------------------------------------
+\newcommand\patch{\vec{x}}
+\newcommand\detector{\vec{w}}
+\newcommand\patchset{\mathcal{M}}
+\newcommand\setAcceptable{\mathcal{A}}
+\newcommand\numPatches{p}
+\newcommand\numPatchesImg{{p_\mathcal{I}}}
+\newcommand\numNewPatches{m}
+
+%---------------------------------------
+% % object detection
+%---------------------------------------
+\newcommand\dpm{M_{DPM}}
+\newcommand\numParts{{n_p}}
+\newcommand\deformCost{\mathcal{L}_\mathcal{D}}
+
+
+
+%---------------------------------------
+% % LDA
+%---------------------------------------
+\newcommand\ldaNeg{{\vec{\mu}_0}}
+\newcommand\ldaPos{{\vec{\mu}_1}}
+\newcommand\ldaCov{\mat{S}_0}
+
+
+
+%---------------------------------------
+% % asymptotic stuff
+%---------------------------------------
+\newcommand\asympO[1]{\mathcal{O}\left(#1\right)}

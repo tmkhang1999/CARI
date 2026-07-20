@@ -1,0 +1,39 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.43 — TABLE-A (CARI 2×2 ablation) · ROW 3: baseline + WIDE COLOR PATH + CHROMA LOSS,
+#          cross-render OFF, retrained to 50k.
+#
+#                       cross-render OFF      cross-render ON
+#   color-path OFF        ROW 1 (v17.41)        ROW 2 (v17.42)
+#   color-path ON         ROW 3 (this)          ROW 4 (v17.yaml @ v17_old/50k)
+#
+# ROW 3 = axis-2 ON (wide color path albedo_rgb_skip + chroma loss lambda_a_chroma), axis-1 OFF.
+# Both axis-2 components are INHERITED from v17 (albedo_rgb_skip=true, lambda_a_chroma=0.2); we
+# only ZERO the cross-render losses. This is the deliberately-broken cell: v17.yaml documents that
+# albedo_rgb_skip REQUIRES L_inv or the illuminant color re-leaks into albedo. Row 3 runs the
+# wide path WITHOUT L_inv on purpose → it should show that leak, and (row4 − row3) then proves
+# cross-render is what tames it. Exposing it to MID's real colored illuminants (phase 3, inherited and resume-safe)
+# is what makes the leak visible.
+#
+# ── TWO THINGS THAT DIFFER FROM ROWS 1/2 (both REQUIRED, both handled below) ──
+#  1. ARCH = 449 params (albedo_rgb_skip=true → the head builds skip_enc). We resume from the
+#     443-param v17_old/19k bank (no skip_enc exists yet) → load_checkpoint uses strict=False
+#     (train_v17.py:241), so the 6 skip_enc params COLD-START and train up over 19k→50k (31k
+#     steps, plenty). This shares the SAME 0–19k plain trunk as rows 1/2 (clean fork at 19k).
+#  2. OPTIMIZER must be RESET: the param set grew vs the 30k... no — vs the 19k ckpt, so the saved
+#     Adam moments don't cover skip_enc. skip_optimizer=true avoids a param-group size mismatch.
+#     (rows 1/2 keep skip_optimizer=false because their arch matches their ckpt exactly.)
+#
+# RUN (saves to checkpoints/v17_43/, resumes the 19k baseline bank — same source as row 1):
+#   bash scripts/train.sh --version 17.43 --cuda 1 \
+#       --resume checkpoints/v17_old/checkpoint_iter_19000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  skip_optimizer: false
+
+loss:
+  lambda_alb_invariance: 0.0   # axis-1 OFF: no L_inv  (the row-3 point: wide path WITHOUT L_inv)
+  lambda_explain: 0.0          # axis-1 OFF: no L_explain
+  # lambda_a_chroma: 0.2  ← inherited (axis-2 ON: chroma loss)
+  # model.albedo_rgb_skip: true ← inherited (axis-2 ON: wide color path → 449 arch)

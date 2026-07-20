@@ -1,0 +1,42 @@
+{
+  "v17_19k_raw": {
+    "ckpt": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.779000050553302,
+    "intensity_si_mse": 0.004271319208959485,
+    "intensity_si_mse_x100": 0.42713192089594854,
+    "splits": {}
+  },
+  "v17_50k_raw": {
+    "ckpt": "checkpoints/v17/checkpoint_iter_50000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.023111063747055,
+    "intensity_si_mse": 0.00401856835209042,
+    "intensity_si_mse_x100": 0.40185683520904203,
+    "splits": {}
+  },
+  "v17_19k_p90": {
+    "ckpt": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.859261381366772,
+    "intensity_si_mse": 0.0042101937663233165,
+    "intensity_si_mse_x100": 0.42101937663233163,
+    "splits": {}
+  },
+  "v17_50k_p90": {
+    "ckpt": "checkpoints/v17/checkpoint_iter_50000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.022277104568988,
+    "intensity_si_mse": 0.004077772100361253,
+    "intensity_si_mse_x100": 0.40777721003612527,
+    "splits": {}
+  }
+}

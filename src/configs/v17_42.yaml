@@ -1,0 +1,33 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.42 — TABLE-A (CARI 2×2 ablation) · ROW 2: baseline + CROSS-RENDER losses, retrained to 50k.
+#
+#                       cross-render OFF      cross-render ON
+#   color-path OFF        ROW 1 (v17.41)        ROW 2 (this)
+#   color-path ON         ROW 3 (v17.43)        ROW 4 (v17.yaml @ v17_old/50k)
+#
+# ROW 2 = axis-1 ON (L_inv + L_explain), axis-2 OFF. Cross-render stays ON via the INHERITED
+# lambda_alb_invariance=0.5 / lambda_explain=0.25. The wide color path is OFF and chroma loss is
+# OFF → 443-param arch (no skip_enc) → loads the 443-param v17_old/19k ckpt EXACTLY.
+# So (row2 − row1) at 50k isolates the cross-render LOSS effect WITHOUT the wide color path —
+# and (row4 − row3) isolates the SAME loss WITH it → the off-diagonal vs on-diagonal deltas
+# expose the documented coupling (wide path REQUIRES L_inv; v17.yaml §albedo_rgb_skip).
+#
+# RESUME: 19k, same fork point as rows 1/3/4. The fixed trainer now selects
+# phase2 for 19k→25k and phase3 for 25k→50k, so this row is step/data-matched.
+#
+# NOTE (chroma loss): set to 0 per the 2×2 definition (chroma is axis-2, OFF for row 2). All Table-A rows should now fork from 19k; do not use the old 30k resume for the clean table.
+#
+# RUN (saves to checkpoints/v17_42/):
+#   bash scripts/train.sh --version 17.42 --cuda 0 \
+#       --resume checkpoints/v17_old/checkpoint_iter_19000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+model:
+  albedo_rgb_skip: false       # axis-2 OFF: no wide color path  → 443 arch (matches 30k ckpt)
+  albedo_chroma_skip: false    # keep legacy chroma skip OFF too → no skip_enc
+
+loss:
+  lambda_a_chroma: 0.0         # axis-2 OFF: no albedo-chroma loss
+  # lambda_alb_invariance: 0.5  ← inherited (cross-render ON)
+  # lambda_explain:        0.25 ← inherited (cross-render ON)

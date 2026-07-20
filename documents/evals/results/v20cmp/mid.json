@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-06-28T22:04:47.418427",
+  "split": "test",
+  "results": [
+    {
+      "label": "v20_30k",
+      "path": "/home/khang/IR-IID/checkpoints/v20/checkpoint_iter_30000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.2794003670333185,
+      "R_cast_rg": 0.080518350837374,
+      "R_cast_bg": 0.1290472638653155,
+      "R_cast_rms": 0.15819939430059551,
+      "M_albedo": 0.5490676233337984,
+      "valid_frac": 0.8147235555555556,
+      "sat_bin_mae": [
+        0.28107575128475826,
+        0.29963169246912,
+        0.2519950749973456,
+        0.21684200738867124
+      ]
+    },
+    {
+      "label": "v17_50k",
+      "path": "/home/khang/IR-IID/checkpoints/v17/checkpoint_iter_50000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.17318091637758087,
+      "R_cast_rg": 0.0670263136659613,
+      "R_cast_bg": 0.10593161934083065,
+      "R_cast_rms": 0.13075959108641988,
+      "M_albedo": 0.5339490647117296,
+      "valid_frac": 0.8147235555555556,
+      "sat_bin_mae": [
+        0.27209307278196015,
+        0.2895601727068424,
+        0.24221298123399418,
+        0.20833965639273325
+      ]
+    }
+  ]
+}

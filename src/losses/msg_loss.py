@@ -19,6 +19,11 @@ p parameter controls task-specific behavior:
        Use for albedo and specular residual.
   p=2: L2 (squared) of gradient magnitudes. Penalizes large gradient errors
        harder. Enforces smoothness. Use for shading branches.
+
+target_grad_threshold enables a CRefNet-style reflectance-gradient filter:
+  gradients in the target below the threshold are treated as zero, so small
+  target ramps/noise do not become albedo edges the model is asked to copy.
+  Leave at 0.0 for the original MSG behavior.
 """
 
 import torch
@@ -103,43 +108,71 @@ class MultiScaleGradientLoss(nn.Module):
         grad_y = F.conv2d(x, weight_y, padding=1, groups=C)
         return grad_x, grad_y
 
-    def forward(self, pred, target, mask=None, p=1):
+    def forward(self, pred, target, mask=None, p=1, target_grad_threshold=0.0):
         """
         Args:
             pred:   (N, C, H, W) prediction
             target: (N, C, H, W) ground truth
             mask:   (N, 1, H, W) valid pixel mask (None => all valid)
             p:      aggregation norm. 1 = L1 (sharp edges), 2 = L2 (smooth)
+            target_grad_threshold: if > 0, suppress target gradients whose
+                    magnitude is below this threshold before comparing against
+                    prediction gradients. This preserves sharp reflectance
+                    edges while discouraging copied low-contrast albedo ramps.
         """
-        diff = pred - target
+        grad_threshold = float(target_grad_threshold or 0.0)
+        use_target_filter = grad_threshold > 0.0
+        diff = None if use_target_filter else pred - target
 
         if mask is None:
             mask = torch.ones(
-                diff.shape[0], 1, diff.shape[2], diff.shape[3],
-                device=diff.device, dtype=diff.dtype,
+                pred.shape[0], 1, pred.shape[2], pred.shape[3],
+                device=pred.device, dtype=pred.dtype,
             )
 
-        loss = 0.0
+        loss = torch.zeros((), device=pred.device, dtype=pred.dtype)
         for scale in range(self.n_scale):
             if scale > 0:
                 scale_factor = 1.0 / (2 ** scale)
-                diff_scaled = F.interpolate(
-                    diff, scale_factor=scale_factor,
-                    mode='bilinear', align_corners=True, antialias=True,
-                )
+                if use_target_filter:
+                    pred_scaled = F.interpolate(
+                        pred, scale_factor=scale_factor,
+                        mode='bilinear', align_corners=True, antialias=True,
+                    )
+                    target_scaled = F.interpolate(
+                        target, scale_factor=scale_factor,
+                        mode='bilinear', align_corners=True, antialias=True,
+                    )
+                else:
+                    diff_scaled = F.interpolate(
+                        diff, scale_factor=scale_factor,
+                        mode='bilinear', align_corners=True, antialias=True,
+                    )
                 mask_scaled = F.interpolate(
                     mask.float(), scale_factor=scale_factor,
                     mode='bilinear', align_corners=True, antialias=True,
                 )
                 mask_scaled = torch.floor(mask_scaled + 0.001).clamp(0, 1)
             else:
-                diff_scaled = diff
+                if use_target_filter:
+                    pred_scaled = pred
+                    target_scaled = target
+                else:
+                    diff_scaled = diff
                 mask_scaled = mask.float()
 
             if self.erode:
                 mask_scaled = self._erode_mask(mask_scaled)
 
-            grad_x, grad_y = self._compute_gradient(diff_scaled)
+            if use_target_filter:
+                pred_x, pred_y = self._compute_gradient(pred_scaled)
+                target_x, target_y = self._compute_gradient(target_scaled)
+                target_mag = torch.sqrt(target_x.pow(2) + target_y.pow(2) + 1e-8)
+                target_keep = (target_mag > grad_threshold).to(target_x.dtype)
+                grad_x = pred_x - target_x * target_keep
+                grad_y = pred_y - target_y * target_keep
+            else:
+                grad_x, grad_y = self._compute_gradient(diff_scaled)
 
             # Gradient magnitude (L2 norm of gradient vector per channel)
             grad_mag = torch.sqrt(grad_x.pow(2) + grad_y.pow(2) + 1e-8)

@@ -1,0 +1,107 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.26 — IIW ORDINAL-HINGE FINE-TUNE (the "leaderboard variant" — NOT a Table-B row).
+#
+# WHAT: joint fine-tune with the IIW human-judgment ordinal hinge (the CGIntrinsics/CRefNet
+# recipe) ON TOP of the regular losses — a dedicated IIW batch per step feeds
+# criterion.ordinal_hinge_loss on predicted albedo (own forward+backward, train_v17.py §4),
+# while the Hypersim+MID constancy losses stay on so constancy does not silently drift.
+#
+# WHY SEPARATE FROM TABLE B: this variant TRAINS ON IIW, so its WHDR is no longer zero-shot.
+# In the thesis it appears as a separately-labelled row ("Ours-IIW-ft", non-zero-shot footnote),
+# analogous to CRefNet's fine-tuned WHDR — never as the headline model.
+#
+# LEAKAGE SAFETY (verified in src/data/iiw_dataset.py): the train split is the EXACT COMPLEMENT
+# of the eval split (eval = ids[0::5], identical to tests/eval/eval_iiw.py) — no test image can
+# enter fine-tuning.
+#
+# RESUME: from v17_34 @ 60k — the selected model ("Ours"). It is the right base on every
+# axis: best C_mat (0.130), most chroma-faithful in the roster (Chroma_fid 1.008), best MAW
+# dE (3.981), AND already the best WHDR of our rows (0.264), so it is also the closest
+# starting point for the metric being optimised. (v17_29 loses on all four; there is no case
+# for it.)
+#
+# ⚠ KILL-GATE — READ THIS BEFORE TRUSTING A WHDR IMPROVEMENT (rewritten 2026-07-14).
+#
+# WHDR is an ORDINAL LIGHTNESS metric: it asks which of two points is darker. It is BLIND TO
+# HUE. An optimiser chasing it can therefore desaturate the albedo for free — and may even be
+# rewarded, since a flatter albedo yields cleaner orderings. This is precisely the degenerate
+# solution Ch5 is about.
+#
+# This is not hypothetical. CRefNet TRAINS ON IIW and holds the worst chroma fidelity in our
+# roster (Chroma_fid 0.575) — indistinguishable from our own rejected colour-skip-off ablation
+# (0.552), the model discarded on sight for looking washed out. IIW supervision and chroma
+# collapse travel together.
+#
+# The gate MUST therefore be fidelity-anchored. The old gate guarded "MID C_mat / Cast", but
+# `Cast` was the POOLED score that REWARDS colour collapse — it would have waved the
+# degenerate model straight through. Gate on these instead, all measured against the v17_34
+# resume point:
+#   * Chroma_fid  1.008  — must stay within [0.95, 1.10]. THIS IS THE HARD GATE. A drop here
+#                          means the WHDR gain was bought with albedo colour: REJECT.
+#   * MAW dE      3.981  — must not regress >5% (external, measured-albedo anchor).
+#   * Cast_rel    0.421  — scale-fair invariance, must not regress >10%.
+#   * C_mat       0.130  — lightness stability, must not regress >10%.
+# Score with: python scripts/summarize_corrected_cast.py <eval-dir>   (see CORRECTED_CAST_SUMMARY.md)
+# If no checkpoint clears the Chroma_fid gate, the honest result is that WHDR and chroma
+# fidelity are ANTAGONISTIC on this benchmark — which is itself a reportable finding, and
+# arguably a better one than a leaderboard number.
+#
+# In the thesis this appears as a separately-labelled, non-zero-shot row ("Ours-IIW-ft"),
+# analogous to CRefNet's fine-tuned WHDR — NEVER as the headline model.
+#
+# Recipe: gentle constant lr, fresh Adam, lambda_ordinal_iiw 1.0 with pre-registered sweep
+# {0.5, 1.0, 2.0}.
+#
+# RUN (saves to checkpoints/v17_26/):
+#   bash scripts/train.sh --version 17.26 --cuda 0 --resume checkpoints/v17_34/checkpoint_iter_60000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5                 # gentle: ~1/10 of baseline — refine orderings, don't relearn
+  use_cosine_lr: false       # CONSTANT lr (a resumed cosine would sit at eta_min)
+  # true/true REQUIRED: arch matches the resume ckpt exactly, so false/false would load the
+  # ckpt's fully-annealed lr 1e-7 and run frozen (see v17_23.yaml post-mortem). This is a
+  # silent failure, not a crash: training proceeds, prints losses, writes checkpoints — it
+  # just never meaningfully updates the weights. Double-check these are still true/true
+  # before launching.
+  reset_lr: false
+  skip_optimizer: false
+
+  iiw_batch_size: 2          # IIW images per step for the ordinal branch (its own forward)
+
+  extend_iterations: 70000   # +10k from the v17_34 60k base
+  checkpoint_interval_iters: 1000   # frequent ckpts → pick the best WHDR-vs-fidelity trade-off
+  val_interval_iters: 1000          # watch albedo val so chroma drift is visible early
+
+  # MUST MATCH THE RESUME CHECKPOINT'S MIX. v17_34 trained on hypersim .30 / MID .30 / IV .15 /
+  # front3d .25; the earlier .40/.30/.30 here predates 3D-Front-IID and would yank the data
+  # distribution out from under the model at resume, confounding the IIW hinge with a
+  # simultaneous dataset shift. The anchor mix stays on so the constancy losses keep firing
+  # during fine-tuning and chroma cannot drift unopposed.
+  sampling_weights_phase3:
+    hypersim: 0.30
+    midintrinsic: 0.30
+    interiorverse: 0.15
+    front3d: 0.25
+
+data:
+  iiw_root: tests/testing_data/iiw-dataset/data
+  # REQUIRED: this config extends v17 (base), whose data: block does not set front3d_root,
+  # so without this line the loader falls back to train_v17.py's hardcoded default
+  # ('../../../datasets/front3d_iid'), which does not resolve. Front3DDataset silently
+  # tolerates a missing root (len()==0) instead of raising, so the mix still assigns it
+  # 0.25 probability and the first draw crashes in mixed_dataset.py with
+  # "ValueError: high <= 0". Must match v17_34.yaml (the resume checkpoint's own root).
+  front3d_root: '../datasets/front3d_iid'
+
+loss:
+  # ── THE WHDR lever (the only new term) ──
+  lambda_ordinal_iiw: 1.0    # sweep {0.5, 1.0, 2.0} if the kill-gate flags it
+  ordinal_margin: 0.10       # WHDR δ — matches tests/eval/eval_iiw.py
+
+  # ── other levers OFF (isolate the IIW hinge; combine with the Table-B winner only via
+  #    the resume checkpoint, not by re-enabling lever losses here) ──
+  lambda_alb_flat_lf: 0.0
+  lambda_shadow_inv: 0.0
+  lambda_shadow_explain: 0.0

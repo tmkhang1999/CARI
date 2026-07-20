@@ -1,0 +1,881 @@
+% ============================================================
+%  Chapter 5 — Experiments
+% ============================================================
+\chapter{Experiments}
+\label{ch:experiments}
+
+This chapter presents quantitative and qualitative results on all four
+benchmarks described in \secref{sec:benchmarks}.
+We first describe the experimental setup (\secref{sec:exp_setup}), then present
+results per benchmark (\secref{sec:mid_results}--\secref{sec:iiw_results}),
+and finish with an ablation study (\secref{sec:ablation}) that isolates the
+contribution of CARI.
+
+
+\section{Experimental Setup}
+\label{sec:exp_setup}
+
+\paragraph{Our model}
+\textbf{Ours (full model)} denotes the full-CARI model: the architecture of
+\chapref{ch:method} trained under the two-stage schedule with both CARI
+components --- the cross-render losses and the wide colour skip --- active.
+This is Row~4 of the ablation in \secref{sec:ablation}, and we adopt it as
+``Ours'' because it is the complete CARI configuration. The controlled ablation
+reports its measured constancy--accuracy trade-off rather than treating this
+choice as a claim that one row dominates every benchmark.
+The fine-tuning lever sweep of \secref{sec:lever_sweep} then asks whether short,
+targeted fine-tuning can improve the model further; its best passing refinement
+(flatness + shadow-invariance) trades a little real-data constancy for markedly
+better structural accuracy on ARAP, and is reported there as an alternative
+rather than as the default headline model.
+
+\paragraph{Baselines and how scores are obtained}
+The benchmark tables compare against the same roster of methods, and follow the
+convention used by \mycite{careaga24cdiid}: a horizontal rule separates scores
+we \emph{run locally} from scores we \emph{cite} from the literature.
+We run Marigold-IID Appearance and Lighting \mycite{marigoldiid24},
+CRefNet \mycite{luo23crefnet}, and the Ordinal Shading stage of CD-IID
+\mycite{careaga23ordinal} locally under our exact pipeline (zero-shot, same
+output-space normalisation and splits, identical inference resolution per
+benchmark). The full multi-stage CD-IID cascade \mycite{careaga24cdiid} and the
+older baselines are cited from their publications, and appear below the rule in
+each table. Our own constancy metrics ($C_{\text{mat}}$, $C_{\text{arap}}$,
+$\text{Cast}_{\text{RMS}}$) are not reported by those methods and are marked
+n/a; a cell marked ``-'' is simply one for which no value is available.
+Marigold-IID Lighting is trained on Hypersim, like our model, which makes it
+the most directly comparable external method.
+
+\paragraph{Which published table each benchmark cites}
+The published comparison point differs per benchmark, chosen so that the cited
+protocol matches ours exactly rather than the nearest available number.
+MAW cites CD-IID Table~1: both the MAW authors' own evaluation code and our
+local harness apply the identical scaling and metrics.
+ARAP cites Ordinal Shading Table~1, \emph{not} CD-IID Table~2: CD-IID modifies
+the ARAP scene set (dropping redundant illuminations and adding scenes from the
+MIST dataset), a set we cannot reproduce, whereas Ordinal Shading's table uses
+the original Bonneel et al.\ scenes --- the same 52-scene set used throughout
+this chapter. IIW cites Ordinal Shading Table~2 for its zero-shot WHDR figure,
+alongside the fuller reproduced roster of \mycite{yuan25texture}.
+MID has no external citation on any axis; it is a ground-truth-free constancy
+metric that no other published work reports, and MIDIntrinsics is training data
+for both this model and CD-IID, which additionally disqualifies it as a
+zero-shot benchmark for either.
+
+\paragraph{Methods compared}
+\tabref{tab:methods} summarises the methods along the axes that condition a
+fair reading of the benchmark numbers: architecture type, training data, model
+size, and native output space.
+Two points matter for interpretation.
+First, training data determines what counts as zero-shot.
+Our model trains on Hypersim, MID, and InteriorVerse, so it shares one source
+with each Marigold variant — Hypersim with Marigold-Lighting and InteriorVerse
+with Marigold-Appearance — which makes both directly comparable rather than only
+one.
+It is zero-shot on ARAP, MAW, and IIW, but in-domain on MID (it trains on the
+MID training split, disjoint from the test scenes), which is why the MID
+constancy metric is deliberately ground-truth-free (\secref{sec:mid_results}).
+CRefNet trains on the IIW training split, so its IIW WHDR is a non-zero-shot
+result (\secref{sec:iiw_results}).
+Second, our model trains only about $18.5$M parameters — the DINOv2-L encoder
+($304$M) is frozen and excluded from the optimiser — which is far fewer
+trainable parameters than both the diffusion baselines and the multi-stage
+CD-IID cascade, an efficiency the constancy results should be read against.
+
+\begin{table}[t!]
+  \caption{%
+    Methods compared, along the axes that condition a fair reading of the
+    benchmark numbers.
+    Parameters are given as trainable\,/\,total in millions where available; our
+    encoder is frozen, so only the decoder and heads are trained.
+    External counts are taken from the source paper when reported, or measured
+    from the released local model code when possible; CD-IID is counted as its
+    five MiDaS-style stage networks.
+    Cells marked ``not rep.'' are not reported and could not be recovered from
+    the released code; ``base-dep.'' means the value depends on the chosen base
+    model. For ReasonX, the listed judge is a training-time MLLM rather than the
+    deployed intrinsic predictor.
+  }
+  \label{tab:methods}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lllcc@{}}
+    \toprule
+    Method & Type & Training data & Params (train\,/\,total) & Output \\
+    \midrule
+    \textbf{Ours (full model)} & DINOv2-L (frozen) + DPT, regression
+        & Hypersim + MID + InteriorVerse & $18.5\,/\,323$ & linear albedo \\
+    Marigold-App \mycite{marigoldiid24}   & Stable-Diffusion latent diffusion
+        & InteriorVerse & $\sim$865\,/\,$\sim$1300 & sRGB albedo + material \\
+    Marigold-Light \mycite{marigoldiid24} & Stable-Diffusion latent diffusion
+        & Hypersim & $\sim$865\,/\,$\sim$1300 & linear albedo + shading + residual \\
+    CD-IID \mycite{careaga24cdiid}            & Five-stage MiDaS-style cascade
+        & 8 synthetic sets + MIDIntrinsics; Hypersim for shading & $\sim$1685\,/\,$\sim$1685 & linear albedo + RGB shading + residual \\
+    Ordinal Shading \mycite{careaga23ordinal} & CD-IID stage 1; ordinal MiDaS shading
+        & CGIntrinsics + Hypersim + OpenRooms + GTA + MID & $\sim$337\,/\,$\sim$337 & grayscale shading + implied albedo \\
+    PIE-Net \mycite{das22pienet}     & Edge-guided hybrid CNN
+        & synthetic outdoor; MIT/IIW fine-tunes & $204.1\,/\,204.1$ & reflectance + shading \\
+    CRefNet \mycite{luo23crefnet}   & Decoder-sharing SwinV2 transformer
+        & CGIntrinsics + IIW (+ NIID-Net pseudo-shading) & $66.6\,/\,66.6$ & reflectance + shading \\
+    ReasonX \mycite{reasonx25}       & GRPO fine-tuning with InternVL2.5-4B judge
+        & 10k COCO RGB; judge: Hypersim + InteriorVerse & base-dep. + 4B judge & base-dep. intrinsic maps \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\paragraph{Output-space normalisation}
+Marigold-IID's two variants use different output conventions: the Appearance
+variant outputs sRGB albedo, while the Lighting variant outputs linear albedo,
+shading, and residual layers.
+Before computing any metric, each prediction is converted to the corresponding
+linear albedo space; for sRGB predictions this applies the transfer function
+$A_{\text{lin}} = A_{\text{sRGB}}^{2.2}$.
+This correction matters because gamma encoding can artificially desaturate an
+albedo estimate and make it appear more constancy-correct than it actually is.
+All results in this chapter use this corrected normalisation.
+
+\paragraph{Inference resolution}
+Inference resolution is fixed per benchmark rather than shared uniformly.
+MID, IIW, and ARAP use an aspect-preserving maximum side length of 1280 pixels;
+measured directly on the full ARAP set, 1280 and 1500 pixels give effectively
+identical scores (every metric moves by less than 1\%, in mixed directions,
+consistent with measurement noise rather than a real effect), so 1280 is kept
+throughout for consistency and lower memory use.
+Ordinal Shading \mycite{careaga23ordinal} instead resizes each ARAP image to a
+content-adaptive resolution $R_0$ (Miangoleh et al.'s edge-density criterion),
+capped at 1500 pixels; since $R_0$ is computed per image and not reproducible
+from the published protocol alone, no fixed resolution can replicate it exactly,
+and the 1280-vs-1500 measurement above shows that choice is immaterial to our
+own scores regardless.
+MAW uses 512 pixels, matching the protocol described by \mycite{careaga24cdiid}:
+the benchmark's own scoring code downsamples every prediction to $320\times240$
+before computing a metric, so inference above that scale is discarded before
+scoring regardless of the resolution supplied.
+Every locally run method, including the baselines, is evaluated at the same
+resolution within each benchmark.
+\figref{fig:maw_resolution} shows the qualitative plateau this is chosen from:
+raising the full-CARI prediction from 1280 to 1792 or 2560 changes little
+visually, whereas 512 visibly softens fine structure at the resolutions where
+that matters (MID, IIW).
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/maw_resolution.jpg}
+  \caption{%
+    Effect of inference resolution on a MAW scene using the full-CARI model.
+    The input photograph is shown on the left and the measured albedo on the
+    right; the middle columns show predictions at different maximum side lengths.
+    Each panel repeats the same black-sofa-armrest crop in the upper right with a red
+    border to make blur differences easier to compare.
+    Fine structure improves substantially from 512 to 1280 pixels, then largely
+    plateaus, so the local benchmark protocol uses 1280 pixels as the standard
+    maximum side length for MID and MAW.
+  }
+  \label{fig:maw_resolution}
+\end{figure}
+
+\paragraph{Benchmarks at a glance}
+\figref{fig:datasets} previews the four evaluation benchmarks and the kind of
+ground truth each provides, which determines the metric it supports
+(\secref{sec:benchmarks}).
+\figref{fig:comp_grid} shows the qualitative comparison format used throughout
+this chapter: for a single in-the-wild image, the input and each method's
+predicted albedo side by side.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.86\textwidth]{images/legacy_draft25/datasets.jpg}
+  \caption{%
+    The four evaluation benchmarks and the ground truth each provides.
+    MID: real multi-illuminant captures with no albedo ground truth (supporting
+    ground-truth-free constancy).
+    MAW: real photographs with physically measured albedo on masked patches.
+    ARAP: synthetic renders with dense ground-truth albedo.
+    IIW: real photographs with sparse pairwise human lightness judgements.
+  }
+  \label{fig:datasets}
+\end{figure}
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/comp_grid.jpg}
+  \caption{%
+    Qualitative albedo comparison on an in-the-wild image (IIW).
+    Columns: the input photograph, our predicted albedo, and the compared
+    state-of-the-art methods under the identical evaluation protocol.
+    Our albedo removes the warm illuminant tint from the walls and floor while
+    preserving material colour.
+  }
+  \label{fig:comp_grid}
+\end{figure}
+
+
+\section{MID: Chromaticity Constancy}
+\label{sec:mid_results}
+
+\tabref{tab:mid} shows the $C_{\text{mat}}$ constancy score on the 30-scene
+MID test split.
+$C_{\text{mat}}$ measures how much the predicted albedo chromaticity changes
+across the different illuminant conditions for the same scene.
+Lower is better; a perfect model would score zero.
+
+\begin{table}[t!]
+  \caption{%
+    Chromaticity constancy on MID.
+    $C_{\text{mat}}$ measures the mean change in predicted albedo chromaticity
+    across illuminant conditions (lower is better).
+    Our score is the full-CARI model.
+    $C_{\text{mat}}$ is our own metric and is not reported by external methods;
+    CD-IID's full cascade is not run locally (n/a) since we integrate only its
+    Ordinal Shading stage.
+  }
+  \label{tab:mid}
+  \centering
+  \begin{tabular}{@{}lc@{}}
+    \toprule
+    Model & $C_{\text{mat}}$ $\downarrow$ \\
+    \midrule
+    Ours (full model)                          & - \\
+    Marigold-App \mycite{marigoldiid24}        & - \\
+    Marigold-Light \mycite{marigoldiid24}      & - \\
+    CRefNet \mycite{luo23crefnet}              & - \\
+    Ordinal Shading \mycite{careaga23ordinal}  & - \\
+    CD-IID \mycite{careaga24cdiid}             & n/a \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The ablation study (\secref{sec:ablation}) isolates whether the constancy this
+model achieves on MID comes from CARI specifically, comparing the full-CARI
+configuration against a matched no-CARI baseline and the two single-axis
+intermediate configurations.
+Marigold-Light's calibration target is a further point of contrast worth
+noting here: it targets a different notion of physical correctness (matching
+the appearance of the scene under the original illuminant) rather than
+illuminant-invariant reflectance recovery, which the constancy metric
+specifically penalises.
+
+\figref{fig:mid_constancy} shows a qualitative comparison.
+Each column is a different illuminant condition for the same scene.
+Our model keeps the wall and floor colours consistent across columns;
+Marigold-App shows a visible hue shift between the warm-light and cool-light
+conditions.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/mid_ours.jpg}
+  \caption{%
+    Qualitative albedo constancy of our model on three MID scenes.
+    Each row shows, left to right: four input conditions (\emph{in L0--L18}), the
+    pseudo-ground-truth albedo (red box), the predicted albedo for each condition
+    (\emph{A L0--L18}), and a per-pixel variation heatmap (CoV; red = the
+    prediction changes with the light).
+    The predicted material colours stay stable across illuminants, yielding cool
+    (blue) CoV maps on the flat surfaces where the light changes most.
+  }
+  \label{fig:mid_constancy}
+\end{figure}
+
+
+\section{ARAP: Constancy, Cast, and Structure}
+\label{sec:arap_results}
+
+ARAP is evaluated under two different input conditions, because the standard
+protocol and the axis this thesis targets require different inputs.
+The standard protocol white-balances the input --- desaturating the shading
+layer before it multiplies back into the image --- which removes the
+colour-illuminant signal entirely and is the convention \mycite{careaga23ordinal}
+and \mycite{careaga24cdiid} use for their published numbers.
+Reporting our numbers under that same condition (\tabref{tab:arap_standard})
+makes them directly comparable to the published values, but it cannot exercise
+colour constancy, since the input no longer carries a colour cast to be
+constant \emph{about}.
+The thesis claim instead needs the raw, coloured input preserved
+(\tabref{tab:arap_thesis}); no published work reports scores under this
+condition, so every row there is run locally.
+
+\begin{table}[t!]
+  \caption{%
+    ARAP, standard (white-balanced) protocol, indoor split (23 multi-light
+    groups; we train on indoor scenes).
+    LMSE and si-RMSE measure accuracy against the ground-truth albedo (lower is
+    better); SSIM measures structural similarity (higher is better).
+    Our score is the full-CARI model.
+    The lower block is \emph{cited}: Ordinal Shading Table~1 is the primary
+    comparison point (same 52-scene Bonneel set as ours); CD-IID Table~2 is
+    included for reference but uses a modified scene set (redundant
+    illuminations removed, MIST scenes added) and a differently defined RMSE
+    column, so it is not directly comparable cell-for-cell.
+  }
+  \label{tab:arap_standard}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Model & LMSE $\downarrow$ & si-RMSE $\downarrow$ & SSIM $\uparrow$ \\
+    \midrule
+    Ours (full model)                          & - & - & - \\
+    Marigold-App \mycite{marigoldiid24}        & - & - & - \\
+    Marigold-Light \mycite{marigoldiid24}      & - & - & - \\
+    CRefNet \mycite{luo23crefnet}              & - & - & - \\
+    Ordinal Shading (local run) \mycite{careaga23ordinal} & - & - & - \\
+    \midrule
+    \multicolumn{4}{@{}l}{\itshape\small Cited:}\\
+    Ordinal Shading \mycite{careaga23ordinal}, Table~1 & 0.021 & 0.252 & 0.761 \\
+    CD-IID \mycite{careaga24cdiid}, Table~2 (modified scene set) & 0.021 & - & 0.796 \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\begin{table}[t!]
+  \caption{%
+    ARAP colour-illuminant constancy, raw (non-white-balanced) input --- the
+    literal axis of the thesis claim.
+    $C_{\text{arap}}$ and $\text{Cast}_{\text{RMS}}$ are our own constancy
+    metrics, not reported by any published work under this input condition, so
+    every row is run locally.
+    ``All'' is the full indoor split; ``coloured'' isolates the groups whose
+    light \emph{colour}, not just direction or intensity, varies across
+    renderings.
+    Our score is the full-CARI model.
+  }
+  \label{tab:arap_thesis}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    Model & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}$ $\downarrow$
+          & $C_{\text{arap}}$ (coloured) $\downarrow$ & $\text{Cast}_{\text{RMS}}$ (coloured) $\downarrow$ \\
+    \midrule
+    Ours (full model)                          & - & - & - & - \\
+    Marigold-App \mycite{marigoldiid24}        & - & - & - & - \\
+    Marigold-Light \mycite{marigoldiid24}      & - & - & - & - \\
+    CRefNet \mycite{luo23crefnet}              & - & - & - & - \\
+    Ordinal Shading \mycite{careaga23ordinal}  & - & - & - & - \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\figref{fig:arap_constancy} shows the indoor subset of ARAP qualitatively.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/arap_ours.jpg}
+  \caption{%
+    Constancy of our model on two indoor ARAP scenes (\emph{bedroom},
+    \emph{bedroom2}), each rendered under two lighting conditions.
+    Each strip shows, left to right: the two input renderings (\emph{in L0},
+    \emph{in L1}), the ground-truth albedo (red box), the two predicted albedos
+    (\emph{A L0}, \emph{A L1}), and the cross-condition variation heatmap
+    (CoV; red = unstable).
+    The predicted albedo stays consistent across conditions on the flat surfaces
+    (walls, wardrobe, bedding), yielding predominantly cool CoV maps.
+  }
+  \label{fig:arap_constancy}
+\end{figure}
+
+
+\section{MAW: Real Measured Albedo}
+\label{sec:maw_results}
+
+MAW measures albedo accuracy against ground-truth reflectance obtained by
+physical measurement, making it the most direct test of how well the model
+recovers the true material colour.
+\tabref{tab:maw} reports $\Delta E$ (CIELAB colour difference) and intensity
+SI-MSE$\times$100.
+
+\begin{table}[t!]
+  \caption{%
+    Results on the MAW benchmark.
+    $\Delta E$ measures the CIELAB colour difference between predicted and
+    measured albedo (lower is better).
+    Intensity SI-MSE$\times$100 measures luminance accuracy independent of
+    global scale (lower is better).
+    Our score is the full-CARI model.
+    The lower block is \emph{cited} from \mycite{careaga24cdiid}, Table~1 (same
+    two MAW metrics; $^{*}$ = grayscale-shading method with a fixed chromaticity
+    score, since dividing by a single-channel shading preserves the input
+    image's own chromaticity exactly).
+  }
+  \label{tab:maw}
+  \centering
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Model & $\Delta E$ $\downarrow$ & Intensity SI-MSE$\times$100 $\downarrow$ \\
+    \midrule
+    Ours (full model)                          & - & - \\
+    Marigold-App \mycite{marigoldiid24}        & - & - \\
+    Marigold-Light \mycite{marigoldiid24}      & - & - \\
+    CRefNet \mycite{luo23crefnet}              & - & - \\
+    Ordinal Shading (local run) \mycite{careaga23ordinal} & - & - \\
+    \midrule
+    \multicolumn{3}{@{}l}{\itshape\small Cited from \mycite{careaga24cdiid}, Table~1:}\\
+    CD-IID \mycite{careaga24cdiid}                     & 3.37 & 0.54 \\
+    Ordinal Shading \mycite{careaga23ordinal}          & 6.56$^{*}$ & 0.57 \\
+    Bell et al. \mycite{bell14iiw}                     & 6.61 & 3.11 \\
+    CGIntrinsics \mycite{li18cgintrinsics}            & 5.15 & 2.71 \\
+    NIID-Net \mycite{luo20niid}                        & 4.73 & 1.24 \\
+    IRISformer \mycite{zhu22irisformer}                & 4.94 & 1.44 \\
+    Kocsis et al. \mycite{kocsis24iid}                 & 5.35 & 1.13 \\
+    IntrinsicAnything \mycite{chen24intrinsicanything} & 4.12 & 0.98 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\figref{fig:maw} shows a representative MAW scene.
+The ground-truth panel is masked to the surface regions whose albedo was
+physically measured by the dataset authors; only those regions enter the
+score.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/maw_ours.jpg}
+  \caption{%
+    Qualitative comparison on three MAW test scenes (one per row).
+    Left to right: input photograph, our predicted albedo, Marigold-App, and
+    the measured ground-truth albedo (masked to the regions with reliable
+    measurements).
+    Our prediction recovers the material colours without introducing a strong
+    illuminant cast.
+  }
+  \label{fig:maw}
+\end{figure}
+
+
+\section{IIW: Perceptual Shading Quality}
+\label{sec:iiw_results}
+
+IIW measures perceptual shading quality through pairwise human comparisons.
+WHDR is the fraction of judgements with which the model's albedo ordering
+disagrees.
+\tabref{tab:iiw} shows results on the IIW test set, identical for all models.
+Every row in the upper block is run zero-shot, except CRefNet's cited entry in
+the lower block, which fine-tunes on the IIW training split and is marked
+accordingly; CRefNet is also run locally, zero-shot, in the upper block, so the
+two rows isolate the effect of that fine-tuning directly.
+
+\begin{table}[t!]
+  \caption{%
+    Results on IIW.
+    WHDR measures perceptual shading quality; lower is better.
+    Cells marked ``-'' are not reported.
+    $\dagger$: CRefNet's cited entry trains on the IIW training split, so that
+    WHDR is not zero-shot; its locally run entry above is zero-shot.
+    The upper block is run under our pipeline; the lower block is
+    \emph{cited}: Ordinal Shading's own zero-shot Table~2 figure, and full-split
+    IIW WHDR as reproduced by \mycite{yuan25texture}, Table~I, which is context
+    rather than a head-to-head comparison (different test split and per-method
+    protocol).
+  }
+  \label{tab:iiw}
+  \centering
+  \begin{tabular}{@{}lc@{}}
+    \toprule
+    Model & WHDR $\downarrow$ \\
+    \midrule
+    Ours (full model)                          & - \\
+    Marigold-App \mycite{marigoldiid24}        & - \\
+    Marigold-Light \mycite{marigoldiid24}      & - \\
+    CRefNet (local, zero-shot) \mycite{luo23crefnet} & - \\
+    Ordinal Shading (local run) \mycite{careaga23ordinal} & - \\
+    \midrule
+    \multicolumn{2}{@{}l}{\itshape\small Cited:}\\
+    Ordinal Shading \mycite{careaga23ordinal}, Table~2 (zero-shot) & 0.249 \\
+    \multicolumn{2}{@{}l}{\itshape\small Full IIW test split, reproduced by \mycite{yuan25texture}, Table~I:}\\
+    Bell et al. \mycite{bell14iiw}             & 0.206 \\
+    Li \& Snavely \mycite{li18cgintrinsics}    & 0.154 \\
+    NIID-Net \mycite{luo20niid}                & 0.166 \\
+    CRefNet$^\dagger$ (fine-tuned) \mycite{luo23crefnet} & 0.145 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{On the reliability of WHDR}
+Before drawing strong conclusions from these numbers, it is worth stressing that
+WHDR is a weak metric.
+It is computed from sparse human judgements of \emph{relative} lightness between
+pairs of points, so it is subjective, evaluates ordering only, and ignores
+absolute albedo and hue entirely \mycite{sato25metrics}.
+These limitations are documented: methods that improve WHDR frequently do poorly
+on objective intensity and chromaticity metrics \mycite{sato25metrics}, which is
+exactly the gap the MAW benchmark was created to close \mycite{maw}.
+We therefore read WHDR as indicative, not decisive, and weigh it against the
+objective accuracy axes reported in \tabref{tab:arap_standard} and
+\tabref{tab:maw} rather than on its own.
+
+\figref{fig:iiw} shows qualitative results on the IIW test set.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.85\textwidth]{images/legacy_draft25/iiw_ours.jpg}
+  \caption{%
+    Qualitative albedo predictions from our model on IIW test images.
+    Each row shows an input image (left) and its predicted albedo (right).
+    The predicted albedos are smooth and consistent in colour (good for
+    constancy) but lack the sharp shadow boundaries that human annotators
+    associate with good albedo recovery (which would improve WHDR); note also
+    the residual shading on the ceiling and around the windows, which the
+    diffuse model does not fully absorb.
+  }
+  \label{fig:iiw}
+\end{figure}
+
+
+\section{Ablation Study}
+\label{sec:ablation}
+
+The benchmark sections placed our model against external methods.
+We now turn inward with two controlled studies that together justify the design.
+The first --- the \emph{CARI ablation} of this section --- asks whether the
+constancy our model achieves genuinely comes from CARI, or from something
+incidental; it isolates the two CARI components in a $2\times2$ ablation.
+The second --- the \emph{fine-tuning lever sweep} of \secref{sec:lever_sweep} ---
+takes the resulting full-CARI model and asks whether short, targeted fine-tuning
+can improve it further.
+The two studies share a single logic --- change one thing at a time against a
+matched control --- and together they explain both \emph{why} the model is built
+the way it is and \emph{what} the cheaper alternatives cost.
+
+The ablation isolates the contribution of CARI by comparing
+configurations along two axes: whether the cross-render losses
+($\mathcal{L}_{\text{inv}}$, $\mathcal{L}_{\text{expl}}$) are active, and
+whether the wide RGB colour skip into the albedo head is active
+(\secref{sec:architecture}) — the two components that, per the coupling
+argument in \secref{sec:architecture}, are expected to interact.
+\tabref{tab:ablation} summarises the resulting $2 \times 2$ design, split into
+two parts: Part~1 reports self-consistency (constancy) across illuminant
+conditions on the raw-coloured input — the axis the thesis claims to improve
+— and Part~2 reports accuracy against ground truth, including a white-balanced
+multi-light ARAP accuracy guard. The latter supports the within-study comparison
+but is not used as a reproduced published score.
+All four configurations share the same 19k initialization, data curriculum,
+and 40k training horizon. The two within-architecture comparisons are the
+causal CARI tests: Row~1$\rightarrow$Row~2 toggles cross-render losses with
+the colour skip off, and Row~3$\rightarrow$Row~4 does the same with the
+colour skip on. Changing the colour skip also changes the head parameter set;
+the corresponding fresh-optimizer fallback means cross-skip comparisons are
+descriptive rather than a standalone causal estimate. The table therefore
+separates the clean cross-render result from the observed full-configuration
+trade-off instead of attributing every row difference to one switch.
+
+\begin{table}[t!]
+  \caption{%
+    Ablation isolating the two axes of CARI: cross-render losses and the wide
+    colour-skip connection.
+    All configurations share the same 19k initialization, data curriculum, and
+    40k horizon. Row~1$\rightarrow$Row~2 and Row~3$\rightarrow$Row~4 are the
+    matched cross-render comparisons; colour-skip contrasts are descriptive
+    because the changed head parameter set takes a fresh optimizer path.
+    Part~1 reports self-consistency across illuminants on the raw-coloured
+    input; Part~2 reports accuracy against ground truth, with ARAP under the
+    white-balanced multi-light ARAP subset (marked $\dagger$) as an internal
+    accuracy guard; it is not presented as a reproduced published score.
+    Lower is better on every column except ARAP SSIM; best per column is
+    \textbf{bold} (ties at displayed precision are both bolded).
+    Figure~\ref{fig:ablation} shows the corresponding albedo and the
+    luminance- and chroma-cast CoV heatmaps for each row.
+  }
+  \label{tab:ablation}
+  \centering
+  \textbf{\small Part 1: Constancy (self-consistency across illuminants)}\\[3pt]
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lllcccc@{}}
+    \toprule
+    Row & Cross-render & Colour skip
+        & MID $C_{\text{mat}}$ $\downarrow$
+        & MID $\text{Cast}_{\text{RMS}}$ $\downarrow$
+        & ARAP $C_{\text{arap}}$ $\downarrow$
+        & ARAP $\text{Cast}_{\text{RMS}}$ $\downarrow$ \\
+    \midrule
+    1 & off & off & 0.250 & 0.287 & 0.108 & 0.060 \\
+    2 & on  & off & 0.180 & \textbf{0.268} & \textbf{0.097} & \textbf{0.049} \\
+    3 & off & on  & 0.259 & 0.519 & 0.108 & 0.061 \\
+    4 & on  & on  & \textbf{0.157} & 0.555 & 0.106 & 0.054 \\
+    \bottomrule
+  \end{tabular}}\\[10pt]
+  \textbf{\small Part 2: Accuracy \& structure (against ground truth)}\\[3pt]
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lcccccc@{}}
+    \toprule
+    Row & MAW $\Delta E$ $\downarrow$ & MAW int.$\times$100 $\downarrow$
+        & ARAP LMSE$^\dagger$ $\downarrow$ & ARAP si-RMSE$^\dagger$ $\downarrow$
+        & ARAP SSIM$^\dagger$ $\uparrow$ & IIW WHDR $\downarrow$ \\
+    \midrule
+    1 & 4.434 & 0.409 & 0.028 & 0.229 & 0.843 & 0.334 \\
+    2 & 4.631 & 0.474 & 0.028 & 0.213 & \textbf{0.845} & \textbf{0.283} \\
+    3 & \textbf{4.115} & \textbf{0.395} & 0.026 & 0.221 & 0.842 & 0.327 \\
+    4 & 4.155 & 0.504 & \textbf{0.025} & \textbf{0.209} & \textbf{0.845} & 0.286 \\
+    \bottomrule
+  \end{tabular}}\\[4pt]
+  {\footnotesize $\dagger$ white-balanced multi-light ARAP subset (31 groups);
+  an internal accuracy guard, not a direct reproduction of a published ARAP table.
+  IIW WHDR is ancillary and is not used for model selection.}
+\end{table}
+
+\paragraph{Effect of cross-render losses within each architecture}
+The clean CARI comparisons are Row~1$\rightarrow$Row~2 and
+Row~3$\rightarrow$Row~4. With the colour skip off, cross-render losses improve
+three of the four raw-coloured constancy columns: MID $C_{\text{mat}}$
+falls from 0.250 to 0.180, ARAP $C_{\text{arap}}$ from 0.108 to 0.097,
+and ARAP $\text{Cast}_{\text{RMS}}$ from 0.060 to 0.049. They also improve
+the ancillary IIW WHDR from 0.334 to 0.283, while both MAW measures worsen.
+With the colour skip on, adding cross-render losses produces the strongest
+luminance and structural result: MID $C_{\text{mat}}$ falls from 0.259 to
+0.157 and the white-balanced ARAP guard improves on LMSE (0.026 to 0.025) and
+si-RMSE (0.221 to 0.209). The same comparison worsens MID chroma-cast
+variation (0.519 to 0.555) and both MAW measures. Thus cross-render losses
+reliably improve the luminance-oriented and ARAP-structure axes here, but do
+not remove the chroma-accuracy trade-off introduced by the wide colour path.
+
+\paragraph{Observed colour-skip trade-off}
+Rows that differ in colour skip also differ in optimizer initialization, so
+Rows~1/3 and Rows~2/4 are not used as causal estimates of that architectural
+choice. Descriptively, the colour-skip rows are strongest on absolute MAW
+colour: Row~3 obtains the best $\Delta E$ (4.115) and intensity score
+(0.395). Row~4 is the strongest accuracy-focused full configuration, winning
+MID $C_{\text{mat}}$ and the two white-balanced ARAP error columns, but it
+is the weakest row on MID $\text{Cast}_{\text{RMS}}$ (0.555) and MAW
+intensity (0.504). This is the measured trade-off carried into the subsequent
+fine-tuning study, not a claim that one Table-A row dominates every criterion.
+
+\paragraph{Role of IIW and ARAP in the next study}
+IIW WHDR is a sparse, subjective ordinal measure; it is therefore retained as
+an ancillary column rather than a selection criterion. Its Row~2 result is
+consistent with the real cross-render signal helping ordinal reflectance, but
+does not establish that transfer on its own. ARAP varies less across the four
+rows than MID: $C_{\text{arap}}$ spans 0.097--0.108 and
+$\text{Cast}_{\text{RMS}}$ 0.049--0.061, whereas the corresponding MID
+ranges are 0.157--0.259 and 0.268--0.555. This limited ARAP response motivates
+testing a synthetic cross-render source in the next ablation; it is a
+hypothesis motivated by the measured domain difference, not a conclusion about
+its cause.
+
+\paragraph{Why Row 4 initializes Table B}
+Row~4 is used as the Table-B starting point because it is the complete CARI
+configuration and has the best measured MID luminance constancy and
+white-balanced ARAP error scores among the four rows. This is a practical base
+choice, not an assertion that it wins MAW or chroma-cast stability: those
+weaknesses remain explicit in \tabref{tab:ablation} and are central to the
+next study's ARAP--MAW selection criteria.
+
+\figref{fig:ablation} shows the qualitative effect of each ablation row.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/tableA_40k/ablation_mid.jpg}
+  \caption{%
+    Ablation: the four CARI configurations on one MID scene under three
+    illuminant conditions (L0, L10, L20).
+    Columns: the three input conditions, the pseudo-ground-truth albedo (red
+    box), the three predicted albedos, and two cross-condition variation
+    heatmaps computed across five illuminant conditions (L0--L20 in steps of
+    5, three of which are shown) --- luminance CoV, matching MID
+    $C_{\text{mat}}$, and chroma-cast CoV, matching MID
+    $\text{Cast}_{\text{RMS}}$ ($\sqrt{\mathrm{Var}(R/G) + \mathrm{Var}(B/G)}$
+    across conditions).
+    Rows, top to bottom: no CARI (Row~1), cross-render only (Row~2), colour-skip
+    only (Row~3), and full CARI (Row~4).
+    These are local, single-scene illustrations rather than estimates of the
+    full-split metrics in \tabref{tab:ablation}: the heatmaps expose where the
+    predicted albedo changes with illumination, while the table establishes the
+    dataset-level ranking. In particular, chroma variation is spatially and
+    scene dependent, so the figure is not used to infer the global
+    $\text{Cast}_{\text{RMS}}$ ordering.
+  }
+  \label{fig:ablation}
+\end{figure}
+
+
+\section{Controlled Negative Results}
+\label{sec:negative_results}
+
+Two further studies, run as controlled comparisons rather than as attempts to
+maximise a benchmark score, are reported here precisely because their outcome
+is negative: they rule out a plausible alternative design and an
+over-engineered training lever, and both support the same lesson — the
+disambiguating \emph{signal} (real cross-illuminant pairs) is what does the
+work, not the specific architecture or an elaborate loss built on top of it.
+
+\subsection{An Alternative Shading-First Architecture}
+\label{sec:v20_negative}
+
+An apparently natural alternative to CARI is to make the illuminant estimate
+\emph{explicit} rather than implicit: predict a grey shading intensity field
+and a separate low-resolution illuminant-colour field, then derive the albedo
+\emph{analytically} as $\mathbf{A} = \mathbf{I} / \mathbf{S}$, instead of
+predicting albedo directly and constraining it with CARI.
+We built and trained this shading-first architecture to a comparable training
+budget.
+An initial version collapsed during training (the analytic division leaves the
+absolute scale of the shading an unconstrained free parameter, which a
+component of the loss could exploit to drive shading to zero and albedo to
+white); after a set of stabilising fixes — an explicit absolute-scale anchor,
+a diffuse-reconstruction term gated to avoid re-introducing the same free
+parameter, and a soft-clamped division — the architecture trained stably to
+completion.
+
+A stable shading-first model, however, still loses to our directly-predicted,
+CARI-constrained albedo on every constancy metric we measured, under an
+identical evaluation for both models:
+
+\begin{table}[h!]
+  \caption{%
+    Alternative shading-first architecture versus our directly-predicted,
+    CARI-constrained albedo, evaluated identically for both models on MID and
+    the indoor ARAP groups (11 of which are the coloured-illuminant subset).
+    All columns are constancy or accuracy metrics (lower is better).
+    The alternative architecture loses on every column.
+  }
+  \label{tab:v20_negative}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    & MID $C_{\text{mat}}$ $\downarrow$ & ARAP $C_{\text{arap}}$ $\downarrow$
+    & ARAP $C_{\text{arap}}$ (coloured) $\downarrow$ \\
+    \midrule
+    Alternative (shading-first)     & 0.275 & 0.247 & 0.335 \\
+    \textbf{Ours (direct + CARI)}   & \textbf{0.177} & \textbf{0.123} & \textbf{0.149} \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+The reason is instructive: the analytic division $\mathbf{A} = \mathbf{I}/\mathbf{S}$
+gives shading intensity and shading colour a direct, unconstrained path back
+into the albedo whenever the shading prediction is imperfect, and no amount of
+architectural stabilisation removes that path.
+Directly predicting albedo and constraining it with a cross-illuminant
+invariance loss pins both far more effectively, because the constraint acts on
+the quantity that must stay constant, rather than on an intermediate quantity
+one division step away from it.
+We take this as evidence for the central design choice of this thesis: the
+value is in the cross-illuminant \emph{signal} and how it constrains the
+prediction, not in a more elaborate decomposition head.
+
+\subsection{Fine-Tuning Lever Sweep}
+\label{sec:lever_sweep}
+
+The ablation established that CARI works; this study asks the natural follow-up
+question --- can the full-CARI model be pushed further?
+The idea is targeted fine-tuning: rather than change the architecture, we add one
+extra loss term at a time, each aimed at a specific residual weakness observed
+qualitatively in the full-CARI output (\figref{fig:iiw}, \figref{fig:levers}).
+Two weaknesses stand out: smooth shading ramps that survive in the albedo on
+flat surfaces, and shadow boundaries that leak into the albedo.
+The flatness and shadow-based levers below target exactly these, and the ordinal
+lever targets shading order directly.
+We evaluate five such levers, each fine-tuned from the
+full-CARI base checkpoint (at 50k iterations, \secref{sec:schedule}) for a
+further 10k iterations --- to 60k total --- under the same data mix and
+learning-rate schedule, alongside a zero-lever control fine-tuned for the
+identical 10k iterations.
+The control isolates the effect of the extra training itself, so that each
+lever is measured relative to it rather than to the base — a pre-registered
+no-regression gate keeps a lever only if it does not regress the
+coloured-illuminant constancy metrics or the albedo-accuracy guard by more than
+approximately 10\% relative to the control.
+Writing $\mathbf{A}$ and $\mathbf{S}_d$ for the predicted albedo and diffuse
+shading and $\mathbf{I}$ for the input, the five levers are defined as follows.
+The synthetic relighting used by the shadow-based levers is shown in
+\figref{fig:shadow_aug}. This branch is separate from CARI: CARI's
+$\mathcal{L}_{\text{inv}}$ uses real MID raw pairs, while the shadow branch
+manufactures a second observation on Hypersim and applies only the
+$\mathcal{L}_{\text{sh\_inv}}$ and $\mathcal{L}_{\text{sh\_explain}}$ terms.
+
+\begin{itemize}
+  \item \textbf{Flatness} (\emph{flat}) — a chroma-gated low-frequency
+        albedo-flatness prior. With $\mathbf{A}_{\text{LF}}$ a low-pass of the
+        predicted albedo and $w_c$ a per-pixel gate that is high only where the
+        local chromaticity is uniform (same material),
+        $\mathcal{L}_{\text{flat}} = \sum_p w_c(p)\,\lVert \nabla
+        \mathbf{A}_{\text{LF}}(p) \rVert_1$.
+        It removes smooth shading ramps left in the albedo while the chroma
+        gate preserves genuine material and texture edges.
+  \item \textbf{Shadow-invariance} (\emph{sh\_inv}) — a manufactured-shadow
+        self-supervision. A smooth synthetic relighting field $\sigma$ is cast
+        onto a Hypersim image, and the predicted albedo is required to be
+        invariant to it:
+        $\mathcal{L}_{\text{sh\_inv}} = \lVert \mathbf{A}(\mathbf{I} \odot
+        \sigma) - \mathbf{A}(\mathbf{I}) \rVert_1$.
+  \item \textbf{Flatness + shadow-invariance} (\emph{flat\,+\,sh\_inv}) — both
+        terms active together.
+  \item \textbf{Shadow-invariance + shadow-explain} (\emph{sh\_inv\,+\,sh\_explain})
+        — the shadow term augmented with an explain companion that requires the
+        \emph{shading} to absorb the synthetic change, mirroring the structure
+        of $\mathcal{L}_{\text{expl}}$:
+        $\mathcal{L}_{\text{sh\_explain}} = \lVert \log \mathbf{S}_d(\mathbf{I}
+        \odot \sigma) - \log \mathbf{S}_d(\mathbf{I}) - \log \sigma \rVert_1$.
+  \item \textbf{Ordinal shading} (\emph{ordinal}) — an order-based supervision
+        on the predicted shading against the Hypersim ground-truth shading. For
+        random pixel pairs $(p,q)$ it applies a hinge on the sign of the shading
+        difference, $\sum_{(p,q)} \max\!\big(0,\, m - \operatorname{sign}(
+        S^\star_p - S^\star_q)\,(S_p - S_q)\big)$ with margin $m$, following the
+        ordinal-shading formulation of \mycite{careaga23ordinal}.
+\end{itemize}
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/shadow_aug.jpg}
+  \caption{%
+    Synthetic relighting used by the shadow-based fine-tuning levers.
+    A known multiplicative field is applied to a Hypersim image to manufacture a
+    shadowed or sunlit second observation.
+    $\mathcal{L}_{\text{sh\_inv}}$ requires the albedo to stay invariant under
+    this manufactured relighting, while $\mathcal{L}_{\text{sh\_explain}}$
+    requires the predicted shading to absorb the known field.
+    These losses are distinct from CARI's real-pair invariance loss.
+  }
+  \label{fig:shadow_aug}
+\end{figure}
+
+\tabref{tab:lever_sweep} reports the sweep and \figref{fig:levers} shows the
+resulting albedo for each lever: two levers pass the gate cleanly, one is mixed,
+and two fail on every axis.
+
+\begin{table}[h!]
+  \caption{%
+    Fine-tuning lever sweep versus a zero-lever control fine-tuned under the
+    identical matched-schedule recipe. All columns are lower-is-better;
+    ``(fail)'' marks a regression beyond the pre-registered no-regression gate.
+  }
+  \label{tab:lever_sweep}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Fine-tuning lever & ARAP $C_{\text{arap}}$ (coloured) $\downarrow$ & MID $C_{\text{mat}}$ $\downarrow$
+    & IIW WHDR $\downarrow$ \\
+    \midrule
+    Zero-lever control              & - & - & - \\
+    flat                            & - & - & - \\
+    sh\_inv                         & - & - & - \\
+    flat + sh\_inv                  & - & - & - \\
+    sh\_inv + sh\_explain           & - & - & - \\
+    ordinal                         & - & - & - \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+Each lever is read against the zero-lever control rather than against the base
+checkpoint, isolating the effect of the extra loss term from the effect of the
+extra fine-tuning steps themselves.
+The pre-registered gate (\secref{sec:lever_sweep}, above) keeps a lever only if
+it does not regress the coloured-illuminant constancy metrics or the
+albedo-accuracy guard by more than approximately 10\% relative to the control;
+\figref{fig:levers} shows the predicted albedo for every row so the gate
+outcome can be read qualitatively alongside the table.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/legacy_draft25/levers.jpg}
+  \caption{%
+    Predicted albedo of each fine-tuning lever, shown on one scene from each of
+    three benchmarks (MID, MAW, IIW; one per row).
+    The first column is the reference: the ground-truth albedo (red box) for MID
+    and MAW, and the input photograph for IIW.
+    The passing levers (\emph{flat}, \emph{flat\,+\,sh\_inv}) keep material
+    colour and contrast across all three; the failing levers
+    (\emph{sh\_inv\,+\,sh\_explain}, \emph{ordinal}) produce a flatter,
+    over-desaturated albedo.
+  }
+  \label{fig:levers}
+\end{figure}
