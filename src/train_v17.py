@@ -30,13 +30,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from models import (
-    IntrinsicDecompositionV12,
-    IntrinsicDecompositionV16,
-    IntrinsicDecompositionV17,
-    IntrinsicDecompositionV17Refiner,
-    IntrinsicDecompositionV20,
-)
+from models import IntrinsicDecompositionV17
 from models.ccr_utils import compute_ccr
 from models.iid_utils import invert, iuv_to_rgb, rgb_to_iuv
 from losses.flexible_loss_v17 import V17Loss
@@ -1497,11 +1491,7 @@ def build_stage1_model(config):
     }
 
     model_map = {
-        12.0: IntrinsicDecompositionV12,
-        16.0: IntrinsicDecompositionV16,
         17.0: IntrinsicDecompositionV17,
-        17.27: IntrinsicDecompositionV17Refiner,
-        20.0: IntrinsicDecompositionV20,
     }
 
     if version not in model_map:

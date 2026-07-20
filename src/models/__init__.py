@@ -1,14 +1,9 @@
-"""Model package exports."""
-from .v12 import IntrinsicDecompositionV12
-from .v16 import IntrinsicDecompositionV16
-from .v17 import IntrinsicDecompositionV17
-from .v17_refiner import IntrinsicDecompositionV17Refiner
-from .v20 import IntrinsicDecompositionV20
+"""Model package exports.
 
-__all__ = [
-    "IntrinsicDecompositionV12",
-    "IntrinsicDecompositionV16",
-    "IntrinsicDecompositionV17",
-    "IntrinsicDecompositionV17Refiner",
-    "IntrinsicDecompositionV20",
-]
+V17 is the architecture reported in the thesis (frozen DINOv2-L encoder + DPT
+trunk). Superseded versions (V12, V16, V17-Refiner, V18-PGID, V20) were removed
+during cleanup; they remain in git history if ever needed.
+"""
+from .v17 import IntrinsicDecompositionV17
+
+__all__ = ["IntrinsicDecompositionV17"]

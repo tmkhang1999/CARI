@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
-from src.models import IntrinsicDecompositionV17, IntrinsicDecompositionV17Refiner, IntrinsicDecompositionV20
+from src.models import IntrinsicDecompositionV17
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 
 _MARIGOLD_PATH = ROOT / 'documents/references/marigold'
@@ -82,12 +82,7 @@ def load_v17(ckpt_path, device):
     version_value = float(model_cfg.get('version', 17))
     version = int(version_value)
 
-    if version == 20:
-        model = IntrinsicDecompositionV20(model_cfg).to(device)
-    elif abs(version_value - 17.27) < 1e-6:
-        model = IntrinsicDecompositionV17Refiner(model_cfg).to(device)
-    else:
-        model = IntrinsicDecompositionV17(model_cfg).to(device)
+    model = IntrinsicDecompositionV17(model_cfg).to(device)
 
     ms = state.get('model_state_dict', state.get('model', {}))
     own = model.state_dict()

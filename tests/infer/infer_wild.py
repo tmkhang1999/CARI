@@ -15,13 +15,7 @@ sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
 sys.path.insert(0, str(ROOT_DIR / "tests" / "viz"))   # visualize_hdf5 moved here
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from src.models import (
-    IntrinsicDecompositionV12,
-    IntrinsicDecompositionV16,
-    IntrinsicDecompositionV17,
-    IntrinsicDecompositionV17Refiner,
-    IntrinsicDecompositionV20,
-)
+from src.models import IntrinsicDecompositionV17
 try:
     from tests.viz.visualize_hdf5 import NYU40_COLORS, NYU40_NAMES   # moved into tests/viz/
 except ImportError:
@@ -394,18 +388,10 @@ def _infer_model_version(config: dict, checkpoint_path: str, model_version: str)
 def _build_model(model_config: dict, version: str, device: str):
     v = str(version).strip().lower()
     cfg_v = str(model_config.get("version", "")).strip().lower()
-    if v in ["20", "20.0"]:
-        return IntrinsicDecompositionV20(model_config).to(device)
-    if v in ["17.27", "17_27"] or cfg_v in ["17.27", "17_27"]:
-        return IntrinsicDecompositionV17Refiner(model_config).to(device)
-    if v in ["17", "17.0"]:
+    if v in ["17", "17.0"] or cfg_v in ["17", "17.0"]:
         return IntrinsicDecompositionV17(model_config).to(device)
-    if v in ["16", "16.0"]:
-        return IntrinsicDecompositionV16(model_config).to(device)
-    if v in ["12", "12.0"]:
-        return IntrinsicDecompositionV12(model_config).to(device)
     raise ValueError(f"_build_model: unsupported model version {version!r} "
-                     f"(have V12/V16/V17/V17.27/V20)")
+                     f"(only V17 is retained; see git history for V12/V16/V17.27/V20)")
 
 
 # ====================================================================

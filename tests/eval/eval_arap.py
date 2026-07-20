@@ -43,8 +43,7 @@ from infer_wild import (  # noqa: E402
 )
 from src.models.ccr_utils import compute_ccr
 from src.models.iid_utils import uninvert, iuv_to_rgb
-from src.models import IntrinsicDecompositionV17, IntrinsicDecompositionV17Refiner, IntrinsicDecompositionV20
-from src.models.v18_pgid import V18PGID
+from src.models import IntrinsicDecompositionV17
 from src.train import (  # noqa: E402
     _compute_lmse, _masked_scale_invariant_rmse,
     _compute_ssim_bounded, _compute_shading_ssim,
@@ -99,21 +98,7 @@ def _load_model_versioned(checkpoint, version, device):
     # Determine version
     inferred = _infer_model_version(config, checkpoint, version)
 
-    if inferred == '20' or inferred == 20:
-        model = IntrinsicDecompositionV20(model_cfg).to(device)
-    elif inferred in ('18', 18):
-        model_config = dict(model_cfg)
-        model_config.setdefault('sd_pretrained', 'Manojb/stable-diffusion-2-1-base')
-        model_config.setdefault('cross_attn_dim', 1024)
-        model_config.setdefault('null_seq_len', 77)
-        model_config.setdefault('num_seg_classes', 41)
-        model_config.setdefault('input_size', 384)
-        model = V18PGID(model_config).to(device)
-    elif str(inferred) in ('17.27', '17_27') or abs(float(model_cfg.get('version', 0.0)) - 17.27) < 1e-6:
-        model = IntrinsicDecompositionV17Refiner(model_cfg).to(device)
-    elif inferred in ('17', 17):
-        model = IntrinsicDecompositionV17(model_cfg).to(device)
-    elif inferred == 'auto' or model_cfg.get('backbone') == 'convnextv2_base':
+    if inferred == 'auto' or model_cfg.get('backbone') == 'convnextv2_base':
         model = _build_model(model_cfg, inferred, device)
     else:
         model = IntrinsicDecompositionV17(model_cfg).to(device)

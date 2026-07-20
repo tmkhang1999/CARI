@@ -27,7 +27,7 @@ MAW_CODE = ROOT_DIR / 'tests/testing_data/MAW/code'
 sys.path.insert(0, str(MAW_CODE))
 from numerical_albedo import AlbedoEvaluator  # noqa: E402
 
-from src.models import IntrinsicDecompositionV17, IntrinsicDecompositionV17Refiner, IntrinsicDecompositionV20
+from src.models import IntrinsicDecompositionV17
 from src.data.shared_transforms import tonemap_linear
 from crefnet_adapter import load_crefnet, run_crefnet
 from ordinal_adapter import load_ordinal, run_ordinal
@@ -66,12 +66,7 @@ def _load_model_v17(checkpoint, device):
     version_value = float(model_cfg.get('version', 17))
     version = int(version_value)
 
-    if version == 20:
-        model = IntrinsicDecompositionV20(model_cfg).to(device)
-    elif abs(version_value - 17.27) < 1e-6:
-        model = IntrinsicDecompositionV17Refiner(model_cfg).to(device)
-    else:
-        model = IntrinsicDecompositionV17(model_cfg).to(device)
+    model = IntrinsicDecompositionV17(model_cfg).to(device)
 
     sd = ckpt.get('model_state_dict', ckpt.get('model', {}))
     own = model.state_dict()
