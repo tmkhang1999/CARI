@@ -1,41 +1,94 @@
-# Byte-compiled / optimized / DLL files
+# ============================================================
+#  IR-IID — Coloured Illumination Constancy in IID (CARI)
+#  Rule of thumb: commit SOURCE that reproduces the thesis;
+#  ignore DATA, WEIGHTS, RENDERS and BUILD ARTIFACTS.
+# ============================================================
+
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments
+# ---------- Virtual environments ----------
 .env
 .venv
 env/
 venv/
 ENV/
 
-# Distribution / packaging
+# ---------- Distribution / packaging ----------
 .build/
 build/
 dist/
 .eggs/
 *.egg-info/
 
-# IDEs and editors
+# ---------- IDEs and editors ----------
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Python cache and logs
-*.log
-*.out
-
-# Data / artifacts
+# ---------- Heavy artifacts: weights, runs, renders ----------
 checkpoints/
 outputs/
 logs/
 fig/
-documents/references
-preprocessor/infer_m2f_ins.py
-preprocessor/inputs
-preprocessor/outputs
-tests/visualizations
-tests/testing_data
-tests/realistic_samples
+
+# ---------- Datasets & third-party corpora ----------
+tests/testing_data/
+tests/visualizations/
+tests/realistic_samples/
+# Upstream MID Intrinsics clone (carries its own .git) — not our source
+src/data/MIDIntrinsics/
+
+# ---------- Local renderer toolchain (1.6 GB Blender binary) ----------
+tools/
+tests/viz/3dfront_iid_pair*/
+
+# ---------- Preprocessor scratch I/O ----------
+preprocessor/inputs/
+preprocessor/outputs/
+preprocessor/.env
+
+# ============================================================
+#  documents/ — the thesis IS tracked. Only ignore bulk & builds.
+# ============================================================
+
+# Third-party reference papers (581 MB)
+documents/references/
+
+# Third-party PDF that is not part of this report (57 MB)
+documents/thesis/Mesh Reconstruction via Differentiable Rendering Pipelines.pdf
+
+# ---------- LaTeX build artifacts ----------
+*.aux
+*.bbl
+*.blg
+*.brf
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.mw
+*.mw.mw
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.toc
+
+# Compiled thesis PDF: rebuildable from source, 14 MB per revision.
+# Comment this line out to archive the final submitted version.
+documents/thesis/Main.pdf
+
+# 3D-FRONT smoke-test scene assets (third-party .glb, 12 MB)
+tests/viz/front3d_smoke_glbs/
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/**/*.tmp.*

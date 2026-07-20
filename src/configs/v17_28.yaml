@@ -1,0 +1,85 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.28 — FRONT3D PROBE: B_combo recipe (v17_23) + 3D-FRONT synthetic cross-illuminant
+# pairs, continued 70k→80k.
+#
+# STATUS 2026-07-09: SUPERSEDED — DO NOT LAUNCH. Its resume lineage (v17_23@70k) descends
+# from the pre-fix base whose CARI never fired; Table B is rebuilt from the genuine-CARI
+# v17_44@40k instead, and the front3d question is answered directly by v17_29/v17_33.
+#
+# ROLE (run 1 of the front3d plan, panel doc §10): a FAST directional read on whether the
+# 3D-FRONT dataset (scripts/render_3dfront_dataset.py → Front3DDataset, GT albedo + K
+# same-camera renders under randomized colored keys, m_invariant=1) helps before spending
+# a full from-50k retrain. Read against TWO step-matched controls resumed from the SAME
+# v17_23@70k checkpoint:
+#   • v17_23 70k→80k  (no front3d, no RGF)      — isolates the front3d delta
+#   • v17_27 70k→80k  (RGF θ=0.17)              — the competing lever
+# DECISION RULE: front3d graduates to the Table-B rows (v17_29 / v17_33) only if this probe
+# beats the v17_23@80k control on the constancy axes (MID C_mat, ARAP C_arap/Cast_RMS,
+# MAW ΔE) without losing the guards (albedo si-RMSE, IIW WHDR within ~10%).
+#
+# PREREQUISITES — do not launch before BOTH hold:
+#   1. The full 3D-FRONT-TEST-SCENE render is finished (997 rooms, ~2.5k views) and
+#      `render_3dfront_dataset.py --out ../datasets/front3d_iid --revalidate` has run once.
+#      A probe on a partial corpus (~100 views) just memorizes those rooms.
+#   2. The controls were (re)started AFTER the train_v17.py loader fix that forwards
+#      use_mid_paired/mid_raw_color_pair (2026-07-07). Runs launched before it trained with
+#      MID cross-render pairs silently OFF; mixing pre-fix controls with post-fix rows
+#      confounds the front3d delta with the MID-pair fix.
+#
+# MIX 0.30/0.30/0.15/0.25 (revised from 0.35/0.30/0.20/0.10, 2026-07-07): front3d is the
+# ONLY dataset that trains the literal thesis axis with clean supervision (same camera,
+# enforced illuminant-color gap, TRUE albedo GT — MID pairs are real but pseudo-GT;
+# hyp/IV are true-GT but single mostly-neutral illuminant), so it should not be the
+# smallest slice. At 0.25/bs4 → 1 front3d sample per step ≈ 8 epochs of the ~2.5k-view
+# test-scene corpus over a 20k-step row (fine with random crops; corpus is mixed-K:
+# rooms rendered before 2026-07-07 have 1 lighting pair per view, later ones K=3 → 3
+# pairs — Front3DDataset random.samples 2 of K per epoch, so higher-K views repeat less).
+# CARI-pair batches (mid+front3d) = 0.55 of training. iv floor 0.15, NOT zero: dropping
+# iv to 0 was the prime suspect for the 60k MAW ΔE / IIW drift (Table-B post-mortem);
+# front3d now covers part of iv's synthetic-GT-diversity role, but our 64-sample Cycles
+# renders are far less photoreal than iv — so watch the MAW ΔE / IIW WHDR guards on this
+# probe, not just the constancy axes; if they drift, retreat front3d toward 0.10-0.15.
+#
+# RESUME semantics: skip_optimizer/reset_lr false/false — identical to how the v17_23
+# control continues from its own 70k checkpoint (warm Adam moments already at constant
+# 2e-5 from the Table-B recipe). This differs from the from-50k rows (v17_29/v17_33),
+# which need true/true because the shipped base@50k optimizer carries the annealed 1e-7.
+#
+# RUN (after the v17_23 control has reached 80k, so the GPU is free):
+#   bash scripts/train.sh --version 17.28 --cuda 0 \
+#       --resume checkpoints/v17_23/checkpoint_iter_70000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  reset_lr: false
+  skip_optimizer: false
+
+  extend_iterations: 80000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=70k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one.
+  # CRITICAL: this mix includes front3d; without moving it here (the old phase1_iterations:999999
+  # sentinel no longer suppresses the switch), the run would inherit v17.yaml's phase3 mix at
+  # step>=25k and silently train with ZERO front3d.
+  sampling_weights_phase3:
+    hypersim: 0.30
+    midintrinsic: 0.30
+    interiorverse: 0.15
+    front3d: 0.25
+
+data:
+  front3d_root: '../datasets/front3d_iid'
+
+loss:
+  # B_combo levers, verbatim from v17_23 — this row changes ONLY the data mix.
+  lambda_alb_flat_lf: 4.0
+  alb_flat_lf_down: 8
+  alb_flat_lf_chroma_gate: 2.0
+  lambda_shadow_inv: 1.0
+  lambda_shadow_explain: 0.0
+  shadow_start_iter: 0

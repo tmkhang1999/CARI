@@ -1,0 +1,55 @@
+# ================================================================================
+# V17.27 — TABLE-B COMBO + RGF-MSG.
+#
+# Fair Table-B row: start from the same full-CARI 50k base as the other v17_2*
+# ablations, then train the B_combo objective with one extra advice-4 lever:
+# CRefNet-style reflectance-gradient filtering in the albedo MSG term.
+#
+# The experiment ID remains v17_27, but the actual model is normal V17, not the
+# failed frozen-refiner architecture. The command-line --version 17.27 controls
+# checkpoint/log folders; model.version: 17 controls the instantiated network.
+#
+# RUN:
+#   bash scripts/train.sh --version 17.27 --cuda 1 \
+#       --resume checkpoints/v17_23/checkpoint_iter_70000.pth
+#
+# TABLE-B comparison target:
+#   v17_23: B_combo                         v17_23 70k -> 80k
+#   v17_27: B_combo + RGF-MSG threshold     v17_23 70k -> 80k
+#
+# Important eval note: use --model_version auto for these new v17_27 checkpoints.
+# Passing --model_version 17.27 manually is reserved for old refiner checkpoints in
+# some eval helpers.
+# ================================================================================
+extends: "17_23"
+
+model:
+  version: 17
+
+train:
+  # Match v17_23/Table-B recipe; the only intended variable is the RGF-MSG knob below.
+  lr: 2.0e-5
+  use_cosine_lr: false
+  reset_lr: false
+  skip_optimizer: false
+
+  # full-CARI 50k -> 80k.
+  extend_iterations: 80000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+loss:
+  # B_combo, repeated explicitly for readability even though extends: 17_23
+  # already provides the same values.
+
+  # lambda_alb_flat_lf: 4.0
+  # alb_flat_lf_down: 8
+  # alb_flat_lf_chroma_gate: 2.0
+
+  # lambda_shadow_inv: 1.0
+  # lambda_shadow_explain: 0.0
+  # shadow_start_iter: 0
+
+  # Advice-4 add-on: RGF threshold in Farid/Sobel-equivalent gradient units
+  # on [0,1] albedo. 0.005 is conservative; if too weak, try 0.01 next.
+  albedo_msg_target_grad_threshold: 0.2

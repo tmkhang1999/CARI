@@ -1,0 +1,64 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.44 — TABLE-A ROW 4, THE GENUINE FULL-CARI RETRAIN (post wiring-fix), 19k → 50k.
+#
+# This REPLACES the old checkpoints/v17_44/checkpoint_iter_50000.pth (Jun 16), which was
+# LABELLED "full CARI" but — because of two independent wiring bugs — trained with the
+# cross-render losses NEVER firing. This config is the first v17 run that actually trains
+# L_inv / L_explain on real MID raw pairs. It is BOTH Table-A row 4 AND the base for the
+# Table-B ladder (→ "Ours" that faces SOTA), so it must be honest.
+#
+#                       cross-render OFF      cross-render ON
+#   color-path OFF        v17_41                (dropped: v17_42)
+#   color-path ON         v17_43                v17_44  ← THIS (the only cell that ships)
+#
+# The load-bearing ablation is v17_44 vs v17_43 (cross-render on/off, color path on). See the
+# CONTROL CAVEAT below before treating v17_43 as that control.
+#
+# ── TWO overrides vs v17.yaml (everything else — CARI lambdas 0.5/0.25, a_chroma 0.2, wide
+#    color path, MID raw pairs — is INHERITED and already ON in v17.yaml) ──
+#
+#  1. ARCH + OPTIMIZER: albedo_rgb_skip=true → 449-param head (builds skip_enc). We resume the
+#     443-param v17_old/19k bank → load_checkpoint uses strict=False (train_v17.py) so the 6
+#     skip_enc params cold-start and train up over 19k→50k. The saved Adam moments don't cover
+#     them, so skip_optimizer=true is REQUIRED (else a param-group size mismatch). Identical to
+#     v17_43's handling — the two share the exact 0–19k trunk and fork cleanly at 19k.
+#
+#  2. PHASE / MIX (fixed in train_v17.py): the trainer now chooses the initial loader from
+#     the resumed step and switches at both phase1_iterations and phase2_iterations. A 19k
+#     resume therefore runs phase2 until 25k, then phase3 (hyp 0.4 / mid 0.3 / iv 0.3)
+#     through 50k. No phase1_iterations=999999 workaround is needed for clean Table A.
+#
+# FRONT-3D is deliberately NOT here: it is CARI mechanism (rendered colored relight pairs) but
+# is not rendered yet, and this run is the critical path. Front-3D enters as the TOP RUNG of the
+# Table-B ladder (combo + RGF + front3d = the final "Ours"), giving a clean with/without-front3d
+# ablation without blocking this base retrain.
+#
+# CONTROL: after the phase fix, v17_43 and v17_44 can be rerun from the same 19k fork
+# with the same data schedule. Then 43→44 is the clean color-path-on, cross-render-off/on
+# comparison.
+#
+# PRE-RUN (preserve the old pairs-off base — it is the ancestor of the reused Table-B rows):
+#   mv checkpoints/v17_44/checkpoint_iter_50000.pth \
+#      checkpoints/v17_44/prefix_nopairs_iter_50000.pth
+#
+# RUN (saves to checkpoints/v17_44/, resumes the 19k baseline bank — same source as v17_41/43):
+#   bash scripts/train.sh --version 17.44 --cuda 0 \
+#       --resume checkpoints/v17_old/checkpoint_iter_19000.pth
+#
+# VERIFY (first ~1h): TB `1. Losses/CARI_L_inv` must be NONZERO (pairs firing) and the run must
+# print phase2 at 19k, then switch to phase3 at 25k with MID pairs firing. Note steps/h.
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  # Arch grew vs the 19k ckpt (skip_enc cold-starts) → fresh Adam. Mirrors v17_43.
+  skip_optimizer: false
+
+  # lr 2.0e-4 cosine, reset_lr:false, extend_iterations:50000, and the
+  # resume-safe 15k/25k/50k phase schedule are inherited from v17.
+
+# loss / model / data: ALL inherited from v17.yaml with cross-render ON —
+#   lambda_alb_invariance 0.5, lambda_explain 0.25, lambda_a_chroma 0.2, albedo_rgb_skip true,
+#   use_mid_paired true, mid_pair_mode raw, mid_raw_color_pair true.
+# Nothing to override here: v17.yaml IS the full-CARI recipe; the bug was in the trainer, now fixed.
+

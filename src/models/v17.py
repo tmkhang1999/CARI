@@ -1,172 +1,191 @@
-"""V17: Parallel Joint Factorization with Specular Residual.
+"""V17 — Depth-Anything-for-IID: frozen DINOv2-L backbone + DPT + physics-typed skips.
 
-Architecture:
-  - Base: ConvNeXt-V2 (Base)
-  - Bottleneck: Task-specific 1x1 projections from shared z_global
-  - Prior Injection: SPADE-style (PhysicalPriorInjector with GroupNorm)
-  - Dec A (Albedo): 3-channel, CCR + Segmentation priors, sigmoid activation
-  - Dec S (Diffuse Shading): 3-channel, Normal priors, softplus activation
-  - Dec R (Specular Residual): 3-channel, Normal priors, linear activation
-  - Equation: I = A * S_d + R
+Replaces the old ConvNeXt parallel-head / derive-albedo design. The thesis:
 
-Design rationale:
-  - Parallel execution prevents cascade error propagation
-  - Specular residual absorbs non-Lambertian effects (highlights, glass, metal)
-  - Reconstruction loss L1(A*S+R, I) couples the heads via physics, not attention
-  - CTAB (Gemini plan) is not used: the reconstruction loss provides stronger
-    coupling than attention over 3 tokens, at lower computational cost
-  - No frequency-aware skip adapter: MSG p=2 on shading loss already provides
-    the smoothness prior; architectural filtering removes useful edge info
+  Intrinsic decomposition fails on real photos for two reasons — a domain-shifted
+  ImageNet backbone, and an A=I/S division that explodes where shading is small
+  (the black/blue blobs at ckpt 4000). Both are fixed by reading from a frozen
+  DINOv2 backbone whose patch tokens are illumination-INVARIANT: a shadowed and a
+  lit patch of the same material map to similar tokens, so a DPT decoder emits the
+  SAME albedo across a shadow boundary. Shadow removal becomes a feature property,
+  not a generative act (the Depth-Anything recipe applied to IID).
+
+Physics-typed input skips (OFF by default — kept only as an ablation lever):
+  An earlier hypothesis re-injected image-derived color to fight DINOv2's
+  color-invariance desaturation: chromaticity c(I)=I/(R+G+B)→albedo, luminance
+  L(I)→shading. Dropped as a default (see `albedo_chroma_skip`/`shading_lum_skip`,
+  both false) for three reasons:
+    (1) the typing was asymmetric — the shading head is 3-ch (COLORED) yet got only a
+        1-ch luminance skip, while albedo got the colored chroma skip → color hint fed
+        to the wrong head;
+    (2) c(I) cancels only WHITE shading, so colored illumination / clipping leaks the
+        illuminant straight into albedo (a desaturation FIX that becomes a color-leak);
+    (3) the model already models colored illumination — S_d is 3-ch and the recon
+        target A·S_d carries illuminant color, so a hand-crafted color skip adds no
+        capability, only a white-light failure mode.
+  Real-image desaturation is a training-SIGNAL gap (DINOv2 discards absolute color and
+  synthetic recon can't correct it on real photos) → addressed by a real-image signal
+  (planned Phase-3 MLLM judge), not a 2D input prior. The skip code is retained so the
+  ablation "with vs. without typed skips" can be run from config.
+
+Pipeline:
+  I → DINOv2-L/14 (frozen) → 4 intermediate maps → DPT reassemble+fusion + a conv
+  detail stem → shared trunk F. Albedo head → A; shading head → π=1/(S_d+1)
+  (3-ch colored shading). Residual ANALYTIC: R=(I−A·S_d)₊. I = A·S_d + R.
+
+Trained with V17Loss in `diffuse` mode (albedo MSE+MSG+DSSIM, SSI shading, two-sided
+diffuse reconstruction A·S_d) on clean synthetic data. No derive_albedo, no chroma_wb,
+no CCR-as-feature, no residual decoder, no external geometry/semantic prior.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .encoders.image_encoder import ImageEncoder
-from .encoders.prior_encoder import PriorEncoder
-from .decoders.modern_decoder import ModernProgressiveDecoder
-from .modules.prior_injector import PhysicalPriorInjector
-from .ccr_utils import compute_ccr
+from .encoders.dino_encoder import DINOv2Encoder
+from .decoders.dpt_decoder import DPTTrunk, _gn
+
+
+def image_chromaticity(rgb: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
+    """c(I) = I / (R+G+B). In LINEAR RGB this cancels scalar (white) shading, so a
+    shadow boundary vanishes — it carries material color, not shadow-intensity edges."""
+    rgb = rgb.clamp(0.0, 1.0)
+    s = rgb.sum(dim=1, keepdim=True) + eps
+    return rgb / s                                    # (B, 3, H, W), channels ~sum to 1
+
+
+def image_luminance(rgb: torch.Tensor) -> torch.Tensor:
+    """L(I) = 0.299R + 0.587G + 0.114B — the intensity / shading-carrying channel."""
+    rgb = rgb.clamp(0.0, 1.0)
+    return 0.299 * rgb[:, 0:1] + 0.587 * rgb[:, 1:2] + 0.114 * rgb[:, 2:3]   # (B,1,H,W)
+
+
+class DecodeHead(nn.Module):
+    """Shared trunk (/2) + optional full-res input-derived skip → full-res raw output.
+
+    Two 3×3 convs at /2 (cheap), bilinear upsample to full res, then — if a typed skip
+    is given — concat a small conv encoding of it (chromaticity for albedo, luminance
+    for shading) at full res, one 3×3 refine, and a 1×1 projection. Returns raw logits.
+    """
+    def __init__(self, in_ch: int, mid: int = 64, out_ch: int = 3, skip_ch: int = 0,
+                 skip_feat: int = 32):
+        super().__init__()
+        self.skip_ch = int(skip_ch)
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, mid, 3, padding=1, bias=False), _gn(mid), nn.ReLU(inplace=True),
+            nn.Conv2d(mid, mid, 3, padding=1, bias=False), _gn(mid), nn.ReLU(inplace=True),
+        )
+        refine_in = mid
+        if self.skip_ch > 0:
+            self.skip_enc = nn.Sequential(
+                nn.Conv2d(self.skip_ch, skip_feat, 3, padding=1, bias=False), _gn(skip_feat), nn.ReLU(inplace=True),
+                nn.Conv2d(skip_feat, skip_feat, 3, padding=1, bias=False), _gn(skip_feat), nn.ReLU(inplace=True),
+            )
+            refine_in = mid + skip_feat
+        self.refine = nn.Sequential(
+            nn.Conv2d(refine_in, mid, 3, padding=1, bias=False), _gn(mid), nn.ReLU(inplace=True),
+        )
+        self.out = nn.Conv2d(mid, out_ch, kernel_size=1)
+
+    def forward(self, feat, out_size, skip=None):
+        x = self.block(feat)
+        x = F.interpolate(x, size=out_size, mode='bilinear', align_corners=False)
+        if self.skip_ch > 0 and skip is not None:
+            if skip.shape[-2:] != x.shape[-2:]:
+                skip = F.interpolate(skip, size=x.shape[-2:], mode='bilinear', align_corners=False)
+            x = torch.cat([x, self.skip_enc(skip)], dim=1)
+        x = self.refine(x)
+        return self.out(x)
 
 
 class IntrinsicDecompositionV17(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        z_channels = config.get('z_channels', 1024)
-        freeze_stages = config.get('freeze_stages', [1, 2])
-        model_name = config.get(
-            'backbone', config.get('model_name', 'convnextv2_base')
+        self.pi_floor = float(config.get('pi_floor', 5e-3))
+        # Physics-typed input skips (default on; gated for ablation)
+        self.use_chroma_skip = bool(config.get('albedo_chroma_skip', True))
+        self.use_lum_skip = bool(config.get('shading_lum_skip', True))
+        # RGB-skip into albedo head only (A2 fix for desaturation):
+        # passes gamma-encoded raw RGB directly to the albedo DecodeHead at full resolution.
+        # Wider color path than the 64-ch DetailStem → helps high-chroma prediction.
+        # MUST be paired with L_inv; without cross-render loss the illuminant color
+        # leaks back into albedo (see V19_CARI_design.md §3.1 A2).
+        self.use_rgb_skip = bool(config.get('albedo_rgb_skip', False))
+
+        # ── Frozen DINOv2 backbone ──────────────────────────────────────────
+        self.encoder = DINOv2Encoder(
+            variant=config.get('dino_variant', 'large'),
+            pretrained=bool(config.get('dino_pretrained', True)),
         )
-        pretrained = config.get('pretrained', True)
-        num_seg_classes = int(config.get('num_seg_classes', 41))
-        self.max_residual = float(config.get('max_residual', 5.0))
+        dino_dim = self.encoder.embed_dim
 
-        # Shared backbone
-        self.image_encoder = ImageEncoder(
-            model_name=model_name,
-            freeze_stages=freeze_stages,
-            pretrained=pretrained,
+        # ── DPT decoder (reassemble + fusion + detail stem) ─────────────────
+        self.trunk = DPTTrunk(
+            in_dim=dino_dim,
+            feat_ch=int(config.get('dpt_feat_ch', 256)),
+            fusion_ch=int(config.get('dpt_fusion_ch', 128)),
+            out_ch=int(config.get('dpt_out_ch', 128)),
+            detail_ch=int(config.get('detail_ch', 48)),
         )
-        skip_channels = self.image_encoder.feature_channels
+        trunk_ch = self.trunk.out_channels
 
-        # Prior encoders (shared across decoders)
-        self.ccr_encoder = PriorEncoder(
-            in_channels=6, channels=(64, 128, 256, 512), full_res_stage=True
-        )
-        self.normal_encoder = PriorEncoder(
-            in_channels=3, channels=(64, 128, 256, 512), full_res_stage=False
-        )
+        # ── Heads (albedo + π-shading) with physics-typed full-res skips ────
+        head_mid = int(config.get('head_mid', 64))
+        # albedo_rgb_skip takes precedence over albedo_chroma_skip: if both are set,
+        # rgb_skip wins (wider 3-ch raw RGB path instead of normalised chromaticity).
+        alb_skip_ch = 0
+        if self.use_rgb_skip:
+            alb_skip_ch = 3     # raw gamma-encoded RGB — full color capacity
+        elif self.use_chroma_skip:
+            alb_skip_ch = 3     # normalised chromaticity (legacy)
+        self.albedo_head = DecodeHead(
+            trunk_ch, mid=head_mid, out_ch=3, skip_ch=alb_skip_ch)
+        self.shading_head = DecodeHead(
+            trunk_ch, mid=head_mid, out_ch=3, skip_ch=1 if self.use_lum_skip else 0)
 
-        # Task-specific bottleneck projections.
-        # Lightweight 1x1 conv gives each decoder its own "view" of z_global.
-        # The reconstruction loss provides cross-task coupling.
-        self.proj_albedo = nn.Conv2d(z_channels, z_channels, 1)
-        self.proj_shading = nn.Conv2d(z_channels, z_channels, 1)
-        self.proj_residual = nn.Conv2d(z_channels, z_channels, 1)
+    def forward(self, rgb, **kwargs):
+        B, C, H, W = rgb.shape
 
-        # Initialize projections near identity (small perturbation)
-        for proj in [self.proj_albedo, self.proj_shading, self.proj_residual]:
-            nn.init.eye_(proj.weight.view(z_channels, z_channels))
-            nn.init.zeros_(proj.bias)
+        # Frozen DINOv2 features (illumination-invariant material tokens)
+        dino_feats, dino_tokens, dino_patch_hw = self.encoder(rgb)
 
-        # Albedo decoder: CCR + Seg priors, sigmoid output [0, 1]
-        self.decoder_albedo = ModernProgressiveDecoder(
-            z_channels, skip_channels, out_channels=3, activation='sigmoid'
-        )
-        self.spade_albedo3 = PhysicalPriorInjector(
-            768, 512, use_seg=True, num_seg_classes=num_seg_classes, normalize=False
-        )
-        self.spade_albedo2 = PhysicalPriorInjector(
-            384, 256, use_seg=True, num_seg_classes=num_seg_classes, normalize=False
-        )
-        self.spade_albedo1 = PhysicalPriorInjector(
-            192, 128, use_seg=True, num_seg_classes=num_seg_classes, normalize=False
-        )
+        # Shared DPT trunk at /2
+        f_trunk = self.trunk(dino_feats, rgb, (H, W))
 
-        # Shading decoder: Normal priors, softplus output (non-negative, unbounded)
-        self.decoder_shading = ModernProgressiveDecoder(
-            z_channels, skip_channels, out_channels=3, activation='softplus'
-        )
-        self.spade_shading3 = PhysicalPriorInjector(768, 512)
-        self.spade_shading2 = PhysicalPriorInjector(384, 256)
-        self.spade_shading1 = PhysicalPriorInjector(192, 128)
+        # Physics-typed input-derived skips (full res)
+        lum = image_luminance(rgb) if self.use_lum_skip else None
 
-        # Residual decoder: Normal priors, linear output (can be negative)
-        self.decoder_residual = ModernProgressiveDecoder(
-            z_channels, skip_channels, out_channels=3, activation='linear'
-        )
-        self.spade_residual3 = PhysicalPriorInjector(768, 512)
-        self.spade_residual2 = PhysicalPriorInjector(384, 256)
-        self.spade_residual1 = PhysicalPriorInjector(192, 128)
+        # Albedo skip: raw gamma-encoded RGB (rgb_skip) > normalised chromaticity (chroma_skip)
+        if self.use_rgb_skip:
+            alb_skip = (rgb.clamp(0.0, 1.0) + 1e-6).pow(1.0 / 2.2)  # gamma-encode
+        elif self.use_chroma_skip:
+            alb_skip = image_chromaticity(rgb)
+        else:
+            alb_skip = None
 
-    def forward(self, rgb, normals=None, seg=None, ccr=None,
-                valid_mask=None, m_diffuse=None, **kwargs):
-        if seg is None:
-            seg = torch.zeros(
-                (rgb.shape[0], 1, rgb.shape[2], rgb.shape[3]),
-                dtype=torch.long, device=rgb.device,
-            )
-
-        # Gamma-encode for ConvNeXtV2
-        x_enc = (rgb.clamp(0.0, 1.0) + 1e-6).pow(1.0 / 2.2)
-        z_global, skip_features = self.image_encoder(x_enc)
-
-        # Prior features
-        if normals is None:
-            normals = torch.zeros_like(rgb)
-        normal_feats = self.normal_encoder(normals)
-
-        if ccr is None:
-            with torch.no_grad():
-                ccr = compute_ccr(rgb)
-        ccr_feats = self.ccr_encoder(ccr)
-
-        # Task-specific projections from shared bottleneck
-        z_a = self.proj_albedo(z_global)
-        z_s = self.proj_shading(z_global)
-        z_r = self.proj_residual(z_global)
-
-        # ---- Albedo (parallel) ----
-        albedo = self.decoder_albedo(
-            z_a,
-            skip_features,
-            stage_ops=[
-                lambda x: self.spade_albedo3(x, ccr_feats[4], seg),
-                lambda x: self.spade_albedo2(x, ccr_feats[3], seg),
-                lambda x: self.spade_albedo1(x, ccr_feats[2], seg),
-            ],
+        # ── Albedo (direct) ─────────────────────────────────────────────────
+        albedo = torch.sigmoid(
+            self.albedo_head(f_trunk, out_size=(H, W), skip=alb_skip)
         ).clamp(1e-4, 1.0)
 
-        # ---- Diffuse Shading (parallel) ----
-        shading = self.decoder_shading(
-            z_s,
-            skip_features,
-            stage_ops=[
-                lambda x: self.spade_shading3(x, normal_feats[3]),
-                lambda x: self.spade_shading2(x, normal_feats[2]),
-                lambda x: self.spade_shading1(x, normal_feats[1]),
-            ],
-        ).clamp(min=1e-4)
+        # ── Diffuse shading (inverse domain π) ──────────────────────────────
+        shading_pi = torch.sigmoid(
+            self.shading_head(f_trunk, out_size=(H, W), skip=lum)
+        ).clamp(self.pi_floor, 1.0 - 1e-4)
+        shading_linear = (1.0 - shading_pi) / shading_pi
 
-        # ---- Specular Residual (parallel) ----
-        residual = self.decoder_residual(
-            z_r,
-            skip_features,
-            stage_ops=[
-                lambda x: self.spade_residual3(x, normal_feats[3]),
-                lambda x: self.spade_residual2(x, normal_feats[2]),
-                lambda x: self.spade_residual1(x, normal_feats[1]),
-            ],
-        ).clamp(-self.max_residual, self.max_residual)
-
-        # Physics-based reconstruction (used for loss, also returned for viz)
-        rgb_reconstructed = (albedo * shading) + residual
+        # ── Analytic residual ───────────────────────────────────────────────
+        diffuse = albedo * shading_linear
+        residual = (rgb - diffuse).clamp(min=0.0)
 
         return {
             'a_d': albedo,
-            'shading': shading,
+            'shading': shading_pi,
+            'shading_linear': shading_linear,
             'residual': residual,
-            'rgb_reconstructed': rgb_reconstructed,
+            'rgb_reconstructed': diffuse + residual,
+            # DINOv2 tokens for the optional material-consistency loss
+            'dino_tokens': dino_tokens,
+            'dino_patch_hw': dino_patch_hw,
         }

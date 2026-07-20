@@ -1,0 +1,63 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.2 — HOMOGENEITY fine-tune (lever-1: low-frequency chroma-gated albedo flatness).
+#
+# GOAL: remove the residual LOW-FREQUENCY shading leak MEASURED on real photos — a window
+# light-pool on a floor, a warm lamp glow on a ceiling — that leaves a single material
+# non-homogeneous in the albedo (see tests/visualizations/v20cmp/iiw_sample/176,245). The
+# new loss term `lambda_alb_flat_lf` (flexible_loss_v17._albedo_flatness_lf) shrinks the SLOW
+# albedo-luminance ramp while a low-pass + PIE-Net chroma gate keep high-freq texture and
+# coloured boundaries safe (verified numerically: texture→0 loss, white ramp→penalised,
+# coloured ramp→gate backs off).
+#
+# WHY THIS CANNOT FAIL LIKE V20: this is an ADDITIVE loss on the UNCHANGED, winning V17
+# direct-albedo head — no architecture change, no free shading gauge to collapse. We RESUME
+# from the trained 50k ckpt, keep the dominant supervised albedo anchor (lambda_a=1.0) and the
+# full CARI constancy stack ON (inherited), and add ONE gentle term.
+#
+# RUN (saves to checkpoints/v17_2/, resumes FROM the row-4 50k weights — base is untouched):
+#   bash scripts/train.sh --version 17.2 --cuda 1 \
+#       --resume checkpoints/v17_row4/checkpoint_iter_50000.pth
+#
+# KILL-GATE (the V20 lesson — pre-register it): after each 1k-step ckpt, run
+#   tests/eval/eval_mid_constancy.py + tests/eval/eval_arap.py --constancy.
+# KEEP the ckpt with the cleanest IIW/visual homogeneity that does NOT regress MID C_mat/Cast
+# or the ARAP COLORED-subset C_arap by more than ~10% vs v17@50k. If every ckpt regresses
+# constancy, lower lambda_alb_flat_lf and re-run. SWEEP lambda_alb_flat_lf ∈ {2, 4, 8}.
+#
+# Inherits ALL of v17.yaml via `extends`, then applies only the deltas below.
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  # ── Gentle FT-from-trained-ckpt (mirrors v20_iiw_ft) ──────────────────────────────────
+  lr: 2.0e-5                 # ~1/10 of the 2e-4 baseline — refine, don't relearn
+  use_cosine_lr: false       # CONSTANT lr (a resumed cosine would sit at eta_min)
+  # POST-MORTEM 2026-07-02: the banked 60k run MEASURABLY trained with fresh Adam @ constant
+  # 2e-5 (ckpt optimizer lr = 2e-5, vs base@50k's annealed 1e-7). false/false here would NOT
+  # reproduce it: this arch matches base@50k, so the optimizer state would load and bring the
+  # frozen 1e-7 lr with it. Values below aligned to the run that actually produced the ckpt.
+  reset_lr: true             # override the decayed lr loaded from the 50k ckpt
+  skip_optimizer: true      # fresh Adam moments for the FT phase
+
+  # Resume @50000 → +10000 micro-batches ≈ 1250 optimizer updates (bs4 / accum8). Frequent
+  # ckpts so we can pick the best homogeneity-vs-constancy trade-off post-hoc.
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # PIN the phase boundary past the horizon so NO phase switch fires mid-resume (the loop only
+  # switches phase1→phase2 at `step == phase1_iterations`, and the loader inits on phase1).
+  # The whole FT therefore stays on the mix below — keeping MID raw pairs in the batch so the
+  # CARI L_inv keeps the colored-illuminant constancy CONTRIBUTION anchored during the FT.
+  phase1_iterations: 999999
+  sampling_weights_phase1:
+    hypersim: 0.6            # synthetic majority = the absolute-albedo-colour anchor (no drift)
+    midintrinsic: 0.4        # real raw pairs = CARI L_inv + the real-photo light-pools to flatten
+
+loss:
+  # ── THE lever-1 term (the only addition) ──────────────────────────────────────────────
+  # Low-frequency, chroma-gated, runs on EVERY valid pixel (incl. real MID). Start at 4.0
+  # (≈1-4% of total loss — gentle); sweep {2,4,8} against the kill-gate above.
+  lambda_alb_flat_lf: 4.0
+  alb_flat_lf_down: 8        # avg-pool factor: 512→64 low-res grid (light-pools are large)
+  alb_flat_lf_chroma_gate: 2.0  # PIE-Net gate strength: relu(|∇lum| − 2·|∇chroma|)

@@ -1,0 +1,74 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.33 — TABLE-B ROW: 3D-FRONT pairs + B_combo levers (flat-LF + shadow-inv), from the
+# NEW genuine-CARI base v17_44@40k, 40k→60k — the "Ours" candidate row.
+#
+# RETARGETED 2026-07-09: resumes the post-fix v17_44@40k (the old v17_44/..._50000.pth path
+# was the relocated pre-fix base, now at v17_old/checkpoint_iter_50000_44.pth). Read at 60k
+# against v17_20 (ctrl), v17_23 (levers only), v17_29 (front3d only), all matched at +20k.
+# (Numbered 33 because 30/31/32 are the archived old Table-B rows in configs/old_table_B/
+# and their checkpoints/eval bookkeeping still reference those version strings.)
+#
+# ROLE (run 3 of the front3d plan, panel doc §10; gated on the v17_28 probe passing): the
+# "everything we believe in" row — dataset fix AND the two gate-passing levers together.
+# Read against its two siblings at matched 70k:
+#   • v17_29 (front3d alone)  → is the lever stack still needed once the data is right?
+#   • v17_23 / B_combo_70k (levers alone) → what does the dataset add on top of the levers?
+# If front3d supplies the varied-illuminant signal the levers were compensating for, this
+# row and v17_29 may converge — that would itself be a thesis finding (the drawback was
+# the DATA, not the objective).
+#
+# Recipe = v17_23 verbatim (same resume, lr, horizon, lever lambdas) + front3d in the mix;
+# mix matches v17_28/v17_29 so all front3d rows share the data axis.
+# The final/SOTA model = the winning row at matched steps (see v17_29 header) — no separate
+# "final" training run or config.
+#
+# RESUME semantics: true/true REQUIRED from base@50k (annealed 1e-7 in the saved optimizer;
+# see v17_29 header). PREREQUISITE: full render + --revalidate + post-loader-fix code.
+#
+# STATUS 2026-07-09: REINSTATED — this is the "Ours" candidate (levers + dataset on the
+# genuine-CARI base). PREREQUISITE: full render + --revalidate before launch.
+#
+# RUN (saves to checkpoints/v17_33/):
+#   bash scripts/train.sh --version 17.33 --cuda 0 \
+#       --resume checkpoints/v17_44/checkpoint_iter_40000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  reset_lr: false
+  skip_optimizer: false
+
+  extend_iterations: 60000     # read at 60k (+20k from base@40k), matched with v17_20/23/29
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=40k) is
+  # past the inherited phase2 boundary, so phase3 is the active mix from step one.
+  # CRITICAL: this mix includes front3d; without moving it here (the old phase1_iterations:999999
+  # sentinel no longer suppresses the switch), the run would inherit v17.yaml's phase3 mix
+  # and silently train with ZERO front3d.
+  # MIX (2026-07-13): STANDARDIZED to the front3d-row mix shared with v17_29 and v17_34
+  # (was 0.32/0.24/0.24/0.20). All three front3d rows now train on one identical mix, so
+  # (33 − 29) and (34 − 29) are both single-variable lever contrasts and (33 − 34) is a pure
+  # flatness-WEIGHT contrast (4.0 vs 1.5). This is the mix reported in the thesis.
+  # RELAUNCH NOTE: clear checkpoints/v17_33/ first — auto-resume would otherwise continue the
+  # old 0.20-mix checkpoint and silently contaminate the row.
+  sampling_weights_phase3:
+    hypersim: 0.3
+    midintrinsic: 0.3
+    interiorverse: 0.15
+    front3d: 0.25
+
+data:
+  front3d_root: '../datasets/front3d_iid'
+
+loss:
+  # B_combo levers, verbatim from v17_23.
+  lambda_alb_flat_lf: 4.0
+  alb_flat_lf_down: 8
+  alb_flat_lf_chroma_gate: 2.0
+  lambda_shadow_inv: 1.0
+  lambda_shadow_explain: 0.0
+  shadow_start_iter: 0

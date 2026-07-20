@@ -1,0 +1,48 @@
+Intrinsic image decomposition (IID) tries to separate a photograph into two layers:
+the \emph{albedo}, which is the true colour of each surface, and the \emph{shading},
+which captures how light falls on those surfaces.
+Most IID models assume that light is white or achromatic.
+In real indoor scenes, however, light sources have colour: warm lamps cast orange tints,
+while windows let in cool blue daylight. This coloured illumination
+becomes entangled with the recovered albedo.
+As a result, the same painted wall looks like it has different colours depending on
+which light is on, even though the paint itself has not changed.
+
+In this work we tackle this coloured illumination problem directly.
+We propose \emph{Cross-Render Albedo Invariance} (CARI), a training strategy
+that uses pairs of images of the same scene captured under different illuminants.
+The core idea is simple: if the same surface appears in two photographs lit differently,
+its albedo must be identical in both.
+We enforce this with a loss that penalises any change in the predicted albedo
+across the two views, while requiring that the shading layer absorbs the difference.
+
+We implement CARI inside a model built on a frozen DINOv2-Large encoder
+and a DPT-style decoder.
+A key practical insight is that standard white-balance pre-processing, commonly
+applied to training data, removes the very illuminant colour information that
+CARI needs to function; we therefore train on raw, unprocessed image pairs.
+
+Evaluating this claim turned out to require correcting the way it is measured. The
+chroma-cast score used throughout this literature, and in earlier drafts of this work,
+pools albedo chromaticity across all the materials of a scene before taking its
+variance, and therefore conflates the illuminant-induced drift it intends to measure with
+the ordinary chromatic diversity of the scene. Because that second term is computed from
+the \emph{prediction}, a model can lower the score simply by washing the colour out of its
+albedo. The metric pays models to destroy the very quantity the task exists to recover. We
+decompose it into a scale-normalised invariance term and a fidelity term anchored on
+measured albedo, and show that the correction reverses the ranking of our own ablation.
+
+We evaluate on four benchmarks spanning real and synthetic scenes: MID, IIW, MAW and ARAP.
+Under the corrected metric our model is the only one in the comparison that is
+simultaneously colour-faithful and competitively invariant: it reproduces the
+between-material chroma of measured ground-truth albedo almost exactly (a fidelity of
+$1.008$, against $0.825$ for the strongest diffusion baseline and $0.575$ for the strongest
+feed-forward one) and attains the best material-lightness stability in the roster, while
+remaining within a fifth of the most illuminant-invariant method on hue. We do not claim
+the invariance crown: two external methods hold it, and we show that both purchase it by
+discarding roughly a fifth and two fifths of real albedo colour respectively. The same
+degenerate trade that our own colour-skip ablation makes, which is visible to the naked eye.
+These results are obtained with $18.5$M trained parameters and a single forward pass,
+some seventy times fewer trained weights and five times faster than the diffusion baselines.
+The remaining gap is in perceptual shading quality measured by IIW, which we analyse through
+the constancy--structure tension inherent to IID.

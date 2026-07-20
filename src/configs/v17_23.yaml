@@ -1,0 +1,76 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.23 — TABLE-B COMBO: the two gate-passing levers TOGETHER (flat-LF + shadow-inv-only).
+#
+# RETARGETED 2026-07-09: resumes the NEW genuine-CARI base v17_44@40k (post wiring-fix),
+# horizon 40k→60k, read at 60k against the v17_20 control. The lever CHOICE (flat_lf +
+# shadow_inv) still rests on the old 50k-base sweep (v17_21/22/24/25 — matched rows, kept
+# as selection evidence, not rerun). "base@50k" mentions below = historical rationale.
+#
+# MOTIVATION (Table-B full sweep, 2026-07-02, 6 ckpts × 4 benchmarks): read at MATCHED steps
+# (lever@60k vs ctrl30@60k — the zero-lever control isolates the FT-recipe cost), exactly two
+# levers pass the kill-gate on (nearly) every axis:
+#   • flat2  (lambda_alb_flat_lf 4.0):        ARAP colored C_arap 0.137 vs 0.168 ✓, MID C_mat
+#     0.201 vs 0.232 ✓, WHDR 29.1 vs 30.0 ✓, MAW ΔE ≈tied
+#   • v31    (shadow_inv 1.0, explain 0):     ARAP colored 0.155 vs 0.168 ✓, C_mat 0.212 vs
+#     0.232 ✓, WHDR 29.6 vs 30.0 ✓, best Cast_RMS overall
+#   • shadow3 (inv 1.0 + explain 0.5) FAILED 4/4 benchmarks → explain stays OFF here.
+# This run asks: do the two passing levers STACK? They act on different mechanisms (LF light-pool
+# flattening vs manufactured-relight invariance), so gains may be additive; both individually
+# kept the accuracy guards.
+#
+# DECISION RULE (pre-registered): v17_23@60k becomes the thesis headline model ONLY if, at FULL
+# protocol, it beats base@50k on the constancy axes (ARAP colored C_arap / MID C_mat / Cast)
+# WITHOUT losing the guards (albedo si-RMSE, IIW WHDR, MAW ΔE within ~10%). Otherwise the
+# headline stays base@50k and this run is one more Table-B row. Note the known recipe cost:
+# ALL 60k FTs (incl. the control) regressed MID C_mat / MAW ΔE vs base@50k on the quick subset —
+# so the bar is beating BASE, not just the control.
+#
+# Recipe = IDENTICAL to v17_2 / v17_31 (same 50k resume, lr, horizon, mix) so rows stay comparable.
+#
+# RUN (saves to checkpoints/v17_23/, resumes from the NEW genuine-CARI base — base untouched;
+# NOTE: checkpoints/v17_23/ still holds the OLD-base 60k-80k ckpts — archive them first):
+#   bash scripts/train.sh --version 17.23 --cuda 0 \
+#       --resume checkpoints/v17_44/checkpoint_iter_40000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5                 # ~1/10 of the 2e-4 baseline — refine, don't relearn
+  use_cosine_lr: false       # CONSTANT lr (a resumed cosine would sit at eta_min)
+  # true/true is REQUIRED, not optional: the base's saved optimizer carries the fully-annealed
+  # cosine lr (~0 at 40k). This arch matches the ckpt exactly, so false/false would LOAD that
+  # state and run frozen. true/true = fresh Adam @ constant 2e-5 — which is also what every
+  # banked Table-B row measurably trained with (post-mortem 2026-07-02), keeping rows comparable.
+  reset_lr: false
+  skip_optimizer: false
+  
+
+  extend_iterations: 60000     # read at 60k (+20k from base@40k), matched with v17_20
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Pin the phase boundary past the horizon (loader inits on phase1).
+  # MIX FIX vs the other Table-B levers (measured post-mortem 2026-07-02): the levers ran
+  # hyp 0.6 / mid 0.4 with interiorverse DROPPED, a distribution shift vs the base run's
+  # phase-3 mix — the prime suspect (with never-annealed constant lr; all lever ckpts measured
+  # at lr 2e-5 vs base's annealed 1e-7) for why EVERY 60k row incl. the zero-lever control
+  # regressed MID C_mat / MAW ΔE vs base@50k. This run RESTORES the base phase-3 mix so the
+  # only distribution change vs base@50k is the levers themselves.
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=50k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one
+  # (replaces the old phase1_iterations:999999 sentinel).
+  sampling_weights_phase3:
+    hypersim: 0.4            # synthetic GT anchor + the rows the shadow self-sup runs on
+    midintrinsic: 0.3        # real raw pairs = CARI L_inv (keeps colored-illuminant constancy)
+    interiorverse: 0.3       # KEPT (the levers dropped it — suspected cause of MAW/IIW drift)
+
+loss:
+  # ── lever 1: chroma-gated low-frequency albedo flatness (verbatim from v17_2) ──────────
+  lambda_alb_flat_lf: 4.0
+  alb_flat_lf_down: 8           # avg-pool factor: 512→64 low-res grid (light-pools are large)
+  alb_flat_lf_chroma_gate: 2.0  # PIE-Net gate strength: relu(|∇lum| − 2·|∇chroma|)
+
+  # ── lever 2: shadow-invariance ONLY (verbatim from v17_31; explain OFF — failed the gate) ──
+  lambda_shadow_inv: 1.0
+  lambda_shadow_explain: 0.0
+  shadow_start_iter: 0          # resume @50k → past warmup, start immediately

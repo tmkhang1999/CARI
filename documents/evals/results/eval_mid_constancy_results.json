@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-07-09T22:21:46.500989",
+  "split": "test",
+  "results": [
+    {
+      "label": "v17_44",
+      "path": "/home/khang/IR-IID/checkpoints/v17_44/checkpoint_iter_40000.pth",
+      "version": "17",
+      "is_external": false,
+      "C_mat": 0.15720759049858463,
+      "R_cast_rg": 0.31766909778376623,
+      "R_cast_bg": 0.15700155303951752,
+      "R_cast_rms": 0.3554851275044198,
+      "M_albedo": 0.35817136739691097,
+      "valid_frac": 0.8096915,
+      "sat_bin_mae": [
+        0.2954183965921402,
+        0.2084011770784855,
+        0.1990480050444603,
+        0.23717926070094109
+      ]
+    }
+  ]
+}

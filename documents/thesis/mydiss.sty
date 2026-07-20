@@ -1,0 +1,632 @@
+\usepackage{ifthen}
+\newcommand\ifbook[2]{\ifthenelse{\equal{\bookversion}{true}}{#1}{#2}}
+\newcommand\iffinal[2]{\ifthenelse{\equal{\finalversion}{true}}{#1}{#2}}
+
+
+
+% \makeatletter
+\DeclareRobustCommand\checkfor[1]{%
+  \begingroup
+  \expandafter\ifx\csname#1\endcsname\relax\expandafter\@firstoftwo\else\expandafter\@secondoftwo\fi
+  {%
+    \expandafter\endgroup\expandafter\ifx\csname#1\endcsname\relax\expandafter\@firstoftwo\else\expandafter\@secondoftwo\fi
+  }{\endgroup\@firstoftwo}%
+}%
+% \makeatother
+
+
+
+
+%-------------------------------------------------------------------------------
+% general settings
+%-------------------------------------------------------------------------------
+
+% language, encoding
+\usepackage[english,ngerman]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% select main font (see Mittelbach and Goossens, "Der LaTeX Begleiter" 2nd ed., p.382, table 7.7); uncomment one, in case of errors try (un)commenting \usepackage{amssymb} below
+%%%%%%%%%%%%%%
+%% Charter
+% \usepackage{charter}                       % font
+% \usepackage[bitstream-charter]{mathdesign} % + math
+%% Charter + Sans
+% \usepackage{charter}\linespread{1.05}      % font
+% \renewcommand{\sfdefault}{fvs}             % + sans
+% \usepackage[charter]{mathdesign}           % + math
+% \usepackage[scaled=0.85]{luximono}         % + typewriter
+% 
+%%%%%%%%%%%%%%
+%% Palatino
+% \usepackage{palatino}                                            % "Palatino"
+%% Palatino + Math
+% \usepackage{mathpazo}                 % font + math
+% \usepackage[scaled=.95]{helvet}       % + Helvetica (Arial)
+% \usepackage{courier}                  % + typewriter
+%%%%%%%%%%%%%%
+%% Times New Roman
+% \usepackage{times}                    % font
+% \usepackage{mathptmx}                 % font+math
+%%%%%%%%%%%%%%
+%% Utopia
+% \usepackage{utopia} \linespread{1.05} % font
+%%%%%%%%%%%%%%
+%% Utopia + Math
+% \usepackage{fourier}\linespread{1.05} % font+math
+%%%%%%%%%%%%%%
+%% New Century Schoolbook
+% \usepackage{newcent}                  % font
+% \usepackage{fouriernc}                % + math
+%%%%%%%%%%%%%%
+%% Garamond
+% \renewcommand{\rmdefault}{ugm}        % font
+% \renewcommand{\sfdefault}{fvs}        % + serif
+% \usepackage[garamond]{mathdesign}     % + math
+% \usepackage[scaled=0.85]{luximono}    % + typewriter
+%%%%%%%%%%%%%%
+
+
+% select sans serif font (mainly used for page headers); uncomment one
+%\usepackage{avant}                    % "Avant Garde"
+ \usepackage[scaled]{helvet}           % "Helvetica"
+
+% % Typesetting
+% improve readability of document
+\usepackage{microtype}
+
+% auto formatting of large numbers
+\usepackage[autolanguage]{numprint}
+
+
+\usepackage{morewrites}
+\usepackage{hyperref}
+
+%-------------------------------------------------------------------------------
+% page layout
+%-------------------------------------------------------------------------------
+
+\usepackage{geometry}
+\usepackage{afterpage}
+% uncomment to reduce the margins
+%\iffinal{
+%\ifbook{\RequirePackage[a5paper,driver=pdftex,vcentering,twoside,scale=0.75,marginratio={6:5,5:5}]{geometry}
+%}{\RequirePackage[a4paper,driver=pdftex,vcentering,twoside,scale=0.75,marginratio={6:5,5:5}]{geometry}}
+%}{ %use given wide margins and change nothing
+%}
+
+% symbol definitions
+\usepackage{dissColorTheme}
+
+%rotates landscape pages in the pdf document
+\usepackage{pdflscape}
+
+%-------------------------------------------------------------------------------
+% rules
+%-------------------------------------------------------------------------------
+
+% generic vertical rule
+\newcommand{\myvrule}[2]{\vrule width #1 height #2}
+
+% standard vertical rule
+\newcommand{\mvr}{\myvrule{1pt}{1em}}
+
+% standard bold vertical rule
+\newcommand{\mvrb}{\myvrule{2pt}{1em}}
+
+%-------------------------------------------------------------------------------
+% math (only operators etc. - specific symbols are defined in "symbols.sty")
+%-------------------------------------------------------------------------------
+
+% contains "ams*" packages (but "amssymb" must be loaded by hand)
+\usepackage{mathtools}
+\usepackage{amssymb}
+\usepackage{amsthm} %amsthm needs to be included additionally, too in order to obtain the full proof environment support
+
+% alternative form of fractions
+\usepackage{nicefrac}
+
+
+%-------------------------------------------------------------------------------
+% abbreviations and general text-related
+%-------------------------------------------------------------------------------
+
+% ordinal number suffixes
+\usepackage{engord}
+
+% *-th
+\newcommand{\ith}{\textsuperscript{th}\xspace}
+
+% anatomical names
+\newcommand{\anat}[1]{\textit{#1}\xspace}
+
+\newcommand{\myemphColor}[2]{\textbf{\textit{\textcolor{#2}{#1}}}}
+\newcommand{\myemph}[1]{\myemphColor{#1}{fsublue}}
+
+%-------------------------------------------------------------------------------
+% header line
+%-------------------------------------------------------------------------------
+
+% inspired by http://www.kfiles.de/latex.php
+
+% inspired by warning message "Package Fancyhdr Warning: \headheight is too small (12.0pt)"
+\setlength{\headheight}{25.1pt}
+
+% necessary package
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+
+% format chapter title used in header
+\renewcommand{\chaptermark}[1]{%
+   \markboth{%
+      \ifnum \c@secnumdepth >\m@ne
+         \if@mainmatter
+            \textbf{\@chapapp\ \thechapter}\hspace{2ex}\mvr\hspace{2ex}%
+         \fi
+      \fi
+      \MakeUppercase{#1}
+   }{}%
+}
+
+% format section title used in header
+\renewcommand{\sectionmark}[1]{%
+   \markright{%
+      #1%
+      \ifnum \c@secnumdepth >\z@
+         \hspace{2ex}\mvr\hspace{2ex}\textsf{\textbf{\thesection}}%
+      \fi
+   }%
+}
+
+% clear header/footer settings
+\fancyhead{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% chapter and section title in head
+\fancyhead[EL]{\small\textsf{\leftmark}}
+\fancyhead[OR]{\small\textsf{\rightmark}}
+
+% page numbers in foot
+\fancyfoot[EL,OR]{\textsf{\thepage}}
+
+% also change font for chapter title pages
+\fancypagestyle{plain}{%
+\fancyhf{}%
+\fancyfoot[C]{\textsf{\thepage}}%
+}
+
+%-------------------------------------------------------------------------------
+% appearance of headings
+%-------------------------------------------------------------------------------
+
+% for table of contents at beginning of chapters
+% \usepackage{minitoc}
+% \firstchapteris{1}
+% \nomtcrule
+% \tightmtcfalse
+% \dominitoc[c]
+
+% numbered subsubsections (see "tocdepth" for depth of table of contents)
+\setcounter{secnumdepth}{3}
+
+% needed to change style of headings
+\usepackage{titlesec}
+
+% chapter
+\titleformat{\chapter}[hang]{\color{myprimary}\Huge\bfseries}{\thechapter\hspace{5mm}\textcolor{mysecondary}{\mvrb}\hspace{5mm}}{0pt}{\Huge\bfseries}
+
+% section
+\titleformat{\section}[hang]
+{\color{myprimary}\normalfont\LARGE\bfseries}
+{\thesection}{1ex}{}[]
+
+% subsection
+\titleformat{\subsection}[hang]
+{\color{myprimary}\normalfont\Large\bfseries}
+{\thesubsection}{1ex}{}[]
+
+% subsubsection
+\titleformat{\subsubsection}[hang]
+{\color{myprimary}\normalfont\large\bfseries}
+{\thesubsubsection}{1ex}{}[]
+
+% paragraph
+\titleformat{\paragraph}[runin]
+{\color{myprimary}\normalfont\bfseries}
+{}{0ex}{}[.]
+
+% start each section on new page
+% \newcommand{\sectionbreak}{\clearpage}
+
+%-------------------------------------------------------------------------------
+% references, citations, bibliography, and index
+%-------------------------------------------------------------------------------
+
+% citation style
+\usepackage{natbib}
+% \bibliographystyle{mydiss}
+\bibliographystyle{apalike}
+
+
+% include bibliography and list of algorithms in table of contents
+\usepackage[nottoc]{tocbibind}
+\newcommand{\mylistofalgorithms}{\begingroup\tocfile{List of Algorithms}{loa}\endgroup}
+
+% show pages of citations in bibliography
+\usepackage{backref}
+\renewcommand*{\backref}[1]{}%
+\renewcommand*{\backrefalt}[4]{%
+   \ifnum#1=0 %
+      % print nothing if no reference
+   \else
+      \ifnum#1=1%
+         \footnotesize{(cited on page #2)}%
+      \else
+         \footnotesize{(cited on pages #2)}%
+      \fi%
+   \fi%
+}%
+
+% alias for "(e.g., ...)" citations
+\newcommand{\citepeg}[1]{\citep[\eg,][]{#1}}
+
+% make index (and add it to the TOC)
+\usepackage{makeidx}
+\makeindex
+
+% definition of a new aspect
+\newcommand{\defi}[1]{\emph{#1}}
+
+% definition + index command
+\newcommand{\defix}[2][]{\defi{#2}\ifthenelse{\equal{#1}{}}{\index{#2}}{\index{#1}}}
+\newcommand{\defixaam}[2][]{\defi{#2}\ifthenelse{\equal{#1}{}}{\index{Active Appearance Model!#2}}{\index{Active Appearance Model!#1}}}
+
+% automatically add "Chapter", "Section" etc. to references
+\usepackage[capitalize,noabbrev]{cleveref}
+
+% add support for referencing algorithm line numbers with cleverref
+\crefname{ALC@unique}{line}{lines}
+\Crefname{ALC@unique}{Line}{Lines}
+\newenvironment{myalgorithmic}{\begin{algorithmic}[1]\setcounter{ALC@unique}{0}}{\end{algorithmic}}
+
+%-------------------------------------------------------------------------------
+% quotations
+%-------------------------------------------------------------------------------
+\newcommand{\myquotation}[2]{\vspace{30pt}\begin{quotation} ~\\ \textit{#1}  \begin{flushright}\textbf{#2} \vspace{50pt}\end{flushright} \end{quotation}}
+
+%-------------------------------------------------------------------------------
+% figures
+%-------------------------------------------------------------------------------
+
+% allows to use various image formats
+\usepackage{graphicx}
+
+% image directories
+\graphicspath{{./img/}}
+
+% center content of floats by default
+\usepackage[objectset=centering]{floatrow}
+
+% custom figure caption looks
+\usepackage[font={small},labelfont={color=myprimary,bf},textfont={it},figureposition=below,tableposition=top,margin=4ex]{caption}
+
+% custom caption for algorithms
+\DeclareCaptionStyle{boxed}{font={small},labelfont={color=myprimary,bf},textfont={it},margin=4ex}
+
+% subfigures
+%\usepackage[caption=false]{subfig}
+
+% alter some LaTeX defaults for better treatment of figures (http://mintaka.sdsu.edu/GF/bibliog/latex/floats.html)
+\renewcommand{\topfraction}{0.9}          % max fraction of floats at top
+\renewcommand{\bottomfraction}{0.8}       % max fraction of floats at bottom
+\setcounter{topnumber}{2}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}               % 2 may work better
+\setcounter{dbltopnumber}{2}              % for 2-column pages
+\renewcommand{\dbltopfraction}{0.9}       % fit big float above 2-col. text
+\renewcommand{\textfraction}{0.07}        % allow minimal text w. figs
+\renewcommand{\floatpagefraction}{0.7}    % require fuller float pages
+\renewcommand{\dblfloatpagefraction}{0.7} % require fuller float pages
+
+% and proper footnotes within tables and figures
+\usepackage{footnote}
+
+
+% algorithm environment
+% \usepackage{algorithmic}
+% \renewcommand{\algorithmicrequire}{\textbf{Input:}}
+% \renewcommand{\algorithmicensure}{\textbf{Output:}}
+% \usepackage[chapter,boxed]{algorithm}
+
+%-------------------------------------------------------------------------------
+% tables
+%-------------------------------------------------------------------------------
+
+% nice horizontal bars
+\usepackage{booktabs}
+
+% long table support
+\usepackage{longtable}
+
+% table formatting
+\newcommand{\thead}[1]{\large\textbf{\textsc{\textcolor{myprimary}{#1}}}}
+%\renewcommand{\arraystretch}{2.0}
+
+%-------------------------------------------------------------------------------
+% testing, debugging
+%-------------------------------------------------------------------------------
+
+% for standard version with proper content
+\newcommand{\pageEstOnly}{0}
+% for page estimation needed by Joachim
+% \newcommand{\pageEstOnly}{1}
+
+\newcommand{\contentPageEst}[2]{%
+   \ifthenelse{
+        \equal{\pageEstOnly}{1}
+              }
+              {#1}
+              {#2}
+}%
+
+
+% depth of table of contents
+   \ifthenelse{
+         \equal{\pageEstOnly}{1}
+              }
+              {\setcounter{tocdepth}{1}}
+              {\setcounter{tocdepth}{2}}
+
+% annotation for table of contents (planned pages and status)
+\newcommand{\toca}[2]{~\textit{\small(#1 page(s), #2)}}
+
+% fill text
+\usepackage{blindtext}
+
+% note: must load after package "xcolor"
+\usepackage{todonotes}
+
+% for fancy color gradients... however, not useful to rebuild matlabs Jet... :(
+\usepackage{tikz}
+\usetikzlibrary{fadings,patterns}
+\newsavebox{\tempbox}
+\newcommand\tikztextColorGradient[3]{%
+  \begin{tikzfadingfrompicture}[name=tikzsection]
+    \node [text=white] {#1};
+  \end{tikzfadingfrompicture}
+  \begin{lrbox}{\tempbox}%
+    \begin{tikzpicture}
+      \node [text=white,inner sep=0pt,outer sep=0pt] (textnode) {#1};
+      \shade[path fading=tikzsection,fit fading=false,left color=#2,right color=#3]
+      (textnode.south west) rectangle (textnode.north east);
+    \end{tikzpicture}%
+  \end{lrbox}
+  % Now we use the fading in another picture:
+  \usebox\tempbox{}%
+}
+
+
+
+
+
+
+
+
+\usepackage{setspace}
+
+% modified todo commands
+\newcommand{\mytodo}[1]{\todo[caption={#1}]{\begin{spacing}{0.5}#1\end{spacing}}}%\todo[size=\small,caption={#1}]{\begin{spacing}{0.5}#1\end{spacing}}
+                                
+%no sticky notes for final version
+\iffinal{\renewcommand{\todo}[1]{}}{}
+
+%
+\usepackage[ddmmyyyy,hhmmss]{datetime}
+% footer: add time of document creation, but only during writing.
+\iffinal{ %no extra note for final version
+        }
+        {\fancyfoot[C]{\begin{minipage}{0.75\textwidth}\sffamily\footnotesize\color{gray}Document created: \today\ at \currenttime\end{minipage}}
+        }
+
+
+
+%--------------------------------------------------------------------------
+\listfiles  % lists all packages and their version in the log file
+
+%-------------------------------------------------------------------------------
+% abstract
+%-------------------------------------------------------------------------------
+\newenvironment{abstract}[1]{\textcolor{myprimary}{\begin{center}\Huge\textbf{#1}\end{center}}}{\clearpage}
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%
+%\usepackage{fontenc}
+%
+%
+%
+%
+%% some usefull packages, if you do not need them, comment them out
+%\usepackage{babel}
+%\usepackage{amsfonts}
+%\usepackage{amsmath}
+%\usepackage{amssymb}
+%\usepackage{amsthm}
+%\usepackage{graphicx}
+%\usepackage[hang]{caption}
+\usepackage{subcaption}
+%\usepackage{booktabs}
+%\usepackage{makeidx}
+%\usepackage{subfigure}
+%\usepackage{xcolor}
+%
+%
+%\usepackage{array}
+%\usepackage[
+%    plainpages=false,
+%    pdfpagelayout=TwoPageRight,
+%    pdfborder={0 0 0},
+%    hyperfootnotes=false
+%  ]{hyperref}
+%
+%\usepackage{longtable} % for tables larger than one page
+%\usepackage{pdflscape} % for pages in landscape format
+%\usepackage{rotating} % for rotated tables on landscape pages using sidewaystable
+%\usepackage{booktabs}
+%\usepackage{multirow}
+%\usepackage{tabularx}
+%
+%% footnote packages
+%\usepackage{footnote}
+%\usepackage{chngcntr}% necessary for next command
+%\counterwithout{footnote}{chapter}% consecutive numbering of footnotes throughout the whole document, no renumeration in each chapter
+%
+%\usepackage{setspace}
+%\onehalfspacing
+%
+%
+%\hypersetup{pdffitwindow=true,linkcolor=LightSkyBlue,citecolor=Sienna,
+%urlcolor=Navy,menucolor=black}
+%\usepackage[hyperpageref]{backref} 
+%
+%\usepackage{subcaption}
+%\usepackage{array}
+%\usepackage{booktabs}
+%\usepackage{multirow}
+%\usepackage{fixltx2e}
+%\usepackage{color}
+%%\usepackage{balance}
+%\usepackage{multirow}
+%\usepackage{afterpage}
+%
+%\usepackage{pifont}% http://ctan.org/pkg/pifont
+%\newcommand{\cmark}{\ding{51}}%
+%\newcommand{\xmark}{\ding{55}}%
+
+
+\newcolumntype{f}{>{$}l<{$}}
+\newcolumntype{n}{l}
+\newcolumntype{N}{>{\scriptsize}l}
+\newcolumntype{v}[1]{>{\raggedright\hspace{0pt}}p{#1}}
+\newcolumntype{V}[1]{>{\scriptsize\raggedright\hspace{0pt}}p{#1}}
+\newcolumntype{C}[1]{>{\scriptsize\centering\hspace{0pt}}p{#1}}
+\newcolumntype{L}[1]{>{\scriptsize\hspace{0pt}}p{#1}}
+\newcolumntype{B}[1]{>{\boldmath\DC@{.}{,}{#1}}l<{\DC@end}}
+\newcolumntype{d}[1]{>{\DC@{.}{,}{#1}}l<{\DC@end}}
+\newcolumntype{R}[1]{%
+>{\begin{turn}{90}\begin{minipage}{#1}\scriptsize\raggedright\hspace{0pt}}l%
+<{\end{minipage}\end{turn}}%
+}
+\newcolumntype{x}{>{\scriptsize\raggedright\hspace{0pt}}X}
+
+
+\usepackage{rotating}
+
+\usepackage{makeidx}
+\makeindex
+
+%\usepackage[xindy, toc]{glossaries}
+%\makeglossaries
+
+
+%% For color box
+
+\usepackage{tcolorbox}
+
+\usepackage{graphicx}
+\usepackage[export]{adjustbox}
+\usepackage{xcolor}
+%\usepackage{adjustbox}[2011/08/07]
+\newcommand{\cfbox}[1]{%
+    \adjustbox{cfbox=#1}%
+}
+
+
+\fboxsep=0mm%padding thickness
+\fboxrule=3pt%border thickness
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\usepackage{todonotes}
+
+\usepackage{enumitem}
+
+\usepackage{siunitx}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\graphicspath{ {./images/low/} }
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\Figure}[1] {Figure \ref{#1}}
+\newcommand{\Table}[1] {Table \ref{#1}}
+\newcommand{\Equ}[1] {Eq. \eqref{#1}}
+\newcommand{\Sec}[1] {Section \ref{#1}}
+
+\newcommand{\mycite}[1] {\citep{#1}}
+\newcommand{\mycitetext}[1] {\citet{#1}}
+
+%\usepackage{hyperref}
+
+\usepackage{textgreek}
+%\usepackage{morefloats}
+\usepackage{enumitem}
+\usepackage{standalone}
+\usepackage{import}
+
+\usetikzlibrary{decorations.pathreplacing}
+
+\usepackage{multirow}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%Table caption%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage{floatrow}
+\floatsetup[table]{capposition=top}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%\usepackage{pgfplots}
+%\usepackage{pst-eucl}
+%\usetikzlibrary{calc,intersections}
+%\usepackage{tkz-euclide}
+%\usetkzobj{all}
+%\usetikzlibrary{lindenmayersystems}
+%\usetikzlibrary[shadings]
+%\usetikzlibrary{decorations.markings}
+
+
+%\usepackage{Xepersian}
+
+

@@ -1,0 +1,219 @@
+\afterpage{%
+\newgeometry{margin=0cm}
+
+\vspace*{2.3cm}
+\hspace*{1.5cm}
+%
+\includegraphics[width=4.55cm]{images/FRONTMATTER/Erasmus_Logo}
+
+\begin{center}
+
+    \includegraphics[width=3.85cm]{images/FRONTMATTER/COSI_Logo}
+    
+    \textbf{\large{Master in Computational Colour and Spectral Imaging (COSI)}}
+    
+    \vspace{1cm}
+    
+    \hspace{4cm}   
+    \includegraphics[height=1.52cm]{images/FRONTMATTER/UEF_Logo}\hfill
+%     % %
+    \includegraphics[height=1.52cm]{images/FRONTMATTER/UGR_Logo.png}\hfill
+%     % %
+    \includegraphics[height=1.52cm]{images/FRONTMATTER/UJM_Logo.png}\hfill
+%     % %
+    \includegraphics[height=1.52cm]{images/FRONTMATTER/NTNU_Logo.png}\hspace{4cm}
+
+    \vspace{1.5cm}
+    
+    \Large{\titleEng}
+    
+    \vspace{.5cm}
+    
+    \large{Master Thesis Report}
+
+    \vspace{1.5cm}
+    
+    \large{Presented by}
+
+    \vspace{.25cm}
+
+    \Large{\name}
+    
+    \vspace{1.5cm}
+    
+    \large{and defended at the }
+
+    \vspace{.25cm}
+
+    \large{Norwegian University of Science and Technology}
+    
+    \vspace{.5cm}
+
+    \large{September 2026}
+    
+\end{center}
+
+%%%% back page
+	\clearpage
+	\begin{flushleft}
+	$\,$
+	\vfill
+	\noindent
+%
+\hspace*{1.5cm}
+\large{Academic Supervisor(s): \Academicsupervisor}
+
+
+\checkfor{Hostsupervisor}{
+\hspace*{1.5cm}
+%
+\large{Host Supervisor: \Hostsupervisor}
+
+% \hspace*{1.5cm}
+% \large{Jury Committee: }
+
+    
+%     \begin{enumerate}[leftmargin=5.6cm]
+% 	    \item \FirstJury
+	    
+% 	    \item \SecondJury
+
+% 	\end{enumerate}
+
+ 	\hspace*{1.5cm} Submission of the thesis: \submissiondate\\
+ 	\hspace*{1.5cm} Day of the oral defense:  \Defencedate}
+{\hspace*{1.5cm}
+
+\hspace*{1.5cm}
+\large{Jury Committee: }
+
+    \begin{enumerate}
+	    \item \FirstJury
+
+	    \item \SecondJury
+
+	\end{enumerate}
+
+ 	Submission of the thesis: \submissiondate\\
+ 	Day of the oral defense:  \Defencedate}
+
+
+    \vspace*{5cm}
+	\end{flushleft}
+
+
+
+
+
+
+
+\clearpage
+\restoregeometry
+} % end of \afterpage{...} material
+% ... still more material
+
+
+
+
+% % \vspace*{-2.7cm}
+% % \hspace*{-1.5cm}
+
+% % \geometry{hmargin=1.2cm,vmargin=1cm}
+
+% \includegraphics[width=4.55cm]{chapters/start/images/Erasmus_Logo}
+
+
+
+
+
+%  \@title
+%  \end{titlepage}
+% \makeatother
+% \maketitle
+
+
+% %-------------------------------------------------------------------------------
+% % Titelseite
+% %-------------------------------------------------------------------------------
+% \pagestyle{empty}
+% \begin{center}
+% \Large
+% \textbf{Title of the work \\
+%         Progress report by Jon Doe}\\[5cm]
+% \normalsize
+% % Authro
+% \end{center}
+
+
+\cleardoublepage
+
+% reset everything properly
+\pagestyle{fancy}
+\selectlanguage{english}
+\pagenumbering{Roman}
+
+
+\begin{abstract}{Abstract}
+%FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+    \input{./chapters/FRONTMATTER/00a-abstract_en}
+  
+\end{abstract}
+
+  \cleardoublepage
+  
+% \begin{abstract}{Dedication}
+% %FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+
+%     \input{./chapters/FRONTMATTER/00-dedication.tex}
+% \end{abstract}
+
+
+  \cleardoublepage
+  
+\begin{abstract}{Acknowledgment}
+%FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+
+    \input{./chapters/FRONTMATTER/00-acknowledgment.tex}
+\end{abstract}
+
+
+
+  \cleardoublepage
+  
+\begin{abstract}{Glossary}
+%FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+
+    \input{./chapters/Glossaries/glossary.tex}
+\end{abstract}
+
+
+  \cleardoublepage
+  
+\begin{abstract}{Acronyms}
+%FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+
+    \input{./chapters/Glossaries/acronyms.tex}
+\end{abstract}
+
+
+  \cleardoublepage
+  
+\begin{abstract}{Notations}
+%FIXME NOTE: no cites in abstract! (bad style AND technical problem)
+
+    \input{./chapters/Glossaries/notations.tex}
+\end{abstract}
+
+  \cleardoublepage
+
+
+
+
+
+% Table of contents with roman page numbers
+\pagenumbering{Roman}
+\tableofcontents
+\cleardoublepage
+
+% switch back to arabic page numbers for the rest of the document
+\pagenumbering{arabic}

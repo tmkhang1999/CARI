@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import torch
@@ -33,11 +34,14 @@ from models import (
     IntrinsicDecompositionV12,
     IntrinsicDecompositionV16,
     IntrinsicDecompositionV17,
+    IntrinsicDecompositionV17Refiner,
+    IntrinsicDecompositionV20,
 )
 from models.ccr_utils import compute_ccr
 from models.iid_utils import invert, iuv_to_rgb, rgb_to_iuv
 from losses.flexible_loss_v17 import V17Loss
 from data.hypersim_dataset import HypersimDataset, get_hypersim_loader
+from src.data.front3d_dataset import Front3DDataset
 
 
 TB_TAGS = {
@@ -55,6 +59,16 @@ TB_TAGS = {
     'loss_recon': '1. Losses/Recon_total',
     'loss_recon_l1': '1. Losses/Recon_L1',
     'loss_recon_msg': '1. Losses/Recon_MSG',
+    # CARI cross-render terms: absent from a step's dict when the batch has no
+    # m_invariant rows — a flat-zero/missing curve here is the loudest available
+    # signal that MID/front3d pairing is not flowing (see 2026-07-07 wiring bug).
+    'loss_alb_invariance': '1. Losses/CARI_L_inv',
+    'loss_explain': '1. Losses/CARI_L_explain',
+    # IIW ordinal-hinge fine-tune term (v17_26 and analogues): present only when
+    # lambda_ordinal_iiw > 0. Was computed and backpropagated but never logged prior to
+    # 2026-07-14 — this is the one term whose OWN trajectory needs to be watched during an
+    # IIW fine-tune, separately from loss_total, especially across a lambda sweep.
+    'loss_ordinal_iiw': '1. Losses/IIW_Ordinal',
 }
 
 def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
@@ -65,6 +79,8 @@ def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
         'loss_s', 'loss_shading_mse', 'loss_shading_msg',
         'loss_r', 'loss_residual_mse', 'loss_residual_msg',
         'loss_recon', 'loss_recon_l1', 'loss_recon_msg',
+        'loss_alb_invariance', 'loss_explain',
+        'loss_ordinal_iiw',
     ]
     for key in ordered:
         if key not in values:
@@ -141,11 +157,26 @@ def compute_targets(predictions, batch):
     # Target Residual R_star = I - A*S_d
     R_star = rgb - (A_star * S_d_star)
     R_star = torch.nan_to_num(R_star, nan=0.0, posinf=0.0, neginf=0.0)
-    
+
+    # π of the diffuse shading — fallback shading target for non-d_g (V17/V18) models.
+    pi_star = 1.0 / (S_d_star + 1.0)
+
+    # Illuminant chromaticity target = unit-luminance chroma of the COLORFUL shading S_c = I/A*.
+    # Derived from the SAME frame the model saw (the primary rgb), so it is consistent with the
+    # primary forward's chroma_field: ≈neutral on white Hypersim AND on white-balanced MID (the
+    # anchor that prevents chroma green-collapse). NOTE: to teach the *colored* illuminant on MID,
+    # supervise the chroma of the RAW (un-WB) rgb2 frame separately (see train_one_step CARI branch);
+    # a colored target on this WB primary frame would be physically inconsistent.
+    lum_sc = 0.299 * S_c_star[:, 0:1] + 0.587 * S_c_star[:, 1:2] + 0.114 * S_c_star[:, 2:3]
+    chroma_field_gt = S_c_star / (lum_sc + eps)
+
     return {
         'A_d_star': A_star,
+        'S_c_star': S_c_star,                # colorful shading I/A* — derive-consistent gray-SSI target
         'S_d_star': S_d_star,
+        'pi_star': pi_star,
         'R_star': R_star,
+        'chroma_field_gt': chroma_field_gt,  # unit-luminance illuminant colour — chroma-head target
         'loss_mask': loss_mask,
     }
 
@@ -159,6 +190,11 @@ def parse_args():
     parser.add_argument('--auto-resume', action='store_true', help='Resume from latest checkpoint in version checkpoint dir')
     parser.add_argument('--reset-lr', action='store_true', help='Override checkpoint LR with value from config')
     parser.add_argument('--skip-optimizer', action='store_true', help='Resume from checkpoint but skip loading optimizer state')
+    parser.add_argument('--start-step', type=int, default=None,
+                        help='Override the resume start step (micro-batch units). Use when changing '
+                             'batch_size mid-run: the checkpoint global_step is in the OLD bs units, so '
+                             'rescale it to the new schedule (e.g. bs2 iter_10000 = 20k samples = step '
+                             '5000 at bs4). Keeps LR/phase/sample alignment continuous.')
     parser.add_argument('--device', type=str, default='cuda')
     return parser.parse_args()
 
@@ -173,6 +209,42 @@ def _deep_merge(base, override):
     return merged
 
 
+def _resolve_config_path(ref):
+    ref = str(ref)
+    path = SRC_DIR / 'configs' / f'v{ref}.yaml'
+    if not path.exists():
+        path = SRC_DIR / 'configs' / f'{ref}.yaml'
+    return path
+
+
+def _load_config_with_parents(config_path, seen=None):
+    """Load a config override and recursively merge its `extends` chain.
+
+    Layering for nested ablations is:
+        parent-of-parent <- parent <- child
+    The top-level load_config() merges this result over base.yaml.
+    """
+    path = Path(config_path)
+    seen = set() if seen is None else seen
+    resolved = path.resolve()
+    if resolved in seen:
+        chain = ' -> '.join(str(p) for p in seen) + f' -> {resolved}'
+        raise RuntimeError(f'Config extends cycle detected: {chain}')
+    seen.add(resolved)
+
+    with open(path, 'r') as f:
+        override = yaml.safe_load(f) or {}
+    parent = override.pop('extends', None)
+    if parent is None:
+        return override, [path.name]
+
+    parent_path = _resolve_config_path(parent)
+    if not parent_path.exists():
+        raise FileNotFoundError(f"Parent config not found for extends={parent!r}: {parent_path}")
+    parent_cfg, chain = _load_config_with_parents(parent_path, seen)
+    return _deep_merge(parent_cfg, override), chain + [path.name]
+
+
 def load_config(config_path=None, version=None):
     base_path = SRC_DIR / 'configs' / 'base.yaml'
     with open(base_path, 'r') as f:
@@ -182,10 +254,9 @@ def load_config(config_path=None, version=None):
         config_path = str(SRC_DIR / 'configs' / f'v{version}.yaml')
 
     if config_path is not None and os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            override = yaml.safe_load(f) or {}
+        override, chain = _load_config_with_parents(config_path)
         config = _deep_merge(config, override)
-        print(f"Config: base.yaml <- {os.path.basename(config_path)}")
+        print('Config: base.yaml <- ' + ' <- '.join(chain))
     else:
         print("Config: base.yaml only")
     return config
@@ -199,13 +270,33 @@ def save_checkpoint(model, optimizer, losses, config, filename, global_step):
         'losses': losses,
         'config': config,
     }
-    torch.save(ckpt, filename)
+    tmp_filename = f"{filename}.tmp.{os.getpid()}"
+    try:
+        torch.save(ckpt, tmp_filename)
+        os.replace(tmp_filename, filename)
+    except Exception:
+        try:
+            if os.path.exists(tmp_filename):
+                os.remove(tmp_filename)
+        except OSError:
+            pass
+        raise
     print(f"Saved checkpoint to {filename}")
 
 
 def load_checkpoint(model, optimizer, checkpoint_path, map_location=None, skip_optimizer=False):
     ckpt = torch.load(checkpoint_path, map_location=map_location)
-    model.load_state_dict(ckpt['model_state_dict'], strict=False)
+    # Shape-filtered non-strict load: plain strict=False only tolerates missing/extra keys,
+    # not shape mismatches on shared keys (e.g. a head's arch grows when a skip path is
+    # toggled on). Drop mismatched-shape keys so they cold-start instead of erroring.
+    own = model.state_dict()
+    model_state = ckpt['model_state_dict']
+    filtered = {k: v for k, v in model_state.items() if k in own and v.shape == own[k].shape}
+    if len(filtered) < len(own):
+        dropped = sorted(set(own) - set(filtered))
+        print(f"[warn] loaded {len(filtered)}/{len(own)} params from checkpoint "
+              f"(rest cold-start, shape/key mismatch): {dropped}")
+    model.load_state_dict(filtered, strict=False)
     
     if not skip_optimizer:
         try:
@@ -229,21 +320,39 @@ def _extract_iter_from_name(path):
     return int(m.group(1)) if m else -1
 
 
+def _is_readable_checkpoint(path):
+    """Cheaply reject half-written PyTorch zip checkpoints before torch.load()."""
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0 and zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
 def _find_latest_checkpoint(ckpt_dir):
     if not os.path.isdir(ckpt_dir):
         return None
-    files = [
+    iter_files = [
         os.path.join(ckpt_dir, f)
         for f in os.listdir(ckpt_dir)
         if f.startswith('checkpoint_iter_') and f.endswith('.pth')
     ]
-    if not files:
-        fallback = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
-        if os.path.isfile(fallback):
-            return fallback
-        return None
-    files.sort(key=_extract_iter_from_name)
-    return files[-1]
+    iter_files.sort(key=_extract_iter_from_name, reverse=True)
+    fallback = os.path.join(ckpt_dir, 'checkpoint_latest.pth')
+
+    candidates = []
+    seen = set()
+    for path in iter_files + [fallback]:
+        if path in seen:
+            continue
+        seen.add(path)
+        candidates.append(path)
+
+    for path in candidates:
+        if _is_readable_checkpoint(path):
+            return path
+        if os.path.exists(path):
+            print(f"[warn] Skipping unreadable checkpoint during auto-resume: {path}")
+    return None
 
 
 def _resolve_resume_path(resume_arg, auto_resume, ckpt_dir):
@@ -293,21 +402,31 @@ def _loss_seg(model, seg):
     return seg
 
 
-def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iters):
+def _backward(loss, scaler, grad_accum_steps):
+    """Scale by 1/accum and backward (AMP-aware). Caller does optimizer.step on the accum boundary."""
+    scaled = loss / grad_accum_steps
+    if scaler is not None:
+        scaler.scale(scaled).backward()
+    else:
+        scaled.backward()
+
+
+def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iters,
+                   scaler=None, grad_accum_steps=1, iiw_batch=None):
+    """One micro-batch step with up to FOUR forwards, each with its OWN backward so the forward
+    graphs never co-reside (peak GPU = 2 graphs): (1) main + Hypersim/MID losses, (2) CARI
+    cross-render L_inv/L_explain on rgb2, (3) shadow/sun self-sup (Hypersim-gated), (4) IIW ordinal
+    hinge (post-baseline FT). Backward is done HERE; the caller only runs optimizer.step()/zero_grad()
+    on the accum boundary. Returns a detached losses dict. derive_anneal ramps the Q99 derive scale."""
     model.train()
 
     rgb = batch['rgb'].to(device, non_blocking=True)
-    albedo_raw = batch['albedo_raw'].to(device, non_blocking=True)
-    illum_raw = batch.get('illum_raw', None)
-    if illum_raw is not None:
-        illum_raw = illum_raw.to(device, non_blocking=True)
     loss_mask = batch.get('loss_mask', None)
     if loss_mask is None:
         raise KeyError("batch is missing required 'loss_mask'")
     loss_mask = loss_mask.to(device, non_blocking=True)
     m_diffuse = batch.get('M_diffuse', torch.zeros(rgb.shape[0])).float().to(device, non_blocking=True)
     m_residual = batch.get('m_residual', torch.ones(rgb.shape[0])).float().to(device, non_blocking=True)
-    
     seg = batch.get('seg', None)
     if seg is not None:
         seg = seg.to(device, non_blocking=True)
@@ -315,29 +434,156 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
     if normals is not None:
         normals = normals.to(device, non_blocking=True)
 
-    with torch.no_grad():
-        ccr = compute_ccr(rgb)
+    use_ccr = getattr(model, 'use_ccr_albedo', False)
+    def _ccr(x):
+        if not use_ccr:
+            return None
+        with torch.no_grad():
+            return compute_ccr(x)
 
-    with autocast(device_type='cuda', dtype=torch.float16):
-        predictions = model(rgb, **_forward_kwargs(model, m_diffuse, normals, seg, loss_mask, ccr))
-        
-        # Ensure predictions are float32 for stable loss and target computation
-        predictions = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in predictions.items()}
-        
+    # Derive-anneal ramp: Q99 scale 0.8/q99 → identity (a=I/S) over derive_anneal_iters after warmup.
+    _anneal_iters = int(getattr(criterion, 'derive_anneal_iters', 12000))
+    _anneal_cap = float(getattr(criterion, 'derive_anneal_cap', 1.0))
+    derive_anneal = (1.0 if _anneal_iters <= 0
+                     else min(1.0, max(0.0, (global_step - ssi_warmup_iters) / _anneal_iters)))
+    # Cap below 1.0 so training never sits on the pure clamp(I/S,0,1) rail (gradient-death → collapse).
+    derive_anneal = min(derive_anneal, _anneal_cap)
+    # Pass derive_anneal only to models that accept it (V20 has **kwargs; V17/V18 don't).
+    _msig = inspect.signature(model.forward).parameters
+    _accepts_anneal = ('derive_anneal' in _msig
+                       or any(p.kind == p.VAR_KEYWORD for p in _msig.values()))
+
+    def _forward(x, ccr=None):
+        kw = _forward_kwargs(model, m_diffuse, normals, seg, loss_mask, ccr)
+        if _accepts_anneal:
+            kw['derive_anneal'] = derive_anneal
+        with autocast(device_type='cuda', dtype=torch.float16):
+            preds = model(x, **kw)
+            return {k: (v.float() if isinstance(v, torch.Tensor) else v) for k, v in preds.items()}
+
+    # ── 1. Main forward + Hypersim/MID losses ──────────────────────────────────────
+    predictions = _forward(rgb, _ccr(rgb))
     targets = compute_targets(predictions, batch)
-
     use_ssi = (global_step >= ssi_warmup_iters)
-
+    decorr_scale = min(1.0, max(0.0, (global_step - ssi_warmup_iters) / max(1, ssi_warmup_iters)))
     losses = criterion(
-        predictions=predictions,
-        targets=targets,
-        loss_mask=loss_mask,
-        m_residual=m_residual,
-        rgb=rgb,
-        use_ssi=use_ssi,
+        predictions=predictions, targets=targets, loss_mask=loss_mask,
+        m_diffuse=m_diffuse, m_residual=m_residual, rgb=rgb,
+        use_ssi=use_ssi, decorr_scale=decorr_scale,
     )
 
-    return losses
+    # ── 2. CARI cross-render (rgb2 = same scene, different REAL light; paired rows only) ──────
+    lam_inv = float(getattr(criterion, 'lambda_alb_invariance', 0.0))
+    lam_explain = float(getattr(criterion, 'lambda_explain', 0.0))
+    lam_cf_pair = float(getattr(criterion, 'lambda_chroma_field_pair', 0.0))
+    rgb2 = batch.get('rgb2', None)
+    m_invariant = batch.get('m_invariant', None)
+    if (lam_inv > 0 or lam_explain > 0 or lam_cf_pair > 0) and rgb2 is not None and m_invariant is not None:
+        m_invariant = m_invariant.float().to(device, non_blocking=True)
+        if m_invariant.sum() > 0:
+            rgb2 = rgb2.to(device, non_blocking=True)
+            pair_valid = batch.get('pair_valid', loss_mask).float().to(device, non_blocking=True)
+            pred2 = _forward(rgb2, _ccr(rgb2))
+            cr_mask = loss_mask.float() * m_invariant.view(-1, 1, 1, 1) * pair_valid
+            if lam_inv > 0:
+                l_inv = criterion.cari_albedo_invariance(predictions['a_d'], pred2['a_d'].float(), cr_mask)
+                losses['loss_alb_invariance'] = lam_inv * l_inv
+                losses['loss_total'] = losses['loss_total'] + losses['loss_alb_invariance']
+            if lam_explain > 0:
+                l_explain = criterion.cari_explain(
+                    rgb, rgb2, predictions['shading_linear'], pred2['shading_linear'].float(), cr_mask)
+                losses['loss_explain'] = lam_explain * l_explain
+                losses['loss_total'] = losses['loss_total'] + losses['loss_explain']
+            # Colored-illuminant chroma target on the pair frame (V20 thesis lever): teach the chroma
+            # head the REAL cast from rgb2's colored shading chroma(rgb2/A*) — the signal the neutral
+            # WB primary frame cannot give. Same albedo A* (same scene) so material cancels.
+            if lam_cf_pair > 0 and pred2.get('chroma_field') is not None and targets.get('A_d_star') is not None:
+                l_cf_pair = criterion.cari_chroma_field(
+                    pred2['chroma_field'].float(), rgb2, targets['A_d_star'], cr_mask)
+                losses['loss_chroma_field_pair'] = lam_cf_pair * l_cf_pair
+                losses['loss_total'] = losses['loss_total'] + losses['loss_chroma_field_pair']
+
+    # ── Backward #1 (main + CARI). Detach shadow anchors BEFORE the graph is freed. ──────────
+    lam_sinv = float(getattr(criterion, 'lambda_shadow_inv', 0.0))
+    lam_sexp = float(getattr(criterion, 'lambda_shadow_explain', 0.0))
+    lam_sgt_f3d = float(getattr(criterion, 'lambda_shadow_gt_front3d', 0.0))
+    shadow_start = int(getattr(criterion, 'shadow_start_iter', 0))
+    shadow_on_hypersim = bool(getattr(criterion, 'shadow_on_hypersim', True))
+    shadow_on_front3d = bool(getattr(criterion, 'shadow_on_front3d', False))
+    is_front3d = batch.get('is_front3d', torch.zeros(rgb.shape[0])).float().to(device, non_blocking=True)
+    # Row-selection mask for the self-sup terms (shadow_inv/shadow_explain): OR of the two
+    # dataset gates, each independently switchable so (35−29) can be a front3d-only σ row
+    # without also re-enabling the Hypersim lever. Defaults (True/False) reproduce every
+    # existing config's mask exactly: (m_diffuse > 0), byte-for-byte.
+    shadow_row_mask = torch.zeros_like(m_diffuse)
+    if shadow_on_hypersim:
+        shadow_row_mask = shadow_row_mask + (m_diffuse > 0).float()
+    if shadow_on_front3d:
+        shadow_row_mask = shadow_row_mask + (is_front3d > 0).float()
+    shadow_row_mask = shadow_row_mask.clamp(max=1.0)
+    # The GT-anchor term is independent of shadow_on_front3d (that flag only gates the
+    # self-sup terms) — it is scoped to is_front3d rows directly, always, so a config could in
+    # principle run the GT anchor without the self-sup σ-invariance term.
+    has_active_rows = bool((shadow_row_mask > 0).any()) or (lam_sgt_f3d > 0 and bool((is_front3d > 0).any()))
+    shadow_active = ((lam_sinv > 0 or lam_sexp > 0 or lam_sgt_f3d > 0) and decorr_scale > 0
+                     and global_step >= shadow_start and has_active_rows)
+    a_anchor = predictions['a_d'].detach() if shadow_active else None
+    s_anchor = predictions['shading_linear'].detach() if shadow_active else None
+    _backward(losses['loss_total'], scaler, grad_accum_steps)
+    losses['loss_total'] = losses['loss_total'].detach()
+
+    # ── 3. Shadow/sun self-sup (Hypersim and/or front3d rows, per config): own forward + backward ──
+    if shadow_active:
+        from data.shadow_aug import sample_relight_field
+        Bn, _, Hn, Wn = rgb.shape
+        M, c = sample_relight_field(Bn, Hn, Wn, rgb.device)
+        rgb_s = (rgb * M * c).clamp(0.0, 1.0)
+        pred_s = _forward(rgb_s, _ccr(rgb_s))
+        a_s, s_s = pred_s['a_d'].float(), pred_s['shading_linear'].float()
+        # Bottom-clip (new, front3d-shadow-aug plan): σ can blacken pixels on the shadow side
+        # of a strong field; those must not be scored, matching the existing top-clip guard.
+        # SCOPED to when the new front3d mechanism is actually active (measured impact when it
+        # is: 0.0017% of top-clip-valid pixels on a Hypersim-like batch — negligible either
+        # way, but gating it keeps every existing Hypersim-lever config's mask, including
+        # v17_23/33/34, PROVABLY byte-identical to what it always was, not just "negligibly
+        # different" — no reason to accept even a tiny mismatch when it costs nothing to avoid.
+        top_clip = (rgb_s.amax(dim=1, keepdim=True) < 0.99)
+        if shadow_on_front3d or lam_sgt_f3d > 0:
+            sh_valid = (top_clip & (rgb_s.amax(dim=1, keepdim=True) > 1e-3)).float()
+        else:
+            sh_valid = top_clip.float()
+        sh_mask_spatial = loss_mask.float() * sh_valid
+        sh_mask = sh_mask_spatial * shadow_row_mask.reshape(-1, 1, 1, 1)
+        loss_shadow = rgb.new_zeros(())
+        if lam_sinv > 0:
+            term = lam_sinv * float(decorr_scale) * criterion.shadow_invariance(a_anchor, a_s, sh_mask)
+            loss_shadow = loss_shadow + term
+            losses['loss_shadow_inv'] = term.detach()
+        if lam_sexp > 0:
+            term = lam_sexp * float(decorr_scale) * criterion.shadow_explain(s_anchor, s_s, M, c, sh_mask)
+            loss_shadow = loss_shadow + term
+            losses['loss_shadow_explain'] = term.detach()
+        if lam_sgt_f3d > 0:
+            gt_mask = sh_mask_spatial * (is_front3d > 0).float().reshape(-1, 1, 1, 1)
+            a_gt = targets['A_d_star'].detach()
+            term = lam_sgt_f3d * float(decorr_scale) * criterion.shadow_invariance(a_gt, a_s, gt_mask)
+            loss_shadow = loss_shadow + term
+            losses['loss_shadow_gt_f3d'] = term.detach()
+        _backward(loss_shadow, scaler, grad_accum_steps)
+        losses['loss_total'] = losses['loss_total'] + loss_shadow.detach()
+
+    # ── 4. IIW WHDR ordinal hinge (post-baseline FT): own forward + backward ─────────────────
+    lam_ord_iiw = float(getattr(criterion, 'lambda_ordinal_iiw', 0.0))
+    if lam_ord_iiw > 0 and iiw_batch is not None:
+        iiw_rgb = iiw_batch['rgb'].to(device, non_blocking=True)
+        pred_iiw = _forward(iiw_rgb, None)
+        l_ord = criterion.ordinal_hinge_loss(pred_iiw['a_d'].float(), iiw_batch['comparisons'])
+        loss_ord = lam_ord_iiw * l_ord
+        _backward(loss_ord, scaler, grad_accum_steps)
+        losses['loss_ordinal_iiw'] = loss_ord.detach()
+        losses['loss_total'] = losses['loss_total'] + loss_ord.detach()
+
+    return {k: (v.detach() if torch.is_tensor(v) else v) for k, v in losses.items()}
 
 
 def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10):
@@ -665,83 +911,135 @@ def _log_val_examples(
             ).squeeze(0)
         return tile
 
-    layout_names = [
-        'Input RGB',
-        'Albedo GT',
-        'Shading GT',
-        'Residual GT',
-        'Recon GT',
-        '',
-        'Albedo Pred',
-        'Shading Pred',
-        'Residual Pred',
-        'Recon Pred',
-    ]
+    # Layout names are written per-sample after we know whether V20 outputs are present.
+    is_v20 = ('chroma_field' in predictions and 'd_g' in predictions)
 
     # Set TensorBoard tag based on sample_index
     if sample_index is not None:
         example_tag = f'{example_root}/sample_{sample_index}'
     else:
         example_tag = example_root
-    
-    writer.add_text(
-        f'{example_tag}/layout',
-        'left-to-right strip order: ' + ' | '.join(layout_names),
-        global_step,
-    )
 
     def _gamma_correct(x):
         return torch.pow(torch.clamp(x, min=0.0, max=1.0), 1.0 / 3.0)
-    
+
+    def _chroma_vis(c):
+        """Visualise a unit-luminance chroma field: neutral (all-1) → mid-gray (0.5)."""
+        if c is None:
+            return None
+        return _gamma_correct((c.clamp(0.0, 2.0) * 0.5))
+
     b = min(int(rgb.shape[0]), int(max_items))
     for i in range(b):
-        v_mask = targets['loss_mask'][i:i+1]
+        # Robust mask: validate() sets 'loss_mask'; _log_dataset_examples sets 'valid_mask'
+        v_mask = targets.get('loss_mask', targets.get('valid_mask',
+                    torch.ones(1, 1, rgb.shape[2], rgb.shape[3],
+                               device=rgb.device, dtype=torch.bool)))[i:i+1]
 
-        # Targets in linear
-        s_gt = 1.0 / (targets['pi_star'][i:i+1] + 1e-6) - 1.0
-        a_gt = targets['A_d_star'][i:i+1]
-        r_gt = targets['R_star'][i:i+1]
-        recon_gt = a_gt * s_gt + r_gt
+        # GT shading — display the COLORFUL S_c = I/A* (the derive-consistent shading the gray-SSI
+        # loss + chroma head are actually trained toward), NOT the Hypersim diffuse illumination S_d.
+        # Pred 'shading' = invert(g·chroma) → invert(S_c) at convergence, so GT = invert(S_c) is the
+        # apples-to-apples reference. Falls back to pi_star (=π(S_d)) only for models w/o S_c_star.
+        # predictions['shading'] is already π-domain [0,1]; keep GT in π too (no shared linear scale).
+        a_gt_all = targets.get('A_d_star')
+        a_gt = a_gt_all[i:i+1] if a_gt_all is not None else None
+        # ONLY V20 trains shading against S_c (gray-SSI vs gray(I/A*)); V17/V18 train against
+        # pi_star = π(S_d), so for them the GT row MUST stay S_d (else the viz contradicts the loss).
+        sc_star = targets.get('S_c_star') if is_v20 else None
+        if sc_star is not None:
+            s_gt_linear = sc_star[i:i+1].clamp_min(0.0)
+            s_gt_pi = (1.0 / (s_gt_linear + 1.0)).clamp(0.0, 1.0)            # invert(S_c), colored
+            # Residual/recon GT consistent with the S_c derive: R=(I−A*·S_c)₊≈0, recon=A*·S_c=I —
+            # matches the analytic decomposition the Pred row shows (vs the S_d residual the model
+            # never predicts). Falls back below when S_c_star is absent.
+            r_gt = (rgb[i:i+1] - a_gt * s_gt_linear).clamp(min=0.0) if a_gt is not None else None
+        else:
+            pi_star_gt = targets.get('pi_star')
+            s_gt_pi = pi_star_gt[i:i+1].clamp(0.0, 1.0) if pi_star_gt is not None else None
+            s_gt_linear = (1.0 / (s_gt_pi + 1e-6) - 1.0) if s_gt_pi is not None else None
+            r_gt_all = targets.get('R_star')
+            r_gt = r_gt_all[i:i+1] if r_gt_all is not None else None
 
-        # Predictions in linear
-        s_pred = predictions['shading'][i:i+1]
+        recon_gt = None
+        if a_gt is not None and s_gt_linear is not None and r_gt is not None:
+            recon_gt = a_gt * s_gt_linear + r_gt
+
+        # Predictions
+        s_pred_pi = predictions['shading'][i:i+1].clamp(0.0, 1.0)  # already π-domain
         a_pred = predictions['a_d'][i:i+1]
         r_pred = predictions['residual'][i:i+1]
-        recon_pred = predictions.get('rgb_reconstructed', a_pred * s_pred + r_pred)[i:i+1]
+        recon_pred = predictions.get('rgb_reconstructed',
+                        a_pred * (1.0 / (s_pred_pi + 1e-6) - 1.0) + r_pred)[i:i+1]
 
-        # Tonemap scales
-        scale_a = torch.max(_get_tonemap_scale(a_pred, valid_mask=v_mask), _get_tonemap_scale(a_gt, valid_mask=v_mask))
-        scale_s = torch.max(_get_tonemap_scale(s_pred, valid_mask=v_mask), _get_tonemap_scale(s_gt, valid_mask=v_mask))
-        scale_r = torch.max(_get_tonemap_scale(r_pred.abs(), valid_mask=v_mask), _get_tonemap_scale(r_gt.abs(), valid_mask=v_mask))
-        scale_recon = torch.max(_get_tonemap_scale(recon_pred, valid_mask=v_mask), _get_tonemap_scale(recon_gt, valid_mask=v_mask))
+        # V20-specific outputs
+        chroma_pred = predictions['chroma_field'][i:i+1] if is_v20 else None
+        d_g_pred    = predictions['d_g'][i:i+1]          if is_v20 else None
+        chroma_gt_all = targets.get('chroma_field_gt')
+        chroma_gt   = chroma_gt_all[i:i+1]               if chroma_gt_all is not None else None
 
+        # Tonemap scales — shared GT/pred within each channel for fair comparison
+        scale_a = _get_tonemap_scale(a_pred, valid_mask=v_mask)
+        if a_gt is not None:
+            scale_a = torch.max(scale_a, _get_tonemap_scale(a_gt, valid_mask=v_mask))
+        scale_r = _get_tonemap_scale(r_pred.abs(), valid_mask=v_mask)
+        if r_gt is not None:
+            scale_r = torch.max(scale_r, _get_tonemap_scale(r_gt.abs(), valid_mask=v_mask))
+        scale_recon = _get_tonemap_scale(recon_pred, valid_mask=v_mask)
+        if recon_gt is not None:
+            scale_recon = torch.max(scale_recon, _get_tonemap_scale(recon_gt, valid_mask=v_mask))
+
+        # Albedo (tonemap + gamma)
         a_pred_vis = _gamma_correct(_vis_tonemap(a_pred, scale=scale_a))
-        a_gt_vis = _gamma_correct(_vis_tonemap(a_gt, scale=scale_a))
-        s_pred_vis = _gamma_correct(_vis_tonemap(s_pred, scale=scale_s))
-        s_gt_vis = _gamma_correct(_vis_tonemap(s_gt, scale=scale_s))
-        
-        # Visualize residuals as false-color or absolute magnitude
-        r_pred_vis = _gamma_correct(_vis_tonemap(r_pred.abs(), scale=scale_r))
-        r_gt_vis = _gamma_correct(_vis_tonemap(r_gt.abs(), scale=scale_r))
-        
+        a_gt_vis   = _gamma_correct(_vis_tonemap(a_gt, scale=scale_a)) if a_gt is not None else None
+
+        # Shading: display in π-domain directly — values already [0,1], no shared scale needed.
+        # HIGH π = bright = LOW linear shading; LOW π = dark = HIGH linear shading (shadow).
+        s_pred_vis = _gamma_correct(s_pred_pi)
+        s_gt_vis   = _gamma_correct(s_gt_pi) if s_gt_pi is not None else None
+
+        # Residual and recon
+        r_pred_vis    = _gamma_correct(_vis_tonemap(r_pred.abs(), scale=scale_r))
+        r_gt_vis      = _gamma_correct(_vis_tonemap(r_gt.abs(), scale=scale_r)) if r_gt is not None else None
         recon_pred_vis = _gamma_correct(_vis_tonemap(recon_pred, scale=scale_recon))
-        recon_gt_vis = _gamma_correct(_vis_tonemap(recon_gt, scale=scale_recon))
+        recon_gt_vis   = _gamma_correct(_vis_tonemap(recon_gt, scale=scale_recon)) if recon_gt is not None else None
 
         blank_tile = torch.ones_like(a_pred_vis)
+        input_vis  = _gamma_correct(_vis_tonemap(rgb[i:i+1], scale=None, valid_mask=v_mask))
 
-        sample_tiles = [
-            ('Input RGB', _gamma_correct(_vis_tonemap(rgb[i:i+1], scale=None, valid_mask=v_mask))),
-            ('Albedo GT', a_gt_vis),
-            ('Shading GT', s_gt_vis),
-            ('Residual GT', r_gt_vis),
-            ('Recon GT', recon_gt_vis),
+        if is_v20:
+            # 12 tiles — 2 rows of 6
+            # Row 1 (GT):   Input | Albedo GT | Shading GT (π) | Chroma GT | Residual GT | Recon GT
+            # Row 2 (Pred): Gray d_g | Albedo Pred | Shading Pred (π) | Chroma Pred | Residual Pred | Recon Pred
+            sample_tiles = [
+                ('Input RGB',        input_vis),
+                ('Albedo GT',        a_gt_vis if a_gt_vis is not None else blank_tile),
+                ('Shading GT (π)',   s_gt_vis if s_gt_vis is not None else blank_tile),
+                ('Chroma GT',        _chroma_vis(chroma_gt) if chroma_gt is not None else blank_tile),
+                ('Residual GT',      r_gt_vis if r_gt_vis is not None else blank_tile),
+                ('Recon GT',         recon_gt_vis if recon_gt_vis is not None else blank_tile),
 
-            ('', blank_tile),
-            ('Albedo Pred', a_pred_vis),
-            ('Shading Pred', s_pred_vis),
-            ('Residual Pred', r_pred_vis),
-            ('Recon Pred', recon_pred_vis),
-        ]
+                ('Gray d_g',         _gamma_correct(d_g_pred.clamp(0, 1))),
+                ('Albedo Pred',      a_pred_vis),
+                ('Shading Pred (π)', s_pred_vis),
+                ('Chroma Pred',      _chroma_vis(chroma_pred) if chroma_pred is not None else blank_tile),
+                ('Residual Pred',    r_pred_vis),
+                ('Recon Pred',       recon_pred_vis),
+            ]
+        else:
+            # 10 tiles — 2 rows of 5 (non-V20 models; blank separates GT from Pred row)
+            sample_tiles = [
+                ('Input RGB',        input_vis),
+                ('Albedo GT',        a_gt_vis if a_gt_vis is not None else blank_tile),
+                ('Shading GT (π)',   s_gt_vis if s_gt_vis is not None else blank_tile),
+                ('Residual GT',      r_gt_vis if r_gt_vis is not None else blank_tile),
+                ('Recon GT',         recon_gt_vis if recon_gt_vis is not None else blank_tile),
+
+                ('',                 blank_tile),
+                ('Albedo Pred',      a_pred_vis),
+                ('Shading Pred (π)', s_pred_vis),
+                ('Residual Pred',    r_pred_vis),
+                ('Recon Pred',       recon_pred_vis),
+            ]
 
         final_target_hw = None
         footer_h = 50 
@@ -811,18 +1109,29 @@ def _log_val_examples(
         if not named_tiles:
             continue
 
+        tile_names = [n for n, _ in named_tiles]
         tiles = [t for _, t in named_tiles]
-        if len(tiles) >= 18:
+        writer.add_text(
+            f'{example_tag}/layout',
+            'left-to-right strip order: ' + ' | '.join(tile_names),
+            global_step,
+        )
+        n = len(tiles)
+        if n >= 18:
             row1_img = torch.cat(tiles[:6], dim=2)
             row2_img = torch.cat(tiles[6:12], dim=2)
             row3_img = torch.cat(tiles[12:18], dim=2)
             strip = torch.cat([row1_img, row2_img, row3_img], dim=1)
-        elif len(tiles) >= 10:
+        elif n >= 12:
+            # V20: 2 rows of 6 (GT row / Pred row)
+            row1_img = torch.cat(tiles[:6], dim=2)
+            row2_img = torch.cat(tiles[6:12], dim=2)
+            strip = torch.cat([row1_img, row2_img], dim=1)
+        elif n >= 10:
             row1_img = torch.cat(tiles[:5], dim=2)
             row2_img = torch.cat(tiles[5:10], dim=2)
             strip = torch.cat([row1_img, row2_img], dim=1)
         else:
-            # Fallback to single-row if some tiles were skipped.
             strip = torch.cat(tiles, dim=2)
 
         if sample_index is not None:
@@ -830,6 +1139,159 @@ def _log_val_examples(
         else:
             image_tag = f'{example_tag}/sample_{i}'
         writer.add_image(image_tag, strip, global_step)
+
+
+def _log_dataset_examples(dataset, model, device, writer, global_step, n_samples=3,
+                          seed=42, example_root='3. Examples', dataset_tag='Dataset'):
+    """Visualize n_samples from a dataset via model inference.
+
+    GT row is built with the SAME compute_targets() path validate() uses, so the MID/OpenRooms
+    sheets show the real GT: Albedo GT (pseudo-GT albedo.exr), Shading GT = π(S_c = I/A*), Chroma
+    GT, Residual GT (≈0), Recon GT (= I) — matching how eval_mid_constancy.py reads MID albedo.
+    (The old code looked for batch['albedo']/['shading'] keys these datasets never emit — they use
+    'albedo_raw'/'illum_raw' — so the entire GT row rendered blank.) Each sample is logged under a
+    UNIQUE sample_index tag so the n samples don't all collapse onto .../sample_0 and overwrite."""
+    rng = np.random.RandomState(seed)
+    indices = rng.choice(len(dataset), size=min(n_samples, len(dataset)), replace=False)
+
+    model.eval()
+    with torch.no_grad():
+        for dataset_idx in indices:
+            sample = dataset[int(dataset_idx)]
+            # Collate the single sample → batch of 1 (so compute_targets sees the (B,C,H,W) it expects).
+            batch = {k: (v.unsqueeze(0).to(device) if torch.is_tensor(v) else v)
+                     for k, v in sample.items()}
+            rgb = batch['rgb'].float()
+
+            fwd_kwargs = {}
+            if 'M_diffuse' in batch:
+                fwd_kwargs['m_diffuse'] = batch['M_diffuse'].float()
+            predictions = model(rgb, **fwd_kwargs)
+            predictions = {k: (v.float() if isinstance(v, torch.Tensor) else v)
+                           for k, v in predictions.items()}
+
+            # Full targets (A_d_star, S_c_star, chroma_field_gt, R_star, pi_star, loss_mask).
+            try:
+                targets = compute_targets(predictions, batch)
+            except Exception as exc:
+                print(f"[warn] {dataset_tag} viz compute_targets failed at step {global_step}: {exc}")
+                lm = batch.get('loss_mask')
+                targets = {'valid_mask': lm.bool() if lm is not None else
+                           torch.ones(1, 1, rgb.shape[2], rgb.shape[3], device=device, dtype=torch.bool)}
+
+            # Unique sample_index → distinct TensorBoard tag per sample (no overwrite).
+            _log_val_examples(
+                writer=writer,
+                global_step=global_step,
+                rgb=rgb,
+                predictions=predictions,
+                targets=targets,
+                max_items=1,
+                sample_index=int(dataset_idx),
+                example_root=f'{example_root}/{dataset_tag}',
+            )
+
+
+_FRONT3D_VAL_CACHE = {}  # root -> (dataset, fixed view-index subset) — scanned once per process
+
+
+def _get_front3d_val_probe_set(root_dir, input_size, n_views=8):
+    """Lazily build (and cache) a small, FIXED subset of the front3d HELD-OUT val split
+    (rooms hashed out of training, never seen regardless of mix weight). Fixed indices so
+    the same views are compared checkpoint-to-checkpoint — a consistent smoke set, not a
+    fresh random draw each time. Returns None if the dataset has no val views (e.g. render
+    not finished yet) so callers can skip cleanly rather than crash a live training run."""
+    key = (root_dir, input_size)
+    if key not in _FRONT3D_VAL_CACHE:
+        try:
+            ds = Front3DDataset(root_dir=root_dir, split='val', input_size=input_size)
+        except Exception as exc:
+            print(f'[warn] front3d val probe: dataset init failed ({exc}); skipping.')
+            _FRONT3D_VAL_CACHE[key] = None
+            return None
+        if len(ds) == 0:
+            _FRONT3D_VAL_CACHE[key] = None
+        else:
+            idx = list(range(min(n_views, len(ds))))
+            _FRONT3D_VAL_CACHE[key] = (ds, idx)
+    return _FRONT3D_VAL_CACHE[key]
+
+
+@torch.no_grad()
+def _run_front3d_val_probe(model, device, config, global_step, writer):
+    """Cheap (~8-view) live check of what the offline-sweep probe would have measured, made
+    necessary because only the 2 latest checkpoints are kept on disk (no post-hoc sweep
+    possible). Reports, on FRONT3D'S OWN held-out rooms:
+      alb_si_rmse : scale-invariant albedo error vs true GT albedo (accuracy)
+      inv_gap     : mean L1 between A(rgb_L0) and A(rgb_L1) on paired pixels (the raw
+                    cross-illuminant invariance CARI trains for)
+    Skipped entirely (no TB tag written) when front3d isn't in this run's mix, so rows that
+    don't use it stay clean. Wrapped defensively: any failure here must never take down an
+    otherwise-healthy training run.
+    """
+    try:
+        front3d_weight = float(config.get('train', {}).get('sampling_weights_phase3', {}).get('front3d', 0.0))
+        if front3d_weight <= 0:
+            return
+        root_dir = config.get('data', {}).get('front3d_root', '../datasets/front3d_iid')
+        input_size = int(config.get('train', {}).get('input_size', 384))
+        probe = _get_front3d_val_probe_set(root_dir, input_size, n_views=8)
+        if probe is None:
+            return
+        ds, idx = probe
+
+        was_training = model.training
+        model.eval()
+        use_ccr = getattr(model, 'use_ccr_albedo', False)
+        accepts_ccr = 'ccr' in inspect.signature(model.forward).parameters
+
+        def _fwd(x):
+            kw = {}
+            if accepts_ccr and use_ccr:
+                kw['ccr'] = compute_ccr(x)
+            with autocast(device_type='cuda', dtype=torch.float16):
+                return model(x, **kw)['a_d'].float()
+
+        # σ-invariance probe (front3d-shadow-aug plan, documents/design/FRONT3D_SHADOW_AUG_PLAN.md,
+        # smoke test S2's statistic logged continuously): mean|A(I) − A(I⊙σ)| under a synthetic
+        # hard-shadow field, on the SAME clean forward `a1` already computed for inv_gap (no extra
+        # forward beyond the one σ-perturbed branch) — watches whether this channel is still
+        # saturated (near-zero, as measured pre-fix) or has live gradient once training resumes.
+        from data.shadow_aug import sample_relight_field
+
+        si_rmses, inv_gaps, inv_gaps_sigma = [], [], []
+        for i in idx:
+            b = ds[i]
+            rgb = b['rgb'].unsqueeze(0).to(device, non_blocking=True)
+            rgb2 = b['rgb2'].unsqueeze(0).to(device, non_blocking=True)
+            alb_gt = b['albedo_scaled'].unsqueeze(0).to(device, non_blocking=True)
+            mask = b['loss_mask'].unsqueeze(0).to(device, non_blocking=True)
+            pair_valid = b['pair_valid'].unsqueeze(0).to(device, non_blocking=True)
+
+            a1, a2 = _fwd(rgb), _fwd(rgb2)
+
+            si_rmses.append(_masked_scale_invariant_rmse(a1, alb_gt, mask).item())
+            pv = (mask & pair_valid).float().expand_as(a1)
+            inv_gaps.append(((a1 - a2).abs() * pv).sum().item() / (pv.sum().item() + 1e-6))
+
+            M, c = sample_relight_field(1, rgb.shape[2], rgb.shape[3], rgb.device)
+            rgb_sig = (rgb * M * c).clamp(0.0, 1.0)
+            sig_valid = ((rgb_sig.amax(dim=1, keepdim=True) < 0.99)
+                        & (rgb_sig.amax(dim=1, keepdim=True) > 1e-3))
+            a_sig = _fwd(rgb_sig)
+            pv_sig = (mask & sig_valid).float().expand_as(a1)
+            inv_gaps_sigma.append(((a1 - a_sig).abs() * pv_sig).sum().item() / (pv_sig.sum().item() + 1e-6))
+
+        if was_training:
+            model.train()
+        n = len(si_rmses)
+        if n == 0:
+            return
+        writer.add_scalar('2. Val/3. Front3D/alb_si_rmse', sum(si_rmses) / n, global_step)
+        writer.add_scalar('2. Val/3. Front3D/inv_gap', sum(inv_gaps) / n, global_step)
+        writer.add_scalar('2. Val/3. Front3D/inv_gap_sigma', sum(inv_gaps_sigma) / n, global_step)
+    except Exception as exc:
+        print(f'[warn] front3d val probe failed at step {global_step} ({exc}); skipping this step.')
 
 
 def validate(
@@ -844,6 +1306,7 @@ def validate(
     max_val_batches=None,
     compute_val_losses=True,
     example_root='3_Examples',
+    config=None,
 ):
     """
     Validation on fixed Hypersim val split.
@@ -890,6 +1353,7 @@ def validate(
                 raise KeyError("batch is missing required 'loss_mask'")
             loss_mask = loss_mask.to(device, non_blocking=True)
             m_residual = batch.get('m_residual', torch.ones(rgb.shape[0])).float().to(device, non_blocking=True)
+            m_diffuse = batch.get('M_diffuse', torch.zeros(rgb.shape[0])).float().to(device, non_blocking=True)
             seg = batch.get('seg', None)
             if seg is not None:
                 seg = seg.to(device, non_blocking=True)
@@ -940,6 +1404,7 @@ def validate(
                     predictions=predictions,
                     targets=targets,
                     loss_mask=loss_mask,
+                    m_diffuse=m_diffuse,
                     m_residual=m_residual,
                     rgb=rgb,
                     use_ssi=True,
@@ -993,7 +1458,15 @@ def validate(
     val_out = {}
     if compute_val_losses: val_out.update(total_loss)
     val_out.update(total_metric)
-    _log_ordered_scalars(writer, val_out, global_step, tag_prefix=None)
+    # tag_prefix='2. Val': without it these averages land in the SAME '1. Losses/*' tags as
+    # the per-batch train losses (periodic spikes in the train curves), and the metric keys
+    # (a_d_rmse etc.) are silently dropped by _log_ordered_scalars' key filter.
+    _log_ordered_scalars(writer, val_out, global_step, tag_prefix='2. Val')
+    for k, v in total_metric.items():
+        writer.add_scalar(f'2. Val/2. Metrics/{k}', float(v), global_step)
+
+    if config is not None:
+        _run_front3d_val_probe(model, device, config, global_step, writer)
 
     return val_out
 
@@ -1008,16 +1481,31 @@ def build_stage1_model(config):
         'pretrained': config['model'].get('pretrained', True),
         'num_seg_classes': config['model'].get('num_seg_classes', 41),
         'input_size': int(config['train'].get('input_size', 384)),
+        # DPT decoder + head dims — must match checkpoint architecture
+        'dpt_feat_ch': int(config['model'].get('dpt_feat_ch', 256)),
+        'dpt_fusion_ch': int(config['model'].get('dpt_fusion_ch', 128)),
+        'dpt_out_ch': int(config['model'].get('dpt_out_ch', 128)),
+        'detail_ch': int(config['model'].get('detail_ch', 48)),
+        'head_mid': int(config['model'].get('head_mid', 64)),
+        # Physics-typed skip gates
+        'albedo_chroma_skip': config['model'].get('albedo_chroma_skip', True),
+        'shading_lum_skip': config['model'].get('shading_lum_skip', True),
+        'albedo_rgb_skip': config['model'].get('albedo_rgb_skip', False),
+        'dino_variant': config['model'].get('dino_variant', 'large'),
+        'dino_pretrained': config['model'].get('dino_pretrained', True),
+        'refiner': config['model'].get('refiner', {}),
     }
 
     model_map = {
         12.0: IntrinsicDecompositionV12,
         16.0: IntrinsicDecompositionV16,
         17.0: IntrinsicDecompositionV17,
+        17.27: IntrinsicDecompositionV17Refiner,
+        20.0: IntrinsicDecompositionV20,
     }
 
     if version not in model_map:
-        raise ValueError(f"Unsupported Stage1 version for single dataset mode: {version}. Supported: 13, 14, 15, 16, 17")
+        raise ValueError(f"Unsupported Stage1 version for single dataset mode: {version}. Supported: 13, 14, 15, 16, 17, 17.27")
     return model_map[version](model_cfg)
 
 
@@ -1097,7 +1585,7 @@ def main():
 
     writer = SummaryWriter(log_dir=log_dir)
     model = build_stage1_model(config).to(device)
-    criterion = FlexibleLoss(config['loss']).to(device)
+    criterion = V17Loss(config['loss']).to(device)
     optimizer = build_optimizer_stage1(model, config['train'], config['model'])
 
     hypersim_root = config['data']['hypersim_root']
@@ -1119,24 +1607,52 @@ def main():
     hypersim_train_max_images = int(config['data'].get('hypersim_train_max_images', 0))
 
     from src.data.mixed_dataset import get_mixed_loader
+    # InteriorVerse is OPT-IN: the dataset is only instantiated when its sampling weight > 0
+    # (see get_mixed_loader). Wiring the root here makes it a one-line config flip. NOTE: IV sets
+    # M_diffuse=0 (interiorverse_dataset.py) so it is EXCLUDED from the Hypersim-gated shadow
+    # self-sup (sh_mask) — it adds albedo-supervision diversity only, never shadow signal.
+    iv_root = config['data'].get('interiorverse_root',
+                                 '../datasets/IndoorInverseRendering/interiorverse/interiorverse/interverse')
+    front3d_root = config['data'].get('front3d_root', '../../../datasets/front3d_iid')
     def _build_train_loader(weights_key):
         return get_mixed_loader(
-            data_roots={'hypersim': hypersim_root, 'midintrinsic': config['data'].get('midintrinsic_root', '../../../datasets/MIDIntrinsics')},
+            data_roots={
+                'hypersim': hypersim_root,
+                'midintrinsic': config['data'].get('midintrinsic_root', '../../../datasets/MIDIntrinsics'),
+                'interiorverse': iv_root,
+                'front3d': front3d_root,
+            },
             batch_size=int(config['train']['batch_size']),
             split='train',
             num_workers=int(config['train'].get('num_workers', 4)),
             input_size=int(config['train']['input_size']),
             cache_max_items=cache_max_items,
-            mix_weights=config['train'].get(weights_key, {'hypersim': 1.0, 'midintrinsic': 0.0})
+            mix_weights=config['train'].get(weights_key, {'hypersim': 1.0, 'midintrinsic': 0.0}),
+            strict_split=strict_split,
+            load_geometry=False,
+            load_normals=False,
+            # MID CARI pairing + Hypersim tint-pair flags (config data:). get_mixed_loader
+            # reads these from kwargs with OFF defaults, so omitting them silently disables
+            # MID raw cross-render pairs no matter what v17.yaml says (v18/v20 trainers
+            # already forward use_mid_paired; this one didn't).
+            use_mid_paired=bool(config['data'].get('use_mid_paired', False)),
+            mid_pair_mode=str(config['data'].get('mid_pair_mode', 'raw')),
+            mid_chromatic_aug=bool(config['data'].get('mid_chromatic_aug', False)),
+            mid_raw_color_pair=bool(config['data'].get('mid_raw_color_pair', False)),
+            hypersim_color_pair_prob=float(config['data'].get('hypersim_color_pair_prob', 0.0)),
+            hypersim_color_tint_min=float(config['data'].get('hypersim_color_tint_min', 0.8)),
+            hypersim_color_tint_max=float(config['data'].get('hypersim_color_tint_max', 1.25)),
+            # Per-worker LRU cache of decoded front3d EXRs. Conservative default (128 ≈
+            # 0.4 GB/worker) because the machine is memory-pressured and per-worker caches
+            # don't share; raise toward 512 for single-trainer runs with free RAM, or set 0
+            # to disable. Hit rate ≈ this/n_views (uniform random sampling — see dataset).
+            front3d_cache_max_items=int(config['data'].get('front3d_cache_max_items', 128)),
         )
 
     def infinite_loader(dl):
         while True:
             for b in dl:
                 yield b
-
-    train_loader = _build_train_loader('sampling_weights_phase1')
-    train_iter = iter(infinite_loader(train_loader))
 
     val_num_workers = max(1, int(config['data'].get('val_num_workers', config['train'].get('val_num_workers', 2))))
     val_cache_max_items = max(0, int(config['data'].get('val_cache_max_items', 64)))
@@ -1157,10 +1673,12 @@ def main():
         strict_split=strict_split,
         max_hdf5_retries=hypersim_max_hdf5_retries,
         skip_corrupt_samples=hypersim_skip_corrupt_samples,
+        load_geometry=False,
     )
 
     max_iters = int(config['train'].get('extend_iterations', 25000))
     grad_accum_steps = max(1, int(config['train'].get('grad_accum_steps', 1)))
+    ssi_warmup = int(config['loss'].get('ssi_warmup_iters', 3000))   # legacy V17 loop warmup gate
     grad_clip_max_norm = float(config['train'].get('grad_clip_max_norm', 1.0))
     use_cosine_lr = bool(config['train'].get('use_cosine_lr', True))
     lr_eta_min = float(config['train'].get('lr_eta_min', 1.0e-7))
@@ -1191,6 +1709,27 @@ def main():
                     pg['lr'] = base_lr
             print(f"!!! LR Reset: Manual override to {base_lr} from config")
 
+    # ── IIW ordinal-hinge fine-tune loader (off unless lambda_ordinal_iiw>0) ──────────────
+    # Joint WHDR fine-tune (post-baseline): a dedicated IIW human-judgment batch per step feeds
+    # the ordinal hinge in train_one_step (§4) while the Hypersim+MID constancy losses stay on.
+    # Train split = COMPLEMENT of the eval test split (no leakage). See src/data/iiw_dataset.py
+    # + src/configs/v20_iiw_ft.yaml (the V17 analog extends the final model's config). Ported
+    # from train_v20.py's main loop so a V17 final-model IIW-ft runs through train_v17.py.
+    iiw_iter = None
+    if float(config['loss'].get('lambda_ordinal_iiw', 0.0)) > 0:
+        from data.iiw_dataset import get_iiw_loader
+        _iiw_root = config['data'].get('iiw_root', 'tests/testing_data/iiw-dataset/data')
+        _iiw_root = _iiw_root if os.path.isabs(_iiw_root) else str(ROOT_DIR / _iiw_root)
+        iiw_loader = get_iiw_loader(
+            _iiw_root, split='train',
+            batch_size=int(config['train'].get('iiw_batch_size', 2)),
+            input_size=int(config['train']['input_size']),
+            num_workers=max(1, int(config['train'].get('num_workers', 4)) // 2),
+        )
+        iiw_iter = iter(infinite_loader(iiw_loader))
+        print(f"[IIW] ordinal-hinge fine-tune ENABLED: {len(iiw_loader.dataset)} train images "
+              f"(lambda={config['loss']['lambda_ordinal_iiw']}), root={_iiw_root}")
+
     scheduler = None
     if use_cosine_lr:
         total_opt_steps = max(1, math.ceil(max_iters / grad_accum_steps))
@@ -1201,6 +1740,24 @@ def main():
             optimizer, T_max=total_opt_steps, eta_min=lr_eta_min, last_epoch=completed_opt_steps - 1
         )
 
+    phase1_iters = int(config['train'].get('phase1_iterations', -1))
+    phase2_iters = int(config['train'].get('phase2_iterations', -1))
+
+    def _weights_key_for_step(step):
+        if phase2_iters >= 0 and step >= phase2_iters and 'sampling_weights_phase3' in config['train']:
+            return 'sampling_weights_phase3'
+        if phase1_iters >= 0 and step >= phase1_iters and 'sampling_weights_phase2' in config['train']:
+            return 'sampling_weights_phase2'
+        return 'sampling_weights_phase1'
+
+    active_weights_key = _weights_key_for_step(start_step)
+    print(
+        f"[data] Initial train mix at step {start_step}: {active_weights_key} = "
+        f"{config['train'].get(active_weights_key, {})}"
+    )
+    train_loader = _build_train_loader(active_weights_key)
+    train_iter = iter(infinite_loader(train_loader))
+
     print(f"Start step: {start_step}, max step: {max_iters}")
 
     running = {}
@@ -1209,20 +1766,23 @@ def main():
 
     scaler = GradScaler('cuda')
 
-    phase1_iters = int(config['train'].get('phase1_iterations', -1))
-
     for step in train_pbar:
-        # Phase switch check
-        if step == phase1_iters:
-            print(f"--- Switching to Phase 2 Sampling Weights at step {step} ---")
-            train_loader = _build_train_loader('sampling_weights_phase2')
+        desired_weights_key = _weights_key_for_step(step)
+        if desired_weights_key != active_weights_key:
+            active_weights_key = desired_weights_key
+            print(
+                f"--- Switching train mix at step {step}: {active_weights_key} = "
+                f"{config['train'].get(active_weights_key, {})} ---"
+            )
+            train_loader = _build_train_loader(active_weights_key)
             train_iter = iter(infinite_loader(train_loader))
 
         batch = next(train_iter)
-        losses = train_one_step(model, batch, criterion, device)
-        loss = losses['loss_total'] / float(grad_accum_steps)
-        
-        scaler.scale(loss).backward()
+        iiw_batch = next(iiw_iter) if iiw_iter is not None else None
+        # train_one_step now does its own (split) backward internally — do NOT backward again here.
+        losses = train_one_step(model, batch, criterion, device, step, ssi_warmup,
+                                scaler=scaler, grad_accum_steps=grad_accum_steps,
+                                iiw_batch=iiw_batch)
 
         if (step + 1) % grad_accum_steps == 0 or step == max_iters - 1:
             scaler.unscale_(optimizer)
@@ -1276,7 +1836,7 @@ def main():
                 model, val_loader, criterion, device, step + 1, writer,
                 val_example_images=val_example_images, val_example_indices=val_example_indices,
                 max_val_batches=max_val_batches, compute_val_losses=compute_val_losses,
-                example_root='3. Examples',
+                example_root='3. Examples', config=config,
             )
             pretty = ", ".join([f"{k}={v:.4f}" for k, v in vloss.items()])
             print(f"[{step+1}] val: {pretty}")

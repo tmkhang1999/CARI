@@ -1,0 +1,120 @@
+% change layout between a5 book version and a4 ur-diss version
+\newcommand\bookversion{false} % Do not forget the second point!!!
+
+% change margins from huge (during creation for sticky notes) to small (for handing in)
+\newcommand\finalversion{true}
+
+
+% check for common LaTeX mistakes (yes, this sould be before "\documentclass"!)
+\RequirePackage[l2tabu,orthodox]{nag}
+
+
+
+
+% main document class
+\documentclass[a4paper,
+twoside,
+12pt,
+%BCOR=3mm,
+%draft
+]{book}
+
+
+
+
+% main style file
+\usepackage{mydiss}
+
+% plots for the analysis figures (Chapter 5)
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+% Wrapped columns for readable method-comparison tables.
+\usepackage{tabularx}
+\usepackage{colortbl}
+% relative node placement for the method/schedule diagrams (Chapters 3-4)
+\usetikzlibrary{positioning,calc}
+
+% allow images to be found in multiple locations
+\graphicspath{{./images/}{./images/low/}}
+
+% symbol definitions
+\input{notationsMath}
+% text definitions
+\input{notationsText}
+
+\makeatletter\@addtoreset{chapter}{part}\makeatother%
+
+% ---------- Thesis information ----------
+% Enter the title of your project
+\newcommand{\titleEng}{Coloured Illumination Constancy in Intrinsic Image Decomposition\\via Cross-Render Albedo Invariance (CARI)}%
+
+% Enter your first and last name
+\newcommand{\name}{Minh Khang Tran}%
+
+% Enter your academic (COSI) supervisor
+\newcommand{\Academicsupervisor}{Dr. Luis Gomez Robledo, and Professor Seyed Ali Amirshahi}%
+
+% If you have a supervisor outside COSI, this is where you enter his/her/their name
+% otherwise comment this line out
+\newcommand{\Hostsupervisor}{Dr. Sezer Karaoglu, and Professor Theo Gevers}%
+
+% Name of your first and second jury member and their affiliation
+% TODO(author): replace with the real jury members before submission.
+\newcommand{\FirstJury}{[First jury member: name and affiliation to be confirmed]}%
+\newcommand{\SecondJury}{[Second jury member: name and affiliation to be confirmed]}%
+
+% submission and defence date
+\newcommand{\submissiondate}{15\textsuperscript{th} July 2026}%
+\newcommand{\Defencedate}{1\textsuperscript{st} September 2026}%
+
+% labels for inter-chapter cross-references (used in Chapter 1 \chapref calls)
+\newcommand{\ch}[1]{\ref{#1}}
+
+% Consistent first/second/third-place styling for directly comparable rows.
+\newcommand{\rankone}[1]{\cellcolor{yellow!28}\textbf{#1}}
+\newcommand{\ranktwo}[1]{\cellcolor{gray!20}\underline{#1}}
+\newcommand{\rankthree}[1]{\cellcolor{orange!18}#1}
+
+% ---------- PDF metadata + link styling (P2, 2026-07-14) ----------
+% hyperref is loaded (option-less) inside mydiss.sty at line 26, before the thesis-info
+% block above exists, so its defaults leave coloured link BORDERS and empty PDF metadata.
+% Configure it here, where \titleEng/\name are in scope. Internal links use the
+% thin red boxes requested for the electronic copy; citation and URL borders use
+% distinct colours. Text remains black, so the printed copy is unaffected apart
+% from the PDF annotations.
+% \titleEng contains a \\ for the cover page, stripped here for the flat metadata string.
+\hypersetup{
+  colorlinks=false,
+  pdfborder={0 0 1},
+  linkbordercolor={1 0 0},
+  citebordercolor={0 0.45 0},
+  urlbordercolor={0 0 1},
+  pdftitle={Coloured Illumination Constancy in Intrinsic Image Decomposition via Cross-Render Albedo Invariance (CARI)},
+  pdfauthor={\name},
+  pdfsubject={Intrinsic Image Decomposition; Colour Constancy; Cross-Render Albedo Invariance},
+  pdfkeywords={intrinsic image decomposition, colour constancy, albedo, CARI, DINOv2, DPT},
+}
+
+\begin{document}
+
+%-------------------------------------------------------------------------------
+% include chapters
+%-------------------------------------------------------------------------------
+
+    % Front matter (title, abstract, toc, acronyms, notations, etc.)
+    \include{./chapters/FRONTMATTER/00-frontmatter}
+
+    % Chapters
+    \include{./chapters/Chapter1}   % Introduction
+    \include{./chapters/Chapter2}   % Related Work
+    \include{./chapters/Chapter3}   % Method
+    \include{./chapters/Chapter4}   % Implementation
+    \include{./chapters/Chapter5}   % Experiments
+    \include{./chapters/Chapter6}   % In Practice (applications)
+    \include{./chapters/Chapter7}   % Conclusion
+
+
+
+    \include{chapters/BACKMATTER/99-backmatter}
+
+\end{document}

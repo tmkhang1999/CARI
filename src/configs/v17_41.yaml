@@ -1,0 +1,41 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.41 — TABLE-A (CARI 2×2 ablation) · ROW 1: PLAIN BASELINE, retrained to 50k.
+#
+# WHY THIS EXISTS: the old Table A compared banked checkpoints at 19k/30k/50k — NOT fair
+# (different step counts confound the toggled feature with extra training; the model was still
+# improving, so the confound is material). This config re-trains row 1 to the SAME 50k horizon
+# as row 4 so every cell of the 2×2 is step-matched and differs by ONE toggle only.
+#
+# THE 2×2 (axis-1 = cross-render losses, axis-2 = wide color path + chroma loss):
+#                       cross-render OFF      cross-render ON
+#   color-path OFF        ROW 1 (this)          ROW 2 (v17.42)
+#   color-path ON         ROW 3 (v17.43)        ROW 4 (v17.yaml @ v17_old/50k)
+#
+# ROW 1 = BOTH axes OFF. No wide color path (albedo_rgb_skip=false) AND no legacy chroma skip
+# → the albedo head has NO skip_enc → 443-param arch, which loads the 443-param v17_old/19k
+# ckpt EXACTLY (no cold params). No chroma loss, no L_inv, no L_explain.
+#
+# DATA: inherits v17's fixed resume-safe phase curriculum, so from step 25k (phase 3) row 1 sees the
+# SAME Hypersim/MID/InteriorVerse mix as rows 2/3/4 — MID's WB'd pseudo-GT albedo supervises
+# all rows; ONLY the cross-render LOSS on the raw pairs is toggled. This HOLDS DATA FIXED so a
+# gain is attributable to the loss/arch, not to MID exposure (the rigorous answer to "is it the
+# loss or just more data?"). If instead you want row 1 to be a TRUE never-saw-MID baseline, add:
+#     train: { sampling_weights_phase3: { hypersim: 0.6, midintrinsic: 0.0, interiorverse: 0.4 } }
+#
+# RUN (saves to checkpoints/v17_41/, resumes the 19k baseline bank):
+#   bash scripts/train.sh --version 17.41 --cuda 0 --resume checkpoints/v17_old/checkpoint_iter_19000.pth
+#
+# Recipe (lr 2e-4 cosine, reset_lr=false, skip_optimizer=false, extend_iterations=50000) is
+# inherited from v17 UNCHANGED — i.e. it CONTINUES the original run, the same way row 4 was made.
+# This is NOT the gentle 2e-5 lever FT; Table A uses the base training recipe.
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+model:
+  albedo_rgb_skip: false       # axis-2 OFF: no wide color path  → 443 arch (matches 19k ckpt)
+  albedo_chroma_skip: false    # keep the legacy chroma skip OFF too, so skip_enc is NOT built
+
+loss:
+  lambda_a_chroma: 0.0         # axis-2 OFF: no albedo-chroma loss
+  lambda_alb_invariance: 0.0   # axis-1 OFF: no L_inv
+  lambda_explain: 0.0          # axis-1 OFF: no L_explain

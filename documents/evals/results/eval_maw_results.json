@@ -1,0 +1,42 @@
+{
+  "v17_19k": {
+    "ckpt": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.779000050553302,
+    "intensity_si_mse": 0.004271319208959485,
+    "intensity_si_mse_x100": 0.42713192089594854,
+    "splits": {}
+  },
+  "v17_50k": {
+    "ckpt": "checkpoints/v17/checkpoint_iter_50000.pth",
+    "type": "17",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.023111063747055,
+    "intensity_si_mse": 0.00401856835209042,
+    "intensity_si_mse_x100": 0.40185683520904203,
+    "splits": {}
+  },
+  "marigold_app": {
+    "ckpt": "checkpoints/marigold-iid-appearance-v1-1",
+    "type": "marigold-appearance",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 3.6248,
+    "intensity_si_mse": 0.004608,
+    "intensity_si_mse_x100": 0.4608,
+    "_note": "output-space-fixed values recovered from eval_row4_rerun.log; JSON write was lost when marigold_light OOM-crashed on GPU 1",
+    "splits": {}
+  },
+  "marigold_light": {
+    "ckpt": "checkpoints/marigold-iid-lighting-v1-1",
+    "type": "marigold-lighting",
+    "dataset": "maw1",
+    "n_images": 874,
+    "chromaticity_deltae": 4.047258132577131,
+    "intensity_si_mse": 0.004223307167225884,
+    "splits": {}
+  }
+}

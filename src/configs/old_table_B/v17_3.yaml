@@ -1,0 +1,82 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.3 — HOMOGENEITY fine-tune (lever-2: soft-shadow self-supervision, L_shadow_inv).
+#
+# GOAL: remove the residual HARD/soft shadow leak that lever-1 (LF flatness) cannot reach — a
+# cast shadow with a sharp boundary that lever-1's low-pass averages away. We MANUFACTURE a
+# second observation: cast a KNOWN synthetic relight field (M, c) — shadow darkening + cool/warm
+# tint — on every Hypersim sample, run a 2nd forward, and require the predicted albedo to be
+# INVARIANT to it (criterion.shadow_invariance, train_v17.py §3). Because we have no GT pair at
+# test time, this self-supervision is the only signal that teaches shadow→NOT-in-albedo on the
+# OOD distribution (ARAP, real photos) the Hypersim GT albedo alone does not cover.
+#
+# WHY BOTH inv + explain (V20's cut does NOT transfer): V20 zeroed lambda_shadow_explain because
+# in its SHADING-FIRST architecture shading was the central derived quantity with a FREE gauge —
+# perturbing it risked the white-collapse that actually killed V20. V17 is different: shading_linear
+# = (1-pi)/pi is PINNED by recon (albedo*shading_linear ~= rgb) and albedo is directly GT-supervised,
+# so there is no free gauge. The explain target s_anchor*M*c uses a DETACHED s_anchor → it is a fixed
+# known quantity, not a live log-difference; the gradient flows only through the 2nd-forward shading.
+# inv + explain are the two HALVES of the correct decomposition of the manufactured image
+# rgb_s = rgb*M*c = (albedo*s_clean)*M*c:  a_s=albedo (inv)  AND  s_s=s_clean*M*c (explain). inv alone
+# leaves the shading half free → an unmatched gradient on the shared trunk. explain is FREE compute
+# (s_s is already produced at train_v17.py:449) and pushes the warm/cool tint c INTO shading — i.e.
+# the colored-illuminant signal goes to shading, not albedo → it should HELP Cast_RMS / colored-C_arap
+# (complementary to CARI L_inv). shadow_invariance stays the collapse-safe core: it scale+shift-aligns
+# a_shadow→a_clean FIRST, removing the trivial desaturation gauge, so only the residual SHADOW-SHAPED
+# albedo difference is penalised. This is "soft-shadow aug + L_shadow_inv (+ matched L_shadow_explain)".
+#
+# WHY THIS CANNOT FAIL LIKE V20: additive loss on the UNCHANGED, winning V17 direct-albedo head.
+# No architecture change, no free shading gauge. The shadow loss runs ONLY on Hypersim rows
+# (sh_mask gates m_diffuse>0) and ONLY on un-clipped pixels (rgb_s.amax < 0.99) — the synthetic
+# white-illuminant anchor where the manufactured (M,c) is trustworthy.
+#
+# CLEAN ABLATION: data mix is IDENTICAL to v17.2 (hypersim 0.6 / MID 0.4). The ONLY variable
+# vs v17.2 is the lever (flatness → shadow-inv), so the thesis table attributes each effect.
+# InteriorVerse is deliberately OFF: it sets M_diffuse=0 → excluded from the shadow branch, so
+# it would add zero lever-2 signal and only confound the ablation (see HANDOFF note).
+#
+# RUN (saves to checkpoints/v17_3/, resumes FROM the row-4 50k weights — base untouched):
+#   bash scripts/train.sh --version 17.3 --cuda 1 \
+#       --resume checkpoints/v17_row4/checkpoint_iter_50000.pth
+#
+# VRAM: lever-2 adds a 2nd decoder forward (frozen DINOv2 reused). Confirmed to fit alongside
+# the main+CARI graph at the current batch size.
+#
+# KILL-GATE (the V20 lesson — pre-register it): after each 1k-step ckpt, run
+#   tests/eval/eval_mid_constancy.py + tests/eval/eval_arap.py --constancy.
+# KEEP the ckpt with the cleanest IIW/visual homogeneity that does NOT regress MID C_mat/Cast
+# or the ARAP COLORED-subset C_arap by more than ~10% vs v17@50k. SWEEP lambda_shadow_inv ∈
+# {0.5, 1.0, 2.0}.
+#
+# Inherits ALL of v17.yaml via `extends`, then applies only the deltas below.
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  # ── Gentle FT-from-trained-ckpt (mirrors v17.2) ───────────────────────────────────────
+  lr: 2.0e-5                 # ~1/10 of the 2e-4 baseline — refine, don't relearn
+  use_cosine_lr: false       # CONSTANT lr (a resumed cosine would sit at eta_min)
+  reset_lr: false             # override the decayed lr loaded from the 50k ckpt
+  skip_optimizer: false       # fresh Adam moments for the FT phase
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # PIN the phase boundary past the horizon so NO phase switch fires mid-resume (loader inits on
+  # phase1). The whole FT stays on the mix below — keeping MID raw pairs for CARI L_inv AND a
+  # Hypersim majority so the shadow branch (Hypersim-gated) fires on most batches.
+  phase1_iterations: 999999
+  sampling_weights_phase1:
+    hypersim: 0.6            # synthetic GT anchor + the rows the shadow self-sup runs on
+    midintrinsic: 0.4        # real raw pairs = CARI L_inv (keeps colored-illuminant constancy)
+
+loss:
+  # ── THE lever-2 term (the only addition) ──────────────────────────────────────────────
+  # Aligned albedo invariance to a manufactured shadow/sun field. decorr_scale=1.0 at resume@50k
+  # (ssi_warmup_iters=3000 already passed) so the effective weight == lambda. Start 1.0; sweep
+  # {0.5, 1.0, 2.0} against the kill-gate above.
+  lambda_shadow_inv: 1.0       # collapse-safe core: aligned albedo invariance (sweep {0.5,1,2})
+  lambda_shadow_explain: 0.5   # matched half: shadow→shading at KNOWN magnitude (the original
+                               # pre-V20 weight). Detached target + recon-pinned V17 shading = safe.
+                               # If the kill-gate flags it, drop to 0.25 or 0 to isolate inv.
+  shadow_start_iter: 0         # we resume @50k → start immediately (already past warmup)

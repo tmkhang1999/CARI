@@ -1,0 +1,84 @@
+\begin{longtable}{p{0.25\linewidth} p{0.65\linewidth}}
+
+$\mathbf{I} \in [0,1]^{H \times W \times 3}$
+  & Observed RGB image \\
+
+$\mathbf{A} \in [0,1]^{H \times W \times 3}$
+  & Albedo (intrinsic material colour) \\
+
+$\mathbf{S}_d \in \mathbb{R}_{>0}^{H \times W \times 3}$
+  & Colored diffuse shading (three-channel) \\
+
+$\mathbf{R} \in \mathbb{R}_{\geq 0}^{H \times W \times 3}$
+  & Non-diffuse residual; $\mathbf{R} = (\mathbf{I} - \mathbf{A} \odot \mathbf{S}_d)_{+}$ \\
+
+$\boldsymbol{\pi} \in (0,1)^{H \times W \times 3}$
+  & Network shading output before inversion; $\mathbf{S}_d = (1-\boldsymbol{\pi})/\boldsymbol{\pi}$ \\
+
+$(\mathbf{I}_1,\, \mathbf{I}_2)$
+  & A cross-render pair: same scene photographed under two different illuminants \\
+
+$\Omega_v$
+  & Set of valid paired pixels (excludes clipped/near-black pixels in either frame of a pair) \\
+
+$\Omega_m,\, \Omega_d$
+  & Set of pixels with valid ground-truth labels; set of pixels with diffuse-shading ground truth \\
+
+$\nabla \mathbf{A}$
+  & Spatial gradient of the albedo \\
+
+$L(\cdot)$
+  & Rec.~601 luminance of an RGB quantity \\
+
+$\mathcal{L}_{\text{a}}$
+  & Albedo $\ell_1$ supervision loss \\
+
+$\mathcal{L}_{\text{dssim}}$
+  & Albedo structural-dissimilarity loss \\
+
+$\mathcal{L}_{\text{msg-a}},\, \mathcal{L}_{\text{msg-s}},\, \mathcal{L}_{\text{msg-r}}$
+  & Multi-scale gradient losses (albedo, shading, reconstruction) \\
+
+$\mathcal{L}_{\text{chroma}}$
+  & Albedo chroma-direction loss (hue/saturation, brightness-independent) \\
+
+$\mathcal{L}_{\text{s}}$
+  & Scale-and-shift invariant (SSI) shading loss \\
+
+$\mathcal{L}_{\text{recon}}$
+  & Diffuse reconstruction loss; $\|\mathbf{A} \odot \mathbf{S}_d - \mathbf{A}^* \odot \mathbf{S}^*_d\|_1$ \\
+
+$\mathcal{L}_{\text{res}}$
+  & Residual closure and sparsity loss \\
+
+$\mathcal{L}_{\text{mat}}$
+  & DINOv2-token material-consistency loss \\
+
+$\mathcal{L}_{\text{inv}}$
+  & Cross-render invariance loss (CARI, albedo consistency) \\
+
+$\mathcal{L}_{\text{expl}}$
+  & Shading explanation loss (CARI, illuminant ratio) \\
+
+$\mathcal{L}_{\text{sign}}$
+  & Shading sign loss (positivity prior) \\
+
+$\lambda_{\star}$
+  & Weight of the corresponding loss term $\mathcal{L}_{\star}$ \\
+
+$C_{\text{mat}}$
+  & MID chromaticity constancy metric (lower is better) \\
+
+$C_{\text{arap}}$
+  & ARAP constancy metric (lower is better) \\
+
+$\text{Cast}_{\text{RMS}}$
+  & RMS colour cast residual (lower is better) \\
+
+$\text{WHDR}$
+  & Weighted Human Disagreement Rate on IIW (lower is better) \\
+
+$\Delta E$
+  & CIELAB colour difference on MAW (lower is better) \\
+
+\end{longtable}

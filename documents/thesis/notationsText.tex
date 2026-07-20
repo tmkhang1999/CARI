@@ -1,0 +1,98 @@
+
+\definecolor{myBLUE}{RGB}{72,88,215}
+\definecolor{myYELLOW}{RGB}{249,227,71}
+\definecolor{myRED}{RGB}{201,59,84}
+\definecolor{myPERPULE}{RGB}{84,29,149}
+\definecolor{myGREEN}{RGB}{90,142,99}
+\definecolor{myORANGE}{RGB}{222,118,3}
+
+\definecolor{myYELLOWGREEN}{RGB}{160,178,71}
+\definecolor{myREDORANGE}{RGB}{205,66,0}
+\definecolor{myPERPULERED}{RGB}{117,46,102}
+\definecolor{myORANGEYELLOW}{RGB}{235,171,27}
+\definecolor{myGREENBLUE}{RGB}{60,99,104}
+\definecolor{myBLUEPURPULE}{RGB}{88,75,176}
+
+
+
+
+
+\definecolor{CNblack}{RGB}{0,0,0}
+\definecolor{CNblue}{RGB}{0,0,255}
+\definecolor{CNbrown}{RGB}{127.5,102,63.75}
+\definecolor{CNgrey}{RGB}{127.5,127.5,127.5}
+\definecolor{CNgreen}{RGB}{0,255,0}
+\definecolor{CNorange}{RGB}{255,204,0}
+\definecolor{CNpink}{RGB}{255,127.5,255}
+\definecolor{CNpurple}{RGB}{255,0,255}
+\definecolor{CNred}{RGB}{255,0,0}
+\definecolor{CNwhite}{RGB}{255,255,255}
+\definecolor{CNyellow}{RGB}{255,255,0}
+
+
+
+
+
+
+
+% latin abbreviations
+\newcommand{\latin}[1]{\textit{#1}}
+\newcommand\eg{\textit{e.g.}\xspace}
+\newcommand\ie{\textit{i.e.}\xspace}
+\newcommand\etal{\latin{et al.}\xspace}
+
+% names of sections, equations, ...
+\newcommand\equationname{Eq.}
+\newcommand\sectionname{Sect.}
+\newcommand\chapternname{Chap.}
+
+\newcommand\wrt{with respect to\@\xspace}
+
+
+% references to ...
+% ...figures
+\newcommand{\figref}[1]{\figurename~\ref{#1}}%{Fig.~\ref{#1}}
+
+% ...tables
+\newcommand{\tabref}[1]{\tablename~\ref{#1}}%{Tab.~\ref{#1}}
+
+% ...equations
+\newcommand{\eqnref}[1]{\equationname~\eqref{#1}}%{Eq.~\eqref{#1}}
+
+% ...chapters
+\newcommand{\chapref}[1]{\chaptername~\ref{#1}}%{Chap.~\ref{#1}}
+
+% ...sections
+\newcommand{\secref}[1]{\sectionname~\ref{#1}}%{Sec.~\ref{#1}}
+
+% ...appendices
+\newcommand{\appref}[1]{Appendix~\ref{#1}}%{App.~\ref{#1}}
+
+% ...definitions
+\newcommand{\defref}[1]{Definition~\ref{#1}}%{Def.~\ref{#1}}
+
+% ...algorithms
+\newcommand{\algoref}[1]{Algorithm~\ref{#1}}%{Alg.~\ref{#1}}
+
+% ... theorems in appendix
+\newtheorem{theorem}{Theorem}
+
+% to ``highlight'' some parts of an equation
+\newcommand\partOfExpression[1]{\langle\mathfrak{#1}\rangle}
+
+
+
+%  we always want to place a nice intro question or quote at the start of every chapter...
+\newcommand\chapStartSentence[1]{ \begin{center}\textit{#1}\end{center}}
+
+
+%your own macros, abbreviations, etc.
+
+%\newcommand\todo[1]{\textcolor{red}{TODO: #1}}
+\newcommand\fixme[1]{\textcolor{green}{FIXME: #1}}
+
+
+\newcommand{\keyword}[1]{\emph{#1}}
+
+\newcommand{\ROT}[1]{\keyword{Rule of thirds}\index{Rule of thirds} }
+

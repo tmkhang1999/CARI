@@ -1,0 +1,61 @@
+\begin{longtable}{p{0.28\linewidth} p{0.62\linewidth}}
+
+\textbf{Albedo}
+  & The intrinsic material colour of a surface, independent of the illumination.
+    A white wall has high albedo in all three colour channels; a black wall has
+    low albedo.  In the IID model $\mathbf{I} = \mathbf{A} \cdot S$, the albedo
+    is the term $\mathbf{A}$. \\[4pt]
+
+\textbf{Chromaticity}
+  & The colour of a pixel or region expressed independently of its overall
+    brightness.  For an RGB pixel $(r, g, b)$, the chromaticity is typically
+    the normalised vector $(r, g, b) / (r + g + b)$.  A constancy metric
+    based on chromaticity measures whether the hue of the predicted albedo
+    shifts when the illuminant changes. \\[4pt]
+
+\textbf{Colour cast}
+  & A global or regional shift in the hue of an image caused by a coloured
+    light source.  A warm orange lamp produces an orange cast; a fluorescent
+    tube produces a green cast.  When a cast leaks into the predicted albedo
+    it means the model has not separated the illuminant colour from the
+    material colour. \\[4pt]
+
+\textbf{Illuminant}
+  & The light source or combination of light sources illuminating a scene.
+    An illuminant is characterised by its spectral power distribution, which
+    determines both its brightness and its colour (e.g.\ warm, cool, neutral). \\[4pt]
+
+\textbf{Intrinsic Image Decomposition (IID)}
+  & The task of decomposing a photograph into an albedo layer (material colour)
+    and a shading layer (lighting effect).  See Chapter~\ref{ch:method} for
+    the formal definition. \\[4pt]
+
+\textbf{Diffuse shading}
+  & The per-pixel quantity that encodes how much light falls on each surface
+    point, combining the effect of surface normal orientation, light distance
+    and direction, and occlusion (shadows).  In this work the shading is a
+    three-channel (colored) quantity $\mathbf{S}_d$, so it can represent a
+    coloured illuminant; see Chapter~\ref{ch:method}. \\[4pt]
+
+\textbf{Non-diffuse residual}
+  & The remaining image content not explained by the albedo-times-diffuse-shading
+    product: specular highlights, visible light sources, and clipped regions.
+    Computed analytically as $\mathbf{R} = (\mathbf{I} - \mathbf{A} \odot \mathbf{S}_d)_{+}$,
+    with no dedicated network head. \\[4pt]
+
+\textbf{White-balance (WB)}
+  & An image processing step that neutralises the colour of the illuminant,
+    making images appear as if they were lit by a pure white light.
+    White balance is applied by cameras automatically or in post-processing.
+    In this work, WB is intentionally \emph{disabled} for the MID training
+    pairs because it removes the illuminant colour information that the CARI
+    training strategy relies on. \\[4pt]
+
+\textbf{Scale-and-shift invariance (SSI)}
+  & A property of a metric or loss that makes it insensitive to global
+    multiplicative and additive offsets.  An SSI shading loss aligns the
+    predicted shading to the ground truth using the best global scale
+    and bias before computing the error, so it measures the quality of
+    the relative shading pattern rather than its absolute level. \\[4pt]
+
+\end{longtable}

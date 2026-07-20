@@ -1,0 +1,59 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.25 — UNIFIED TABLE-B · ROW "ordinal": ORDINAL SHADING supervision ONLY.
+#
+# UNIFIED TABLE-B (v2, one recipe): every row resumes base@50k and trains 10k steps with the
+# SAME recipe — fresh Adam @ CONSTANT 2e-5 (true/true; see v17_20 note) and the RESTORED base
+# phase-3 mix (hyp 0.4 / mid 0.3 / IV 0.3). Rows differ by LEVERS ONLY:
+#   v17_20 ctrl · v17_21 flat · v17_22 sh_inv · v17_23 flat+sh_inv · v17_24 sh_inv+explain
+#   · v17_25 ordinal (this)
+#
+# WHY THIS ROW: the ordinal-shading loss (Careaga & Aksoy, Ordinal Shading TOG'23 / CD-IID) is
+# IMPLEMENTED in flexible_loss_v17.py (_ordinal_shading, line ~473: random valid pixel pairs,
+# log-domain order hinge on linear shading vs GT, Hypersim-gated via m_diff) but has NEVER been
+# enabled (lambda_ordinal defaults to 0). It is the most promising UNTRIED lever for the
+# HARD-SHADOW leak (the bedroom window pattern in thesis Fig 5.2): order-based supervision is
+# outlier-tolerant where absolute SSI regression is dominated by bright pixels, so shadows are
+# pushed into shading by their ORDERING signature rather than by a manufactured synthetic shadow
+# (the mechanism that failed the kill-gate in v17_3/v17_24). Unlike the shadow self-sup, it uses
+# REAL GT ordering — no synthetic distribution mismatch.
+#
+# WEIGHT: 0.5 starting point (auxiliary to lambda_s=1.0 SSI, mirroring the msg weights).
+# Pre-registered sweep if the gate flags it: {0.25, 0.5, 1.0}.
+#
+# KILL-GATE (same as the family): keep ONLY if ARAP colored C_arap / MID C_mat / Cast do not
+# regress >~10% vs the v17_20 control AND albedo si-RMSE / WHDR guards hold.
+#
+# RUN (saves to checkpoints/v17_25/, resumes from the shipped 50k base — base untouched):
+#   bash scripts/train.sh --version 17.25 --cuda 0 \
+#       --resume checkpoints/v17_old/checkpoint_iter_50000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  # true/true REQUIRED: this arch matches base@50k exactly, so false/false would load the
+  # ckpt's fully-annealed lr 1e-7 and run frozen (see v17_23.yaml post-mortem).
+  reset_lr: true
+  skip_optimizer: true
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=50k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one
+  # (replaces the old phase1_iterations:999999 sentinel).
+  sampling_weights_phase3:
+    hypersim: 0.4            # the rows the ordinal loss runs on (needs GT shading)
+    midintrinsic: 0.3
+    interiorverse: 0.3
+
+loss:
+  # ── THE lever: ordinal shading supervision (Hypersim-gated, linear-shading order hinge) ──
+  lambda_ordinal: 0.5
+
+  # ── all other levers OFF (single-toggle row) ──
+  lambda_alb_flat_lf: 0.0
+  lambda_shadow_inv: 0.0
+  lambda_shadow_explain: 0.0

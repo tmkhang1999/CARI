@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import torch
 import torch.nn.functional as F
-from src.data.augmentations import apply_physical_augmentations, random_segmentation_degradation
+from src.data.augmentations import apply_physical_augmentations, random_exposure_jitter
 
 def compute_tonemap_scale(
     rgb: np.ndarray,
@@ -65,11 +65,23 @@ def prepare_training_tensors(
     crop_mode: str,         # 'random', 'center', 'full'
     input_size: int,        # default 384
     split: str,             # 'train' or 'val'
+    extra_rgb: np.ndarray | None = None,  # (H,W,3) second illumination of the SAME scene
+    extra_valid: np.ndarray | None = None,  # (H,W) per-pair HDR-valid mask for cross-render
 ) -> dict:
     """
     Standardizes tonemapping, validity masking, cropping, resizing, and physical augmentations
     for any dataset (Hypersim, MIDIntrinsic, etc.).
+
+    extra_rgb: optional second linear-HDR render of the SAME scene under a different
+    illumination (paired MID). When given, it is taken through the identical crop,
+    resize, tonemap (same scale) and spatial flips, and returned as out['rgb2'] with
+    out['m_invariant']=1.0. Photometric augmentation and exposure jitter are disabled
+    for the pair, since they would alter rgb1 relative to rgb2 and break the
+    same-albedo/different-light invariance the second image exists to supervise.
+    When None, out['rgb2'] is a copy of out['rgb'] and out['m_invariant']=0.0 so the
+    batch keys stay uniform for the mixed-dataset collate.
     """
+    paired = extra_rgb is not None
     # 1. Compute tonemap scale on FULL image (downsampled internally) for consistency
     tonemap_scale = compute_tonemap_scale(rgb)
 
@@ -91,6 +103,7 @@ def prepare_training_tensors(
         illum_c = illum
         norm_c = norm
         seg_c = seg
+        extra_c = extra_rgb if paired else None
     else:
         if crop_mode == 'center':
             size = max_crop
@@ -106,6 +119,7 @@ def prepare_training_tensors(
         illum_c = illum[top:top+size, left:left+size]
         norm_c = norm[top:top+size, left:left+size]
         seg_c = seg[top:top+size, left:left+size]
+        extra_c = extra_rgb[top:top+size, left:left+size] if paired else None
 
     # 3. Sanitize and tonemap the CROPPED arrays (much faster)
     rgb_c = np.nan_to_num(rgb_c, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
@@ -131,6 +145,18 @@ def prepare_training_tensors(
         norm_c,
     ], axis=-1)  # (size, size, 12)
 
+    # Append the second illumination (channels 12:15) so it shares the exact crop,
+    # resize and spatial flips. Same tonemap scale keeps both images comparable.
+    if paired:
+        extra_c = np.nan_to_num(extra_c, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        extra_tm = tonemap_linear(extra_c, scale=tonemap_scale)
+        combined = np.concatenate([combined, extra_tm], axis=-1)  # (size, size, 15)
+        # Per-pair HDR-valid mask (channel 15) rides along through crop/resize/flip.
+        if extra_valid is not None:
+            ev_c = extra_valid[top:top+size, left:left+size] if crop_mode != 'full' else extra_valid
+            ev_c = np.nan_to_num(ev_c, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+            combined = np.concatenate([combined, ev_c[..., None]], axis=-1)  # (size, size, 16)
+
     # ── Resize ──
     t_img = torch.from_numpy(combined).permute(2, 0, 1).unsqueeze(0).float()
     t_img = F.interpolate(t_img, size=(input_size, input_size), mode='bilinear', align_corners=False).squeeze(0)
@@ -144,9 +170,15 @@ def prepare_training_tensors(
     seg_t = F.interpolate(seg_t, size=(input_size, input_size), mode='nearest').squeeze(0).long()
 
     # ── Augmentations (Train Only) ──
+    # For paired samples, only spatial flips run (they apply uniformly to all
+    # channels incl. rgb2); photometric shifts and exposure jitter are skipped
+    # because they would alter rgb1 relative to rgb2 and break albedo invariance.
     if split == 'train':
-        seg_t = random_segmentation_degradation(seg_t, p_degrade=0.6)
-        t, seg_t = apply_physical_augmentations(t, seg_t, p_hflip=0.5, p_vflip=0.5)
+        t, seg_t = apply_physical_augmentations(
+            t, seg_t, p_hflip=0.5, p_vflip=0.5, apply_photometric=not paired
+        )
+        if not paired:
+            t = random_exposure_jitter(t, p=0.3)
 
     # Albedo Scaling
     alb_t = t[3:6]
@@ -156,7 +188,7 @@ def prepare_training_tensors(
     else:
         albedo_scaled_t = alb_t
 
-    return {
+    out = {
         'rgb':           t[0:3],
         'albedo_raw':    t[3:6],
         'albedo_scaled': albedo_scaled_t,
@@ -165,3 +197,19 @@ def prepare_training_tensors(
         'loss_mask':     t_loss_mask.bool(),
         'seg':           seg_t,
     }
+    # Uniform keys across all datasets so the mixed-dataset collate never sees a
+    # ragged batch. Only true paired samples carry m_invariant=1.0.
+    if paired:
+        out['rgb2'] = t[12:15]
+        out['m_invariant'] = torch.tensor(1.0, dtype=torch.float32)
+        # pair_valid: HDR-valid mask for the raw cross-render pair (channel 15 if present;
+        # bilinear-resized with the stack, so re-threshold). For synth pairs it is all-ones.
+        if t.shape[0] >= 16:
+            out['pair_valid'] = (t[15:16] > 0.5)
+        else:
+            out['pair_valid'] = torch.ones_like(t_loss_mask).bool()
+    else:
+        out['rgb2'] = t[0:3].clone()
+        out['m_invariant'] = torch.tensor(0.0, dtype=torch.float32)
+        out['pair_valid'] = t_loss_mask.bool()
+    return out

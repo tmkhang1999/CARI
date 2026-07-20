@@ -1,0 +1,53 @@
+# ════════════════════════════════════════════════════════════════════════════════════════
+# V17.20 — UNIFIED TABLE-B · ROW "ctrl": zero-lever control for the whole v17_2X family
+#          (v17_21 flat · v17_22 sh_inv · v17_23 combo · v17_24 +explain), 40k→60k.
+#
+# RETARGETED 2026-07-09: the base is now the NEW genuine-CARI v17_44@40k (post wiring-fix,
+# CARI_L_inv verified in its TB logs) — NOT the old v17_old@50k, whose CARI never fired.
+# References to "base@50k" below are the historical rationale; read them as "the base ckpt".
+# This row doubles as "the base trained +20k more with no levers" — every other Table-B row
+# is read against it at matched 60k, so no separate base-extension run is needed.
+#
+# WHY: v17.23 changes TWO things vs base@50k — (a) the two gate-passing levers, (b) the FT
+# recipe fix (phase-3 mix restored: hyp 0.4 / mid 0.3 / interiorverse 0.3; the old Table-B
+# rows ran 0.6/0.4/0.0). If v17.23 beats base@50k we cannot attribute the gain without this
+# control, which applies (b) alone. The decomposition then reads:
+#   (v17_20 − base@50k)  = recipe/extra-training effect under the FIXED mix
+#   (v17_23 − v17_20)    = the stacked-lever effect, cleanly isolated
+# BONUS DIAGNOSTIC: the old zero-lever control (v17_30, dropped-IV mix) regressed MID C_mat /
+# MAW ΔE vs base@50k. If THIS control holds ≈ base, the dropped-IV mix is confirmed as the
+# culprit; if it still regresses, the never-annealed constant 2e-5 is.
+#
+# Recipe identical to v17.23 (fresh Adam @ constant 2e-5 — see the true/true note there),
+# ONLY the lever λ's are zeroed.
+#
+# RUN (saves to checkpoints/v17_20/, resumes from the NEW genuine-CARI base — base untouched):
+#   bash scripts/train.sh --version 17.20 --cuda 1 --resume checkpoints/v17_44/checkpoint_iter_40000.pth
+# ════════════════════════════════════════════════════════════════════════════════════════
+extends: 17
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  # true/true REQUIRED: this arch matches the base exactly, so false/false would load the
+  # ckpt's fully-annealed cosine lr (~0 at 40k) and run frozen (see v17_23.yaml).
+  reset_lr: false
+  skip_optimizer: false
+
+  extend_iterations: 60000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+
+  # Finetune from a fixed base — one constant mix, no phase ramp. The resume step (>=50k) is
+  # past the inherited phase2 boundary (25k), so phase3 is the active mix from step one. This
+  # replaces the old phase1_iterations:999999 sentinel (the resume-aware phase logic no longer
+  # needs it, and inheriting phase2_iterations:25000 would otherwise force this key anyway).
+  sampling_weights_phase3:
+    hypersim: 0.4            # restored base phase-3 mix (the old levers ran 0.6/0.4/0.0)
+    midintrinsic: 0.3
+    interiorverse: 0.3
+
+loss:
+  lambda_alb_flat_lf: 0.0      # lever 1 OFF
+  lambda_shadow_inv: 0.0       # lever 2 OFF
+  lambda_shadow_explain: 0.0   # lever 2 OFF

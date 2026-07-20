@@ -1,0 +1,30 @@
+{
+  "v17_19k": {
+    "checkpoint": "checkpoints/checkpoint_v17_iter_19000.pth",
+    "model_version": "17",
+    "n_images": 200,
+    "WHDR": 0.289938076155182,
+    "date": "2026-06-19T07:41:18.033793"
+  },
+  "v17_50k": {
+    "checkpoint": "checkpoints/v17/checkpoint_iter_50000.pth",
+    "model_version": "17",
+    "n_images": 200,
+    "WHDR": 0.30311270298069404,
+    "date": "2026-06-19T07:43:16.708825"
+  },
+  "marigold_app": {
+    "checkpoint": "checkpoints/marigold-iid-appearance-v1-1",
+    "model_version": "marigold-appearance",
+    "n_images": 200,
+    "WHDR": 0.1299506580856701,
+    "date": "2026-06-19T07:47:51.244545"
+  },
+  "marigold_light": {
+    "checkpoint": "checkpoints/marigold-iid-lighting-v1-1",
+    "model_version": "marigold-lighting",
+    "n_images": 200,
+    "WHDR": 0.2218119137099107,
+    "date": "2026-06-19T07:53:20.235224"
+  }
+}
