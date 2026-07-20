@@ -15,9 +15,16 @@ Norwegian University of Science and Technology (NTNU), Gjøvik
 
 </div>
 
-<p align="center"><em>A grayscale shading model cannot absorb an illuminant's hue: with only a scalar shading <code>s</code>,<br>
-the lamp's colour has nowhere to go but the albedo. Both albedos come from the same frame and the<br>
-same ground truth, and differ only in the shading model they were divided by.</em></p>
+<p align="center"><em>A grayscale shading model <b>cannot</b> absorb an illuminant's hue. With only a scalar shading <code>s</code>,<br>
+the lamp's colour has nowhere to go but the albedo. Both albedos above come from the same frame and<br>
+the same ground truth — they differ only in the shading model they were divided by.</em></p>
+
+---
+
+> **TL;DR**
+> - Indoor lights are coloured, so recovered **albedo** gets tinted and a wall seems to change colour with the lighting.
+> - **CARI** fixes this in training: the same surface, photographed under two illuminants, must yield the *same* albedo.
+> - The standard chroma-cast metric is **gameable** — a model scores better by desaturating. We decompose it, and the fix flips our own ablation's ranking.
 
 ---
 
@@ -29,11 +36,7 @@ colour when the lighting does.
 
 We introduce **Cross-Render Albedo Invariance (CARI)**, a training strategy built on one
 constraint — *if the same surface appears in two photographs lit differently, its albedo must be
-identical in both*. Two losses enforce it on pixel-aligned pairs:
-
-- **`L_inv`** penalises any change in predicted albedo across the two illuminants;
-- **`L_expl`** requires the *shading* ratio to match the *image* ratio, so any colour the albedo
-  declines to absorb must be explained by the shading.
+identical in both.*
 
 A practical prerequisite: standard white-balance preprocessing removes exactly the illuminant
 colour CARI needs, so we train on **raw, un-white-balanced pairs**.
@@ -43,22 +46,50 @@ colour CARI needs, so we train on **raw, un-white-balanced pairs**.
 Evaluating this claim required correcting how it is measured. The chroma-cast score used
 throughout this literature pools albedo chromaticity **across materials** before taking its
 variance, conflating illuminant-induced drift with the scene's ordinary chromatic diversity.
-Because that second term is computed from the *prediction*, **a model can improve its score simply
-by washing the colour out of its albedo** — the metric pays models to destroy the very quantity
-the task exists to recover.
+Because that second term is computed from the *prediction*:
 
-We decompose it into a scale-normalised invariance term (`Cast_rel`) and a fidelity term anchored
-on measured albedo (`Chroma_fid`), and show the correction **reverses the ranking of our own
-ablation**.
+> **A model can improve its score simply by washing the colour out of its albedo.**
+> The metric pays models to destroy the very quantity the task exists to recover.
+
+We split it into a scale-normalised invariance term (`Cast_rel`) and a fidelity term anchored on
+measured albedo (`Chroma_fid`). The correction **reverses the ranking of our own ablation**.
+
+<div align="center">
+<img src="documents/thesis/images/chroma_fidelity/chroma_fidelity.jpg" width="92%" alt="Chroma fidelity: invariance won by desaturation is visible to the eye"/>
+<p><em>Invariance bought by discarding colour is visible to the naked eye. <code>Chroma_fid</code> makes it measurable.</em></p>
+</div>
+
+---
+
+## Method
+
+Only the DPT trunk and the two heads are trained (**18.5 M** parameters); the DINOv2-L/14 encoder
+stays frozen. The skips are **physics-typed**: full RGB reaches the albedo head, while only
+luminance reaches the shading head, so the shading branch cannot invent chroma. The residual
+`R = (I − A ⊙ S_d)₊` is analytic — it has no head of its own.
+
+<div align="center">
+<img src="documents/thesis/images/readme/architecture.png" width="100%" alt="Model architecture"/>
+</div>
+
+**CARI is a loss, not an architecture.** It applies to pixel-aligned cross-illuminant pairs during
+training and costs *nothing* at inference. `L_inv` penalises any change in predicted albedo across
+the two illuminants; `L_expl` forces the *shading* ratio to match the *image* ratio, so any colour
+the albedo declines to absorb must be explained by the shading.
+
+<div align="center">
+<img src="documents/thesis/images/readme/cari.png" width="94%" alt="Cross-Render Albedo Invariance training"/>
+<p><em>Two inputs, visibly different casts, one shared-weight model — and near-identical albedos.</em></p>
+</div>
 
 ---
 
 ## Results
 
 Four benchmarks spanning real and synthetic scenes. Every row is evaluated locally under one
-harness; see the thesis for protocols, bootstrap confidence intervals and the full ablations.
+harness; see the thesis for protocols, bootstrap confidence intervals and full ablations.
 
-### MID — cross-illumination constancy and chroma calibration
+### MID — constancy and chroma calibration
 
 `Chroma_fid → 1` is the collapse detector: **below 1 means albedo colour has been discarded.**
 
@@ -72,8 +103,8 @@ harness; see the thesis for protocols, bootstrap confidence intervals and the fu
 | Ordinal Shading | 0.252 | 0.148 | 0.549 | 0.924 |
 
 We do **not** claim the invariance crown — Marigold-App and CRefNet lead `Cast_rel`. The table shows
-how they buy it: by discarding roughly a quarter and half of real albedo chroma respectively. Ours
-is the only method that is simultaneously colour-faithful **and** competitively invariant.
+*how* they buy it: by discarding roughly a quarter and half of real albedo chroma respectively.
+Ours is the only method that is simultaneously colour-faithful **and** competitively invariant.
 
 ### ARAP · MAW · IIW
 
@@ -88,6 +119,11 @@ is the only method that is simultaneously colour-faithful **and** competitively 
 
 The remaining gap is perceptual shading quality (IIW). Fine-tuning on IIW improves WHDR to 0.220 but
 **degrades every constancy measure** — a direct demonstration of the constancy–structure tension.
+
+<div align="center">
+<img src="documents/thesis/images/hires/comp_grid.jpg" width="100%" alt="Qualitative comparison across methods"/>
+<p><em>Qualitative comparison. Predictions are scale-normalised for display, with no colour correction.</em></p>
+</div>
 
 ### Efficiency
 
@@ -104,44 +140,36 @@ forward pass.
 
 ---
 
-## Method
-
-```
-                    ┌───────────────────────┐
-   I ──────────────►│ DINOv2-L/14 (frozen)  │──► multi-scale tokens
-                    └───────────┬───────────┘
-                                ▼
-                    ┌───────────────────────┐
-                    │ DPT trunk 768→…→64    │
-                    └────┬─────────────┬────┘
-                RGB skip │             │ luminance skip
-                         ▼             ▼
-                    albedo A_d      shading π ──► S_d = (1−π)/π
-                         └──────┬──────┘
-                                ▼
-                   R = (I − A_d ⊙ S_d)₊     (analytic residual)
-```
-
-Only the DPT trunk and heads are trained (18.5 M parameters); the encoder stays frozen. The skips
-are physics-typed: full RGB reaches the albedo head, luminance only reaches the shading head.
-**CARI is a loss, not an architecture** — it applies to cross-illuminant pairs during training and
-costs nothing at inference.
-
----
-
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/tmkhang1999/CARI.git
 cd CARI
-
-conda create -n cari python=3.10 -y
-conda activate cari
+conda create -n cari python=3.10 -y && conda activate cari
 pip install -r requirements.txt
 ```
 
+Decompose any photograph into albedo, shading and residual:
+
+```bash
+python tests/infer/infer_wild.py \
+    --image path/to/your_photo.jpg \
+    --checkpoint checkpoints/v17_34/checkpoint_latest.pth \
+    --device cuda --max_size 1280
+```
+
+<div align="center">
+<img src="documents/thesis/images/ch6/decomposition.jpg" width="100%" alt="Predicted decomposition: input, albedo, shading, residual"/>
+<p><em>Input · diffuse albedo <code>A_d</code> · diffuse shading <code>S_d</code> · analytic residual <code>R</code>.<br>
+Albedo and shading are independently normalised for display; the residual is shown unamplified.</em></p>
+</div>
+
 Tested with PyTorch 2.10 + CUDA 12.8 on Linux. Training wants a GPU with ≥ 12 GB; inference runs
 comfortably in 6 GB.
+
+> [!NOTE]
+> Pretrained weights are not distributed in this repository (each raw checkpoint is ~1.4 GB, of
+> which ~94 % is the frozen DINOv2 encoder). Please open an issue if you would like access.
 
 ---
 
@@ -153,8 +181,6 @@ comfortably in 6 GB.
 | **MID** | Real cross-render pairs — the CARI signal | [Multi-Illumination Dataset](https://projects.csail.mit.edu/illumination/) |
 | **InteriorVerse** | Albedo-supervision diversity | [InteriorVerse](https://interiorverse.github.io/) |
 | **3D-Front-IID** | Rendered here: large *coloured* illuminant changes + GT albedo | built from [3D-FRONT](https://tianchi.aliyun.com/dataset/65347) |
-
-Expected layout (roots are configurable per-config):
 
 ```
 datasets/
@@ -169,10 +195,16 @@ datasets/
 <details>
 <summary><b>Rendering the 3D-Front-IID corpus</b></summary>
 
+<br>
+
 3D-Front-IID supplies the one combination no public corpus offers: a large, deliberately coloured
 illuminant change **and** ground-truth albedo for the same camera. Key lights are sampled *off* the
 blackbody locus, and a minimum chromatic separation is enforced so every pair carries a real
 illuminant-colour change (median separation 0.23 in rg-chromaticity).
+
+<div align="center">
+<img src="documents/thesis/images/front3d/front3d_dataset.jpg" width="100%" alt="3D-Front-IID corpus"/>
+</div>
 
 ```bash
 python scripts/render_3dfront_dataset.py --out datasets/3D-Front-IID
@@ -193,11 +225,12 @@ bash scripts/train.sh --version 17 --cuda 0
 bash scripts/train.sh --version 17 --cuda 0 --auto-resume
 ```
 
-Configuration lives in `src/configs/`: `base.yaml` holds shared defaults, and each `v17_*.yaml`
-overrides it for a single experiment.
+`src/configs/base.yaml` holds shared defaults; each `v17_*.yaml` overrides it for one experiment.
 
 <details>
 <summary><b>Which config maps to which reported table</b></summary>
+
+<br>
 
 | Config | Role in the thesis |
 |:---|:---|
@@ -213,7 +246,7 @@ The two levers toggled in Table B are `flat` (texture-gated flatness prior) and 
 
 ## Evaluation
 
-Each benchmark has a standalone evaluator under `tests/eval/`; all accept `--device` and write JSON.
+Each benchmark has a standalone evaluator under `tests/eval/`.
 
 ```bash
 CKPT=checkpoints/v17_34/checkpoint_latest.pth
@@ -230,7 +263,7 @@ python tests/eval/eval_arap.py --checkpoint $CKPT
 python tests/eval/eval_maw.py --ckpts $CKPT --save-json
 
 # IIW — WHDR
-python tests/eval/eval_iiw.py --checkpoint $CKPT
+python tests/eval/eval_iiw.py --checkpoint $CKPT --dataset_dir tests/testing_data/iiw-dataset/data
 ```
 
 > [!IMPORTANT]
@@ -259,12 +292,13 @@ src/
 └── train_v17.py
 tests/
 ├── eval/                       # four benchmark evaluators + SOTA adapters
+├── infer/                      # single-image inference
 └── viz/                        # figure builders
 documents/thesis/               # LaTeX sources for the thesis
 ```
 
 Every figure in the thesis is traceable to the script that produced it, via
-[`documents/thesis/FIGURE_PROVENANCE.md`](documents/thesis/FIGURE_PROVENANCE.md).
+[`FIGURE_PROVENANCE.md`](documents/thesis/FIGURE_PROVENANCE.md).
 
 ---
 

@@ -79,3 +79,17 @@ included in the thesis because compensating factor errors make the score degener
 * **Regeneration.** Raster builders write straight into `documents/thesis/images/`, so after
   running one, a plain `latexmk` picks up the new asset. TikZ/pgfplots figures need only a
   recompile unless their embedded thumbnails or `.dat` files changed.
+
+## README figures
+
+The top-level README reuses thesis figures. The two TikZ ones are vector-only inside
+`Main.pdf`, so they are rasterised by `tests/viz/render_readme_figures.sh` (pdflatex +
+pdftoppm, 200 dpi) into `documents/thesis/images/readme/`:
+
+| Asset | Source |
+|---|---|
+| `images/readme/architecture.png` | `chapters/fig_architecture.tex` |
+| `images/readme/cari.png` | `chapters/fig_cari.tex` |
+
+Re-run that script if either TikZ figure changes. The remaining README images are used
+directly from `documents/thesis/images/` and are produced by the builders listed above.
