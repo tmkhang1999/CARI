@@ -94,3 +94,5 @@ tests/viz/front3d_smoke_glbs/
 # Claude Code local state
 .claude/settings.local.json
 .claude/**/*.tmp.*
+
+presentation/*

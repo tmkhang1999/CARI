@@ -30,17 +30,18 @@ the ordinary chromatic diversity of the scene. Because that second term is compu
 the \emph{prediction}, a model can lower the score simply by washing the colour out of its
 albedo. The metric pays models to destroy the very quantity the task exists to recover. We
 decompose it into a scale-normalised invariance term and a fidelity term anchored on
-measured albedo, and show that the correction reverses the ranking of our own ablation.
+the pseudo-ground-truth albedo, and show that the correction reverses the ranking of our
+own ablation.
 
 We evaluate on four benchmarks spanning real and synthetic scenes: MID, IIW, MAW and ARAP.
 Under the corrected metric our model is the only one in the comparison that is
 simultaneously colour-faithful and competitively invariant: it reproduces the
-between-material chroma of measured ground-truth albedo almost exactly (a fidelity of
-$1.008$, against $0.825$ for the strongest diffusion baseline and $0.575$ for the strongest
+between-material chroma of the pseudo-ground-truth albedo closely (a fidelity of
+$0.941$, against $0.728$ for the strongest diffusion baseline and $0.484$ for the strongest
 feed-forward one) and attains the best material-lightness stability in the roster, while
 remaining within a fifth of the most illuminant-invariant method on hue. We do not claim
 the invariance crown: two external methods hold it, and we show that both purchase it by
-discarding roughly a fifth and two fifths of real albedo colour respectively. The same
+discarding roughly a quarter and a half of real albedo colour respectively. The same
 degenerate trade that our own colour-skip ablation makes, which is visible to the naked eye.
 These results are obtained with $18.5$M trained parameters and a single forward pass,
 some seventy times fewer trained weights and five times faster than the diffusion baselines.

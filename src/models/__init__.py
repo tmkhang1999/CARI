@@ -8,9 +8,13 @@ and remain recoverable from git history.
 from .v12 import IntrinsicDecompositionV12
 from .v16 import IntrinsicDecompositionV16
 from .v17 import IntrinsicDecompositionV17
+from .v21_trifactor import IntrinsicDecompositionV21
+from .v21_restorer import V21AlbedoRestorer
 
 __all__ = [
     "IntrinsicDecompositionV12",
     "IntrinsicDecompositionV16",
     "IntrinsicDecompositionV17",
+    "IntrinsicDecompositionV21",
+    "V21AlbedoRestorer",
 ]

@@ -19,7 +19,6 @@
       flow/.style={->, line width=0.8pt, black!70},
       lossflow/.style={->, line width=0.6pt, red!55!black},
       skipC/.style={->, line width=0.9pt, red!62!black, dashed},
-      skipL/.style={->, line width=0.9pt, black!55, dash pattern=on 3pt off 2pt},
     ]
     % rows: albedo (top, y=+11), trunk (mid, y=0), shading (bottom, y=-11)
     % ── encoder + decoder (mid row) ─────────────────────────────────
@@ -68,11 +67,10 @@
     \draw[flow] (albT.south) -- ++(0,-4mm) -| (R.north);
     \draw[flow] (shaT.north) -- ++(0,4mm)  -| (R.south);
 
-    % ── physics-typed skips ─────────────────────────────────────────
+    % ── RGB skip: the only input skip actually enabled (shading has none;
+    % v17.yaml sets shading_lum_skip=false, albedo_chroma_skip=false) ───────
     \draw[skipC] (imgT.north) |- ([yshift=7mm]ah.north) -| (ah.north)
       node[dim,pos=0.25,above,text=red!55!black]{RGB skip $\mathbf{I}^{1/2.2}$ (3\,ch, colour)};
-    \draw[skipL] (imgT.south) |- ([yshift=-7mm]sh.south) -| (sh.south)
-      node[dim,pos=0.25,below]{luminance skip (1\,ch, intensity)};
 
     % ── SUPERVISED LOSSES (right column) ────────────────────────────
     \node[loss, right=10mm of albT] (la) {$\mathcal{L}_{\text{a}}$};
@@ -107,9 +105,7 @@
       \node[loss, minimum size=6mm, right=8mm of l3t] (l4) {};
       \node[io, right=1.5mm of l4] (l4t){loss};
       \draw[skipC] ([xshift=8mm]l4t.east) -- ++(6mm,0);
-      \node[io, right=1mm of l4t, xshift=14mm] (sc){colour skip};
-      \draw[skipL] ([xshift=7mm]sc.east) -- ++(6mm,0);
-      \node[io, right=13mm of sc]{intensity skip};
+      \node[io, right=1mm of l4t, xshift=14mm] (sc){RGB skip};
     \end{scope}
   \end{tikzpicture}}
   \caption[Model architecture and supervision.]{%
@@ -118,10 +114,13 @@
     supplies the illumination-invariant material tokens the backbone was pre-trained to
     produce, and only $18.5$M parameters downstream are learned. A DPT decoder (blue)
     reassembles and fuses the four levels into a shared full-resolution feature map. Two
-    output heads (amber) read it, each with a \emph{physics-typed} full-resolution skip from
-    the input: the albedo head takes the gamma-encoded RGB image (a colour path) and predicts
-    $\mathbf{A}$; the shading head takes only the input luminance (an intensity path) and
-    predicts the inverse shading $\boldsymbol{\pi}$, from which
+    output heads (amber) read it. The albedo head additionally takes a full-resolution
+    \emph{RGB skip}: the gamma-encoded input image, concatenated in directly so the material
+    colour DINOv2's illumination-invariant tokens discard is not lost. This skip is safe only
+    because $\mathcal{L}_{\text{inv}}$ constrains what it can carry through; without that
+    constraint the illuminant colour would flow straight down it into $\mathbf{A}$. The
+    shading head has no such skip; it predicts the inverse shading $\boldsymbol{\pi}$ from the
+    shared DPT features alone, from which
     $\mathbf{S}_d=(1-\boldsymbol{\pi})/\boldsymbol{\pi}$ follows. The non-diffuse residual
     $\mathbf{R}=(\mathbf{I}-\mathbf{A}\odot\mathbf{S}_d)_{+}$ is analytic; there is no third
     head. Red nodes are the training losses on each output: the albedo family

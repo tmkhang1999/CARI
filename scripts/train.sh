@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train -  supported versions: V9 / V10 / V11 / V12 / V13 / V14 / V15 / V16 / V17 / V18 / V19 / V20
+# Train - supported versions: V9 through V21
 #
 # Usage:
 #   bash scripts/train.sh                                  # V20 / MICC (default), CUDA auto
@@ -79,8 +79,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?|17([._][0-9]+)?|18([._][0-9]+)?|19([._][0-9]+)?|20([._][0-9]+)?)$ ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 (and their .x variants)"
+if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?|17([._][0-9]+)?|18([._][0-9]+)?|19([._][0-9]+)?|20([._][0-9]+)?|21([._][0-9]+)?)$ ]]; then
+    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9 through 21 (and their .x variants)"
     exit 1
 fi
 
@@ -115,6 +115,9 @@ elif [[ "${VERSION}" == 19* ]]; then
 elif [[ "${VERSION}" == 20* ]]; then
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train_v20.py"
+elif [[ "${VERSION}" == 21* ]]; then
+    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v21.py"
 elif [[ "${VERSION}" == 13* || "${VERSION}" == 14* || "${VERSION}" == 15* || "${VERSION}" == 16* ]]; then
     CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
     TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"

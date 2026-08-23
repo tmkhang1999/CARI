@@ -8,6 +8,7 @@ Erasmus Mundus Joint Master in Computational Colour and Spectral Imaging (COSI)<
 Norwegian University of Science and Technology (NTNU), Gjøvik
 
 [![Thesis](https://img.shields.io/badge/Thesis-PDF-b31b1b.svg?style=for-the-badge)](documents/thesis/Main.pdf)
+[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/research/cari/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 
@@ -52,7 +53,8 @@ Because that second term is computed from the *prediction*:
 > The metric pays models to destroy the very quantity the task exists to recover.
 
 We split it into a scale-normalised invariance term (`Cast_rel`) and a fidelity term anchored on
-measured albedo (`Chroma_fid`). The correction **reverses the ranking of our own ablation**.
+the pseudo-ground-truth albedo (`Chroma_fid`). The correction **reverses the ranking of our own
+ablation**.
 
 <div align="center">
 <img src="documents/thesis/images/chroma_fidelity/chroma_fidelity.jpg" width="92%" alt="Chroma fidelity: invariance won by desaturation is visible to the eye"/>
@@ -64,8 +66,9 @@ measured albedo (`Chroma_fid`). The correction **reverses the ranking of our own
 ## Method
 
 Only the DPT trunk and the two heads are trained (**18.5 M** parameters); the DINOv2-L/14 encoder
-stays frozen. The skips are **physics-typed**: full RGB reaches the albedo head, while only
-luminance reaches the shading head, so the shading branch cannot invent chroma. The residual
+stays frozen. DINOv2's illumination-invariant tokens discard exactly the colour the albedo head
+needs, so a gamma-encoded **RGB skip** feeds full-resolution colour straight into it — safe only
+*because* CARI's invariance loss stops the illuminant hue from riding along with it. The residual
 `R = (I − A ⊙ S_d)₊` is analytic — it has no head of its own.
 
 <div align="center">
