@@ -56,23 +56,25 @@ meant wherever the text says ``our model'' unqualified. Generic phrases such as
 ``our approach'' refer to the method rather than a particular trained instance.
 The base-CARI row is carried alongside the full model so that the
 refinement's contribution is visible inside every table rather than folded silently into a
-single number. A third configuration, \textbf{Ours (IIW-fine-tuned)}, appears only where
-needed to diagnose the effect of direct IIW supervision and is never treated as a zero-shot
-result.
+single number. A third configuration, \textbf{Ours (IIW-fine-tuned)}, is a diagnostic used only to
+measure the effect of direct IIW supervision; it is never treated as a zero-shot result
+and is confined to \secref{sec:iiw_results}, where \tabref{tab:iiw_finetune_cost}
+collects everything it costs.
 
 \paragraph{Baselines and how scores are obtained}
 The benchmark tables compare against the same roster of methods, and follow the
 convention used by \mycite{careaga24cdiid}: a horizontal rule separates scores
 we \emph{run locally} from scores we \emph{cite} from the literature.
 We run Marigold-IID Appearance and Lighting \mycite{marigoldiid24},
-CRefNet \mycite{luo23crefnet}, and the Ordinal Shading stage of CD-IID
-\mycite{careaga23ordinal} locally under our exact pipeline (zero-shot, same
-output-space normalisation and splits, identical inference resolution per
-benchmark). The full multi-stage CD-IID cascade \mycite{careaga24cdiid} and the
-older baselines are cited from their publications, and appear below the rule in
-each table. Our own constancy metrics ($C_{\text{mat}}$, $C_{\text{arap}}$,
-$\text{Cast}_{\text{RMS}}$) are not reported by those methods and are marked
-n/a; a cell marked ``-'' is simply one for which no value is available.
+CRefNet \mycite{luo23crefnet}, the Ordinal Shading stage of CD-IID
+\mycite{careaga23ordinal}, the full five-stage CD-IID cascade
+\mycite{careaga24cdiid}, and RGB$\rightarrow$X \mycite{zeng24rgbx} locally under our
+exact pipeline (same output-space normalisation and splits, identical inference
+resolution per benchmark). The last two were integrated after the first submission of
+this work; they are evaluated on MID here, and the older baselines are cited from their
+publications and appear below the rule in each table. Our own constancy metrics ($C_{\text{mat}}$, $C_{\text{arap}}$) are not reported by
+those methods and are marked n/a; a cell marked ``-'' is simply one for which no value
+is available.
 Marigold-IID Lighting is trained on Hypersim, like our model, which makes it
 the most directly comparable external method.
 
@@ -108,9 +110,13 @@ constancy metric is deliberately ground-truth-free (\secref{sec:mid_results}).
 CRefNet trains on the IIW training split, so its IIW WHDR is a non-zero-shot
 result (\secref{sec:iiw_results}).
 Second, our model trains only about $18.5$M parameters. The DINOv2-L encoder
-($304$M) is frozen and excluded from the optimiser, so the trainable count is far lower
-trainable parameters than both the diffusion baselines and the multi-stage
-CD-IID cascade, an efficiency the constancy results should be read against.
+($304$M) is frozen and excluded from the optimiser, so the trainable count is far
+lower than for the diffusion baselines ($\sim$1290M) or the five-stage CD-IID
+cascade (442.8M, every stage trained), an efficiency the constancy results should
+be read against. On \emph{total} parameters the gap is much smaller --- our frozen
+backbone puts us at 322.9M, only $1.4\times$ below CD-IID and above CRefNet's
+66.6M --- so the saving is specifically in weights that had to be optimised, not in
+deployed model size.
 
 \begin{sidewaystable}[p!]
   \caption[Methods, model size, and inference cost.]{%
@@ -142,7 +148,7 @@ CD-IID cascade, an efficiency the constancy results should be read against.
     Marigold-Light \mycite{marigoldiid24} & Stable-Diffusion latent diffusion
         & Hypersim & $\sim$1290 & 1290 & 0.982 & linear albedo + shading + residual \\
     CD-IID \mycite{careaga24cdiid}            & Five-stage MiDaS-style cascade
-        & 8 synthetic sets + MIDIntrinsics; Hypersim for shading & $\sim$1685 & $\sim$1685 & -- & linear albedo + RGB shading + residual \\
+        & 8 synthetic sets + MIDIntrinsics; Hypersim for shading & 442.8 & 442.8 & 0.254 & linear albedo + RGB shading + residual \\
     Ordinal Shading \mycite{careaga23ordinal} & CD-IID stage 1; ordinal MiDaS shading
         & CGIntrinsics + Hypersim + OpenRooms + GTA + MID & $\sim$337 & $\sim$337 & -- & grayscale shading + implied albedo \\
     PIE-Net \mycite{das22pienet}     & Edge-guided hybrid CNN
@@ -389,8 +395,12 @@ combined, because they can move in opposite directions: $C_{\text{mat}}$ is a li
 score and $\text{Cast}_{\text{rel}}$ a hue score, and a configuration may stabilise one
 while disturbing the other.
 
-This is deliberately an in-domain diagnostic: both our method and CD-IID train on the
-disjoint MID training split \mycite{careaga24cdiid}. The table therefore compares
+This is deliberately an in-domain diagnostic: our method trains on MID, and so does
+CD-IID \mycite{careaga24cdiid}. We train on the official MID training split and hold
+out its $30$-scene test split, which is the split evaluated throughout this chapter.
+CD-IID's description of its training data names the multi-illumination dataset without
+stating a split, so we cannot verify which scenes it saw; that is a limit on what any
+comparison against it can claim, not an allegation. The table therefore compares
 locally evaluated models under one pipeline and makes no zero-shot claim.
 
 \begin{table}[t!]
@@ -403,13 +413,14 @@ locally evaluated models under one pipeline and makes no zero-shot claim.
     better) is the primary colour-calibration guard (the distance of each predicted
     material's chromaticity from pseudo-GT), and $\text{Chroma}_{\text{fid}}$
     (\eqnref{eq:chromafid}, ratio of aggregate spreads, target $1$) is the collapse
-    detector: below $1$ is greyed colour, above $1$ over-saturation. Gold, silver,
-    and bronze mark first, second, and third numerical rank in each column;
+    detector: below $1$ is greyed colour, above $1$ over-saturation. Red, orange,
+    and yellow mark first, second, and third numerical rank in each column;
     $\text{Chroma}_{\text{fid}}$ is ranked by absolute distance from its target of $1$,
     and displayed ties share a rank. The bootstrap intervals, rather than the colour fill,
     determine whether a difference is statistically supported. These are internal metrics, so no published method
-    reports directly comparable values; the full CD-IID cascade is excluded because only its
-    Ordinal Shading stage is integrated in our evaluation harness. $\dagger$ denotes the full
+    reports directly comparable values. The full CD-IID cascade and RGB$\rightarrow$X were
+    added to the harness after the first submission of this work and are evaluated here
+    under the identical protocol; \tabref{tab:mid_paired} gives the paired tests. $\dagger$ denotes the full
     model after IIW fine-tuning; this diagnostic row tests whether improving WHDR transfers to
     MID constancy and is not the selected model.
   }
@@ -422,45 +433,103 @@ locally evaluated models under one pipeline and makes no zero-shot claim.
     Model & $C_{\text{mat}}$ $\downarrow$ & $\text{Chroma}_{\text{err}}$ $\downarrow$
           & $\text{Cast}_{\text{rel}}$ $\downarrow$ & $\text{Chroma}_{\text{fid}}$ ($\to 1$) \\
     \midrule
-    Ours (full model)                          & \rankone{0.130\,{\scriptsize[.117,.144]}} & \rankone{0.121\,{\scriptsize[.102,.143]}} & 0.421\,{\scriptsize[.357,.485]} & \rankthree{0.941} \\
-    Ours (IIW-fine-tuned)$^{\dagger}$          & 0.191\,{\scriptsize[.172,.211]} & \rankthree{0.134\,{\scriptsize[.115,.157]}} & 0.426\,{\scriptsize[.360,.493]} & \ranktwo{0.978} \\
-    Ours (base CARI)                           & \rankthree{0.157\,{\scriptsize[.141,.174]}} & \ranktwo{0.129\,{\scriptsize[.109,.150]}} & 0.425\,{\scriptsize[.360,.491]} & \rankone{0.999} \\
-    Marigold-App \mycite{marigoldiid24}        & 0.193\,{\scriptsize[.173,.214]} & 0.195\,{\scriptsize[.152,.245]} & \rankone{0.355\,{\scriptsize[.309,.406]}} & 0.728 \\
-    Marigold-Light \mycite{marigoldiid24}      & 0.546\,{\scriptsize[.462,.645]} & 0.154\,{\scriptsize[.124,.187]} & \rankthree{0.392\,{\scriptsize[.333,.459]}} & 1.148 \\
-    CRefNet \mycite{luo23crefnet}              & \ranktwo{0.151\,{\scriptsize[.138,.164]}} & 0.201\,{\scriptsize[.165,.241]} & \rankone{0.355\,{\scriptsize[.309,.406]}} & 0.484 \\
+    Ours (full model)                          & \ranktwo{0.130\,{\scriptsize[.117,.144]}} & \ranktwo{0.121\,{\scriptsize[.102,.143]}} & 0.421\,{\scriptsize[.357,.485]} & \rankthree{0.941} \\
+    Ours (base CARI)                           & 0.157\,{\scriptsize[.141,.174]} & \rankthree{0.129\,{\scriptsize[.109,.150]}} & 0.425\,{\scriptsize[.360,.491]} & \rankone{0.999} \\
+    CD-IID \mycite{careaga24cdiid}             & 0.190\,{\scriptsize[.172,.210]} & \rankone{0.090\,{\scriptsize[.073,.110]}} & \rankone{0.306\,{\scriptsize[.262,.355]}} & \ranktwo{0.944} \\
+    RGB$\rightarrow$X \mycite{zeng24rgbx}      & \rankone{0.128\,{\scriptsize[.115,.141]}} & 0.203\,{\scriptsize[.170,.239]} & \ranktwo{0.338\,{\scriptsize[.273,.409]}} & 0.907 \\
+    Marigold-App \mycite{marigoldiid24}        & 0.193\,{\scriptsize[.173,.214]} & 0.195\,{\scriptsize[.152,.245]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} & 0.728 \\
+    Marigold-Light \mycite{marigoldiid24}      & 0.546\,{\scriptsize[.462,.645]} & 0.154\,{\scriptsize[.124,.187]} & 0.392\,{\scriptsize[.333,.459]} & 1.148 \\
+    CRefNet \mycite{luo23crefnet}              & \rankthree{0.151\,{\scriptsize[.138,.164]}} & 0.201\,{\scriptsize[.165,.241]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} & 0.484 \\
     Ordinal Shading \mycite{careaga23ordinal}  & 0.252\,{\scriptsize[.229,.279]} & 0.148\,{\scriptsize[.130,.166]} & 0.549\,{\scriptsize[.463,.637]} & 0.924 \\
     \bottomrule
   \end{tabular}}
 \end{table}
 
-\tabref{tab:mid} states the central result of this chapter, and it is a conjunction rather
-than a victory on any single column. Two facts hold simultaneously, and the paired
-bootstrap tells us which are real.
+\tabref{tab:mid} states the central result of this chapter, and it is not a victory on any
+single column. We report the losses first, because the paired bootstrap of
+\tabref{tab:mid_paired} makes them unambiguous.
 
-First, we do \emph{not} win illuminant invariance, and we say so first. Marigold-App and
-CRefNet both attain $\text{Cast}_{\text{rel}} = 0.355$ against our $0.421$, and the paired
-difference is significant in each case (\secref{sec:ablation} reports the intervals). On the
-hue-stability axis in isolation, two external methods are genuinely more invariant than our
-model.
+We do \emph{not} win illuminant invariance. Every external method except Ordinal Shading
+attains a lower $\text{Cast}_{\text{rel}}$ than our $0.421$, and the paired difference is
+significant for four of the five. CD-IID leads the column outright at $0.306$.
 
-Second, that ranking partly reflects what those methods discard. On the primary
-calibration guard $\text{Chroma}_{\text{err}}$, which asks whether each material
-matches MID's pseudo-GT hue rather than merely a stable one, our full model scores $0.121$ and
-\emph{every} external method is significantly worse: CRefNet $0.201$, Marigold-App $0.195$,
-Marigold-Light $0.154$, Ordinal $0.148$. The collapse detector explains the gap directly:
-CRefNet retains under half the pseudo-GT between-material chroma spread
+We also do not win colour calibration. On $\text{Chroma}_{\text{err}}$ our full model scores
+$0.121$, second to CD-IID's $0.090$, and that gap is significant under the paired test
+($+0.032\,[+0.016, +0.049]$). This corrects an earlier reading of this table. When only the
+four originally integrated baselines were available, our model led this column over all of
+them and the natural explanation was the collapse mechanism below; running the full CD-IID
+cascade shows that a method can reach better calibration \emph{and} better invariance without
+discarding colour, so that explanation cannot be general.
+
+\begin{table}[t!]
+  \caption[Paired comparisons against each external baseline.]{%
+    Paired differences on the held-out MID split, our full model minus each external
+    baseline, scene by scene. All three metrics are lower-is-better, so a negative
+    entry means our model wins. Brackets are $95\%$ percentile-bootstrap intervals
+    over the $30$ scenes ($20{,}000$ resamples); \textbf{bold} marks an interval
+    clear of zero. Because every method is scored on the same scenes, the difference
+    can be taken per scene, which cancels scene difficulty; this is the test behind
+    the significance claims in this section, and it resolves comparisons that the
+    marginal intervals of \tabref{tab:mid} leave looking ambiguous. Reproduce with
+    \texttt{tests/eval/paired\_bootstrap\_mid.py}.
+  }
+  \label{tab:mid_paired}
+  \centering
+  \small
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Ours (full model) $-$ & $C_{\text{mat}}$ & $\text{Chroma}_{\text{err}}$ & $\text{Cast}_{\text{rel}}$ \\
+    \midrule
+    CD-IID \mycite{careaga24cdiid}               & \textbf{-0.060\,{\scriptsize[-0.073,-0.047]}} & \textbf{+0.032\,{\scriptsize[+0.016,+0.049]}} & \textbf{+0.115\,{\scriptsize[+0.083,+0.149]}} \\
+    RGB$\rightarrow$X \mycite{zeng24rgbx}        & +0.002\,{\scriptsize[-0.011,+0.017]} & \textbf{-0.081\,{\scriptsize[-0.112,-0.052]}} & \textbf{+0.083\,{\scriptsize[+0.021,+0.144]}} \\
+    CRefNet \mycite{luo23crefnet}                & \textbf{-0.021\,{\scriptsize[-0.029,-0.011]}} & \textbf{-0.079\,{\scriptsize[-0.108,-0.052]}} & \textbf{+0.066\,{\scriptsize[+0.027,+0.113]}} \\
+    Marigold-App \mycite{marigoldiid24}          & \textbf{-0.062\,{\scriptsize[-0.081,-0.045]}} & \textbf{-0.074\,{\scriptsize[-0.110,-0.040]}} & \textbf{+0.066\,{\scriptsize[+0.028,+0.105]}} \\
+    Marigold-Light \mycite{marigoldiid24}        & \textbf{-0.416\,{\scriptsize[-0.513,-0.334]}} & \textbf{-0.033\,{\scriptsize[-0.065,-0.002]}} & +0.029\,{\scriptsize[-0.023,+0.080]} \\
+    Ordinal Shading \mycite{careaga23ordinal}    & \textbf{-0.122\,{\scriptsize[-0.145,-0.103]}} & \textbf{-0.026\,{\scriptsize[-0.044,-0.009]}} & \textbf{-0.128\,{\scriptsize[-0.165,-0.097]}} \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+For \emph{some} of the field, though, the invariance ranking does reflect what a method
+discards. CRefNet retains under half the pseudo-GT between-material chroma spread
 ($\text{Chroma}_{\text{fid}} = 0.484$) and Marigold-App under three quarters ($0.728$),
-whereas our model retains $94.1\%$ of it ($0.941$). A prediction cannot drift
-in a dimension it has thrown away, so the two methods that lead $\text{Cast}_{\text{rel}}$
-lead it partly by not carrying the colour that could vary.
+against our $94.1\%$. A prediction cannot drift in a dimension it has thrown away, so those
+two buy part of their $\text{Cast}_{\text{rel}}$ lead by not carrying the colour that could
+vary. CD-IID is the counter-example that bounds the argument: it retains $0.944$, statistically
+indistinguishable from ours, and still leads both colour columns. Invariance won by
+desaturation is a real failure mode, but it is not the only route to invariance.
 
-The defensible claim is therefore narrow and, we think, stronger for it: our model is the
-only one in the comparison that is best on lightness stability ($C_{\text{mat}}$,
-significant over every other row), best on colour calibration ($\text{Chroma}_{\text{err}}$,
-significant over every external method), and within a fifth of the most invariant method on
-hue. Relative to Marigold this uses roughly $70\times$ fewer trainable parameters and about
-one fifth of the inference time; relative to CRefNet it uses $3.6\times$ fewer trainable
-parameters and is about $3\times$ faster (\tabref{tab:methods}). It is not the best
+That the two columns can diverge in more than one way is the strongest evidence in this
+chapter for reporting them separately. The eight rows contain three distinct behaviours that a
+single fidelity number would conflate. CRefNet is \emph{stable but colourless}: low
+$\text{Cast}_{\text{rel}}$, and $\text{Chroma}_{\text{fid}} = 0.484$ because the colour is
+gone. RGB$\rightarrow$X is \emph{colourful but miscalibrated}: it keeps the spread
+($\text{Chroma}_{\text{fid}} = 0.907$) yet places it on the wrong hues, giving the worst
+$\text{Chroma}_{\text{err}}$ in the table ($0.203$, significantly worse than ours). CD-IID is
+good on both. A pooled score in the style of \eqnref{eq:castrms} would rank CRefNet well and
+say nothing about RGB$\rightarrow$X's error; $\text{Chroma}_{\text{fid}}$ alone would clear
+RGB$\rightarrow$X and condemn CRefNet; only the pair separates all three. The decomposition of \eqnref{eq:castdecomp} into \eqnref{eq:castrel} and
+\eqnref{eq:chromafid} was argued for on principle; these rows are the measurement that
+it is necessary.
+
+What survives is therefore narrow, and we state it at that width. Our model leads
+\emph{lightness} stability: $C_{\text{mat}} = 0.130$, significantly better than every row
+except RGB$\rightarrow$X, from which it is not separable ($+0.002\,[-0.011, +0.017]$). It is
+second on colour calibration and mid-table on hue invariance. Every one of those statements
+is a paired test, not a reading of overlap between the marginal intervals of \tabref{tab:mid};
+with between-scene spread as large as it is here, that distinction decides most of them.
+
+The efficiency comparison is what makes the surviving claim interesting rather than merely
+modest. That lightness-stability result is obtained by training $18.5$M parameters against
+CD-IID's $442.8$M --- every stage of which is optimised --- and roughly $1290$M for each
+diffusion baseline, at $0.148$\,s per image against $0.254$\,s and $0.8$--$1.0$\,s
+(\tabref{tab:methods}). The saving is in weights that had to be optimised, not in deployed
+size: our frozen backbone leaves us at $322.9$M total, only $1.4\times$ below CD-IID. Read
+together, the two results say that a large part of cross-illuminant stability is reachable by
+changing the training \emph{evidence} rather than by scaling the decoder, which is the claim
+the ablation of \secref{sec:ablation} tests directly and the one this thesis is actually
+about. It is not the best
 calibrated of our \emph{own} exploratory refinement rows
 (two loss-refinement variants reach $\text{Chroma}_{\text{err}} = 0.115$); the refinement that buys
 its lightness-stability and MAW advantages costs a little chroma calibration, and we report
@@ -631,6 +700,34 @@ training protocol.
   \end{tabular}
 \end{table}
 
+\begin{table}[t!]
+  \caption[IIW fine-tuning trade-off.]{%
+    What the IIW fine-tuning costs. Our full model versus the same model fine-tuned on
+    the IIW training split, across the guards that the WHDR column of
+    \tabref{tab:iiw} cannot see. This configuration is a diagnostic, not a candidate
+    model, so it is reported here rather than as a row in the MID
+    (\tabref{tab:mid}) and MAW (\tabref{tab:maw}) benchmark tables. Every guard
+    regresses past the pre-specified $10\%$ no-regression threshold.
+  }
+  \label{tab:iiw_finetune_cost}
+  \centering
+  \small
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Metric & Ours (full model) & Ours (IIW-fine-tuned) & Change \\
+    \midrule
+    IIW WHDR $\downarrow$                       & 0.264 & \textit{0.220} & $-17\%$ \\
+    \midrule
+    MID $C_{\text{mat}}$ $\downarrow$            & 0.130 & 0.191 & $+47\%$ \\
+    MID $\text{Chroma}_{\text{err}}$ $\downarrow$ & 0.121 & 0.134 & $+11\%$ \\
+    MID $\text{Cast}_{\text{rel}}$ $\downarrow$   & 0.421 & 0.426 & $+1\%$ \\
+    MID $\text{Chroma}_{\text{fid}}$ ($\to 1$)    & 0.941 & 0.978 & --- \\
+    MAW $\Delta E$ $\downarrow$                  & 3.981 & 5.163 & $+30\%$ \\
+    MAW Int.$\times 100$ $\downarrow$            & 0.624 & 1.057 & $+69\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 The \emph{Ours (IIW-fine-tuned)} row makes the mismatch concrete rather than rhetorical. Fine-tuning
 our full model on the IIW training split with the ordinal-hinge loss does what it is asked
 to do: WHDR falls from $0.264$ to $0.220$. The accuracy and lightness-constancy guards
@@ -754,7 +851,7 @@ protocol, with CD-IID Table~1 as the primary external reference.
     diagnostic full model after IIW fine-tuning; it is included to expose cross-benchmark
     damage and is not the selected model.
     $^{*}$ denotes the grayscale-shading assumption, for which predicted
-    chromaticity is inherited from the input image. Gold, silver, and bronze
+    chromaticity is inherited from the input image. Red, orange, and yellow
     cells mark first, second, and third place over the common protocol.
   }
   \label{tab:maw}
@@ -765,7 +862,6 @@ protocol, with CD-IID Table~1 as the primary external reference.
     Model & $\Delta E$ $\downarrow$ & Int. SI-MSE$\times$100 $\downarrow$ \\
     \midrule
     Ours (full model)                          & 3.981 & 0.624 \\
-    Ours (IIW-fine-tuned)$^{\dagger}$          & 5.163 & 1.057 \\
     Ours (base CARI)                           & 4.155 & \rankthree{0.504} \\
     Ours (colour path only; Table-A Row~3)     & 4.115 & \rankone{0.395} \\
     Marigold-App \mycite{marigoldiid24}        & \ranktwo{3.775} & 0.653 \\
@@ -789,7 +885,8 @@ protocol, with CD-IID Table~1 as the primary external reference.
 
 The IIW-fine-tuned diagnostic confirms the trade-off with an independent measured reference.
 Its $17\%$ WHDR improvement is accompanied by a $30\%$ increase in MAW $\Delta E$ and a
-$69\%$ increase in intensity error. The effect is therefore not confined to MID's
+$69\%$ increase in intensity error (\tabref{tab:iiw_finetune_cost}; the configuration is a
+diagnostic and so is not carried as a row in \tabref{tab:maw}). The effect is therefore not confined to MID's
 dataset-derived pseudo-ground truth: direct optimisation of the sparse ordinal objective also
 damages colour and relative intensity against physically measured albedo.
 
@@ -864,40 +961,34 @@ results from Ordinal Shading \mycite{careaga23ordinal}, Table~1.
     between renderings, which is the literal case this thesis is about ($16$ groups overall,
     $11$ indoor; the remaining multi-light groups vary only intensity/direction and are
     excluded, since they carry no colour for the albedo to be invariant to and would dilute
-    the score toward zero). $C_{\text{arap}}$ measures cross-illumination albedo variation and
-    $\text{Cast}_{\text{RMS}}$ residual chroma-cast variation; lower is better for every
-    column. Gold, silver, and bronze mark first, second, and third numerical rank in each
-    column; displayed ties share a rank. These are internal diagnostics, evaluated locally.
+    the score toward zero). $C_{\text{arap}}$ measures cross-illumination albedo variation;
+    lower is better. Red, orange, and yellow mark first, second, and third numerical rank in
+    each column; displayed ties share a rank. These are internal diagnostics, evaluated
+    locally.
   }
   \label{tab:arap_constancy}
   \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tabular}{@{}lcccc@{}}
+  \begin{tabular}{@{}lcc@{}}
     \toprule
-    & \multicolumn{2}{c}{All colour-varying ($n{=}16$)}
-      & \multicolumn{2}{c}{Indoor colour-varying ($n{=}11$)} \\
-    \cmidrule(lr){2-3}\cmidrule(l){4-5}
-    Model & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}$ $\downarrow$
-          & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}$ $\downarrow$ \\
+    & All & Indoor \\
+    & ($n{=}16$) & ($n{=}11$) \\
+    \cmidrule(lr){2-2}\cmidrule(l){3-3}
+    Model & $C_{\text{arap}}$ $\downarrow$ & $C_{\text{arap}}$ $\downarrow$ \\
     \midrule
-    Ours (full model)                          & \rankthree{0.142} & \ranktwo{\textit{0.079}} & \rankone{0.096} & \ranktwo{\textit{0.077}} \\
-    Ours (base CARI)                           & 0.154 & \rankthree{\textit{0.092}} & \rankthree{0.119} & \rankthree{\textit{0.094}} \\
-    Marigold-App \mycite{marigoldiid24}        & \rankone{0.113} & \rankone{\textit{0.052}} & \ranktwo{0.113} & \rankone{\textit{0.038}} \\
-    Marigold-Light \mycite{marigoldiid24}      & 0.340 & \textit{0.197} & 0.340 & \textit{0.256} \\
-    CRefNet \mycite{luo23crefnet}              & \ranktwo{0.128} & \textit{0.122} & 0.129 & \textit{0.137} \\
-    Ordinal Shading \mycite{careaga23ordinal}  & 0.175 & \textit{0.294} & 0.165 & \textit{0.355} \\
+    Ours (full model)                          & \rankthree{0.142} & \rankone{0.096} \\
+    Ours (base CARI)                           & 0.154 & \rankthree{0.119} \\
+    Marigold-App \mycite{marigoldiid24}        & \rankone{0.113} & \ranktwo{0.113} \\
+    Marigold-Light \mycite{marigoldiid24}      & 0.340 & 0.340 \\
+    CRefNet \mycite{luo23crefnet}              & \ranktwo{0.128} & 0.129 \\
+    Ordinal Shading \mycite{careaga23ordinal}  & 0.175 & 0.165 \\
     \bottomrule
-  \end{tabular}}\\[3pt]
-  {\footnotesize $\text{Cast}_{\text{RMS}}$ is shown in \textit{italics}.
-  Its rank colours indicate numerical order only, not a stand-alone quality claim.
-  Unlike the MID pooled score it carries no between-material term. It is a chroma
-  variance taken across the illuminants of a single scene, but it remains an
-  \emph{absolute} variance, which a colourless albedo minimises just as effectively as an
-  invariant one. It is reported for completeness and read against the chroma-fidelity
-  figures of \tabref{tab:mid}: the methods that lead this column are the same ones that
-  retain the least albedo chroma. $C_{\text{arap}}$ is also a pure constancy score and
-  can be minimised by a constant prediction; it must be read beside the dense-GT accuracy
-  guard in \tabref{tab:arap_accuracy}.}
+  \end{tabular}\\[3pt]
+  {\footnotesize The pooled $\text{Cast}_{\text{RMS}}$ of \eqnref{eq:castrms} is deliberately
+  not reported here: \secref{par:castrms_correction} shows that an absolute chroma variance is
+  minimised just as effectively by a colourless albedo as by an invariant one, so it cannot
+  stand as a constancy score. $C_{\text{arap}}$ is likewise a pure constancy score and can be
+  minimised by a constant prediction; it must be read beside the dense-GT accuracy guard in
+  \tabref{tab:arap_accuracy}.}
 \end{table}
 
 \begin{table}[t!]
@@ -909,8 +1000,9 @@ results from Ordinal Shading \mycite{careaga23ordinal}, Table~1.
     (\secref{sec:arap_results}). LMSE and mean-normalised RMSE are lower-is-better, SSIM
     higher. The upper block is evaluated locally under one harness; the lower
     block is transcribed from Ordinal Shading \mycite{careaga23ordinal},
-    Table~1. Gold, silver, and bronze mark first, second, and third place
-    across all rows.
+    Table~1, and reports no SSIM because that protocol is unspecified (see the
+    note below the table). Red, orange, and yellow mark first, second, and third
+    place; LMSE and mn-RMSE rank across all rows, SSIM within the local block.
   }
   \label{tab:arap_accuracy}
   \centering
@@ -919,21 +1011,34 @@ results from Ordinal Shading \mycite{careaga23ordinal}, Table~1.
     \toprule
     Model & LMSE $\downarrow$ & mn-RMSE $\downarrow$ & SSIM $\uparrow$ \\
     \midrule
-    Ours (full model)                          & 0.0275 & \ranktwo{0.2150} & \ranktwo{0.8083} \\
-    Ours (base CARI)                           & 0.0279 & \rankthree{0.2259} & \rankthree{0.8067} \\
-    Marigold-App \mycite{marigoldiid24}        & 0.0266 & 0.2529 & 0.8016 \\
-    Marigold-Light \mycite{marigoldiid24}      & 0.0706 & 0.6187 & \rankone{0.8204} \\
-    CRefNet \mycite{luo23crefnet}              & 0.0223 & 0.2916 & 0.8051 \\
+    Ours (full model)                          & 0.0275 & \ranktwo{0.2150} & 0.599 \\
+    Ours (base CARI)                           & 0.0279 & \rankthree{0.2259} & \ranktwo{0.611} \\
+    Marigold-App \mycite{marigoldiid24}        & 0.0266 & 0.2529 & \rankthree{0.607} \\
+    Marigold-Light \mycite{marigoldiid24}      & 0.0706 & 0.6187 & 0.589 \\
+    CRefNet \mycite{luo23crefnet}              & 0.0223 & 0.2916 & \rankone{0.622} \\
     \midrule
     \multicolumn{4}{@{}l}{\itshape\small Published original-ARAP protocol (Ordinal Shading, Table~1):}\\
-    Chromaticity \mycite{arap}                 & 0.024 & 0.296 & 0.692 \\
-    NIID-Net \mycite{luo20niid}                & \rankthree{0.022} & \rankone{0.206} & 0.781 \\
-    Li \& Snavely \mycite{li18bigtime}         & \rankone{0.018} & 0.227 & 0.749 \\
-    Bell et al.\ \mycite{bell14iiw}            & 0.028 & 0.317 & 0.718 \\
-    PIE-Net \mycite{das22pienet}               & 0.026 & 0.273 & \rankthree{0.754} \\
-    Ordinal Shading \mycite{careaga23ordinal}  & \ranktwo{0.021} & 0.252 & 0.761 \\
+    Chromaticity \mycite{arap}                 & 0.024 & 0.296 & --- \\
+    NIID-Net \mycite{luo20niid}                & \rankthree{0.022} & \rankone{0.206} & --- \\
+    Li \& Snavely \mycite{li18bigtime}         & \rankone{0.018} & 0.227 & --- \\
+    Bell et al.\ \mycite{bell14iiw}            & 0.028 & 0.317 & --- \\
+    PIE-Net \mycite{das22pienet}               & 0.026 & 0.273 & --- \\
+    Ordinal Shading \mycite{careaga23ordinal}  & \ranktwo{0.021} & 0.252 & --- \\
     \bottomrule
   \end{tabular}
+
+  \vspace{0.6em}
+  {\footnotesize\raggedright
+  \textbf{Why no published SSIM.} We transcribe a published metric only when its
+  protocol is specified well enough for the number to mean the same thing as ours.
+  That test fails for SSIM: Ordinal Shading's supplement fixes only the invalid-pixel
+  threshold (albedo $<0.004$, \S A.6/B.1) and lists SSIM among its ``scale-invariant
+  metrics'' without stating the alignment, and the shared \texttt{chrislib} benchmark
+  library implements LMSE, si-RMSE and WHDR but no SSIM at all. Running Ordinal
+  Shading itself through our closest reconstruction yields $0.671$ against the $0.761$
+  it reports, so the gap is a protocol difference we cannot resolve rather than a
+  quality difference. The local SSIM column is still internally valid: all five rows
+  share one harness.\par}
 \end{table}
 
 \figref{fig:arap_models} provides the model-by-illuminant comparison that the
@@ -1048,27 +1153,28 @@ configuration of the four.
   \centering
   \textbf{\small Part 1: Raw-input constancy (self-consistency across illuminants)}\\[2pt]
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{@{}lllcccccccc@{}}
+  \begin{tabular}{@{}lllcccccc@{}}
     \toprule
-    & & & \multicolumn{4}{c}{MID (30 scenes)} & \multicolumn{2}{c}{ARAP all (col.\ varying, $n{=}16$)}
-        & \multicolumn{2}{c}{ARAP indoor (col.\ varying, $n{=}11$)} \\
-    \cmidrule(lr){4-7}\cmidrule(lr){8-9}\cmidrule(l){10-11}
+    & & & \multicolumn{4}{c}{MID (30 scenes)} & ARAP all & ARAP indoor \\
+    \cmidrule(lr){4-7}\cmidrule(lr){8-8}\cmidrule(l){9-9}
     Row & Cross-render & Colour path
         & $C_{\text{mat}}$ $\downarrow$ & $\text{Cast}_{\text{rel}}$ $\downarrow$
         & $\text{Chroma}_{\text{err}}$ $\downarrow$ & Spread ratio ($\to 1$)
-        & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}^{\S}$
-        & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}^{\S}$ \\
+        & $C_{\text{arap}}$ $\downarrow$ & $C_{\text{arap}}$ $\downarrow$ \\
     \midrule
-    1 & off & off & 0.250 & 0.477 & 0.186 & 0.512 & 0.164 & 0.102 & 0.122 & 0.105 \\
-    2 & on  & off & 0.180 & 0.447 & 0.201 & 0.484 & \textbf{0.145} & \textit{0.080} & \textbf{0.108} & \textit{0.085} \\
-    3 & off & on  & 0.259 & 0.444 & \textbf{0.124} & 0.925 & 0.155 & 0.106 & 0.117 & 0.105 \\
-    4 & on  & on  & \textbf{0.157} & \textbf{0.425} & 0.129 & \textbf{0.999} & 0.154 & 0.092 & 0.119 & 0.094 \\
+    1 & off & off & 0.250 & 0.477 & 0.186 & 0.512 & 0.164 & 0.122 \\
+    2 & on  & off & 0.180 & 0.447 & 0.201 & 0.484 & \textbf{0.145} & \textbf{0.108} \\
+    3 & off & on  & 0.259 & 0.444 & \textbf{0.124} & 0.925 & 0.155 & 0.117 \\
+    4 & on  & on  & \textbf{0.157} & \textbf{0.425} & 0.129 & \textbf{0.999} & 0.154 & 0.119 \\
     \bottomrule
   \end{tabular}}\\[3pt]
   {\footnotesize MID spread ratios use the ratio of aggregate predicted and pseudo-GT
-  spreads, not the biased mean of per-scene ratios. The ARAP $\text{Cast}_{\text{RMS}}$ columns
-  carry no between-material term but are still \emph{absolute} chroma variances, which a
-  colourless albedo also minimises.}\\[4pt]
+  spreads, not the biased mean of per-scene ratios. The pooled ARAP
+  $\text{Cast}_{\text{RMS}}$ columns are omitted for the reason given under
+  \tabref{tab:arap_constancy}: an absolute chroma variance is minimised as effectively by a
+  colourless albedo as by an invariant one. The MID fidelity metrics cannot replace them on
+  ARAP, which ships no material segmentation, so ARAP contributes constancy
+  ($C_{\text{arap}}$) and the dense-GT accuracy of Part~2a instead.}\\[4pt]
   \textbf{\small Part 2a: Standard-protocol accuracy and structure (against ground truth)}\\[2pt]
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{@{}lllcccccc@{}}
@@ -1077,10 +1183,10 @@ configuration of the four.
     \cmidrule(lr){4-5}\cmidrule(lr){6-8}\cmidrule(l){9-9}
     Row & Cross-render & Colour path & $\Delta E$ $\downarrow$ & Int.$\times$100 $\downarrow$ & LMSE$^\dagger$ $\downarrow$ & mn-RMSE$^\dagger$ $\downarrow$ & SSIM$^\dagger$ $\uparrow$ & WHDR $\downarrow$ \\
     \midrule
-    1 & off & off & 4.434 & 0.409 & 0.0307 & 0.2378 & 0.8055 & 0.334 \\
-    2 & on  & off & 4.631 & 0.474 & 0.0320 & 0.2313 & \textbf{0.8069} & \textbf{0.283} \\
-    3 & off & on  & \textbf{4.115} & \textbf{0.395} & 0.0283 & 0.2348 & 0.8047 & 0.327 \\
-    4 & on  & on  & 4.155 & 0.504 & \textbf{0.0279} & \textbf{0.2259} & 0.8067 & 0.286 \\
+    1 & off & off & 4.434 & 0.409 & 0.0307 & 0.2378 & 0.602 & 0.334 \\
+    2 & on  & off & 4.631 & 0.474 & 0.0320 & 0.2313 & 0.589 & \textbf{0.283} \\
+    3 & off & on  & \textbf{4.115} & \textbf{0.395} & 0.0283 & 0.2348 & \textbf{0.617} & 0.327 \\
+    4 & on  & on  & 4.155 & 0.504 & \textbf{0.0279} & \textbf{0.2259} & 0.611 & 0.286 \\
     \bottomrule
   \end{tabular}}\\[5pt]
   \textbf{\small Part 2b: Raw-input ARAP albedo accuracy (against ground truth)}\\[2pt]
@@ -1298,23 +1404,23 @@ config, not lodged as a timestamped artefact ahead of the results.
   \label{tab:lever_sweep}
   \centering
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{@{}lllccccccccc@{}}
+  \begin{tabular}{@{}lllcccccccc@{}}
     \toprule
-    & & & \multicolumn{3}{c}{MID} & \multicolumn{2}{c}{ARAP indoor (col.\ varying)}
+    & & & \multicolumn{3}{c}{MID} & ARAP indoor
         & \multicolumn{2}{c}{MAW} & \multicolumn{2}{c}{Guards} \\
-    \cmidrule(lr){4-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}\cmidrule(l){11-12}
+    \cmidrule(lr){4-6}\cmidrule(lr){7-7}\cmidrule(lr){8-9}\cmidrule(l){10-11}
     Row & Configuration & Levers
         & $C_{\text{mat}}$ $\downarrow$ & $\text{Cast}_{\text{rel}}$ $\downarrow$
         & $\text{Chroma}_{\text{err}}$ $\downarrow$
-        & $C_{\text{arap}}$ $\downarrow$ & $\text{Cast}_{\text{RMS}}$ $\downarrow$
+        & $C_{\text{arap}}$ $\downarrow$
         & $\Delta E$ $\downarrow$ & Int.$\times$100 $\downarrow$
         & mn-RMSE $\downarrow$ & WHDR $\downarrow$ \\
     \midrule
-    1 & Control (extra training only) & --                      & 0.161 & 0.415 & \textbf{0.115} & 0.116 & 0.090 & 4.179 & \textbf{0.511} & 0.2194 & 0.283 \\
-    2 & \quad + levers                & flat, sh\_inv           & 0.146 & 0.426 & \textbf{0.115} & 0.100 & 0.085 & 4.193 & 0.732 & \textbf{0.2099} & 0.281 \\
-    3 & \quad + 3D-Front-IID          & --                      & 0.163 & 0.418 & 0.120 & 0.111 & 0.080 & 4.040 & 0.512 & 0.2274 & 0.280 \\
-    4 & \quad + 3D-Front + levers     & flat (reduced), sh\_inv & \textbf{0.130} & 0.421 & 0.121 & \textbf{0.096} & \textbf{0.077} & \textbf{3.981} & 0.624 & 0.2150 & \textbf{0.264} \\
-    5 & \quad + 3D-Front + levers     & flat (full), sh\_inv    & 0.149 & 0.421 & 0.143 & 0.097 & 0.078 & 4.231 & 0.719 & 0.2103 & 0.282 \\
+    1 & Control (extra training only) & --                      & 0.161 & 0.415 & \textbf{0.115} & 0.116 & 4.179 & \textbf{0.511} & 0.2194 & 0.283 \\
+    2 & \quad + levers                & flat, sh\_inv           & 0.146 & 0.426 & \textbf{0.115} & 0.100 & 4.193 & 0.732 & \textbf{0.2099} & 0.281 \\
+    3 & \quad + 3D-Front-IID          & --                      & 0.163 & 0.418 & 0.120 & 0.111 & 4.040 & 0.512 & 0.2274 & 0.280 \\
+    4 & \quad + 3D-Front + levers     & flat (reduced), sh\_inv & \textbf{0.130} & 0.421 & 0.121 & \textbf{0.096} & \textbf{3.981} & 0.624 & 0.2150 & \textbf{0.264} \\
+    5 & \quad + 3D-Front + levers     & flat (full), sh\_inv    & 0.149 & 0.421 & 0.143 & 0.097 & 4.231 & 0.719 & 0.2103 & 0.282 \\
     \bottomrule
   \end{tabular}}\\[4pt]
   {\footnotesize Guard columns (ARAP mn-RMSE, IIW WHDR) are reported for
@@ -1356,7 +1462,7 @@ must be adjudicated on the axes that do respond.
 \paragraph{What does respond: chroma fidelity, lightness stability, and measured colour}
 The rows are not inert; they move calibration, lightness stability, and measured colour.
 Row~4 has the best lightness stability ($C_{\text{mat}}=0.130$), MAW colour
-($\Delta E=3.981$), coloured-illuminant ARAP scores (0.096/0.077), and IIW ordering
+($\Delta E=3.981$), coloured-illuminant ARAP constancy ($C_{\text{arap}}=0.096$), and IIW ordering
 (0.264). Its MID $\text{Chroma}_{\text{err}}=0.121$ is slightly worse than the
 0.115 controls, and its MAW intensity score is also worse, so selection is a trade-off
 rather than a clean sweep.

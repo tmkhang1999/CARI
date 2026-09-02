@@ -35,12 +35,22 @@ _MARIGOLD_VERSIONS = {'marigold-appearance', 'marigold-lighting'}
 # what AlbedoPredictor.albedo already receives as rgb_tm and returns.
 _CREFNET_VERSIONS = {'crefnet', 'crefnet-e'}
 _ORDINAL_VERSIONS = {'ordinal', 'ordinal-rendered-only'}
-_EXTERNAL_ADAPTER_VERSIONS = _CREFNET_VERSIONS | _ORDINAL_VERSIONS
+# CD-IID (Careaga & Aksoy 2024): the full 5-stage colourful-diffuse cascade whose
+# stage 1 is Ordinal Shading. NOTE its training set includes MIDIntrinsics, so its
+# scores on this benchmark are not zero-shot -- see cdiid_adapter.py.
+_CDIID_VERSIONS = {'cdiid'}
+# RGB->X (Zeng et al. 2024): an independent diffusion decomposer, so our diffusion
+# comparison is not two variants of one model. One denoising run per image.
+_RGBX_VERSIONS = {'rgbx'}
+_EXTERNAL_ADAPTER_VERSIONS = (_CREFNET_VERSIONS | _ORDINAL_VERSIONS
+                              | _CDIID_VERSIONS | _RGBX_VERSIONS)
 
 MarigoldIIDPipeline = None
 PILImage = None
 _load_crefnet = _run_crefnet = None
 _load_ordinal = _run_ordinal = None
+_load_cdiid = _run_cdiid = None
+_load_rgbx = _run_rgbx = None
 
 
 def _ensure_marigold_imported():
@@ -68,6 +78,22 @@ def _ensure_ordinal_imported():
         return
     from ordinal_adapter import load_ordinal, run_ordinal
     _load_ordinal, _run_ordinal = load_ordinal, run_ordinal
+
+
+def _ensure_cdiid_imported():
+    global _load_cdiid, _run_cdiid
+    if _load_cdiid is not None:
+        return
+    from cdiid_adapter import load_cdiid, run_cdiid
+    _load_cdiid, _run_cdiid = load_cdiid, run_cdiid
+
+
+def _ensure_rgbx_imported():
+    global _load_rgbx, _run_rgbx
+    if _load_rgbx is not None:
+        return
+    from rgbx_adapter import load_rgbx, run_rgbx
+    _load_rgbx, _run_rgbx = load_rgbx, run_rgbx
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -121,9 +147,12 @@ class AlbedoPredictor:
         self.is_marigold = version in _MARIGOLD_VERSIONS
         self.is_crefnet = version in _CREFNET_VERSIONS
         self.is_ordinal = version in _ORDINAL_VERSIONS
+        self.is_cdiid = version in _CDIID_VERSIONS
+        self.is_rgbx = version in _RGBX_VERSIONS
         # is_external gates the GT-based M_albedo metric path (all three externals are
         # out-of-our-training-space: constancy metrics still apply, absolute-scale ones don't).
-        self.is_external = self.is_marigold or self.is_crefnet or self.is_ordinal
+        self.is_external = (self.is_marigold or self.is_crefnet or self.is_ordinal
+                            or self.is_cdiid or self.is_rgbx)
         self.pipe = self.model = None
         if self.is_marigold:
             self.pipe = _load_marigold(ckpt_path, device)
@@ -133,6 +162,12 @@ class AlbedoPredictor:
         elif self.is_ordinal:
             _ensure_ordinal_imported()
             self.model = _load_ordinal(device, variant=version)
+        elif self.is_cdiid:
+            _ensure_cdiid_imported()
+            self.model = _load_cdiid(device, variant='v2')
+        elif self.is_rgbx:
+            _ensure_rgbx_imported()
+            self.model = _load_rgbx(device)
         else:
             self.model = load_v17(ckpt_path, device)
             self.pipe = None
@@ -152,12 +187,14 @@ class AlbedoPredictor:
             max_size = int(self.infer_max_size) if self.infer_max_size is not None else 1280
             out = self.pipe(pil, processing_res=max_size, match_input_res=True)
             return marigold_albedo_hwc_linear(self.pipe, out)
-        elif self.is_crefnet or self.is_ordinal:
+        elif self.is_crefnet or self.is_ordinal or self.is_cdiid or self.is_rgbx:
             # Both adapters take display-linear [0,1] HWC (== rgb_tm) and return linear albedo.
             # They apply their own sRGB-gamma + long-side cap internally; default 1280 when the
             # save-vis predictor constructs us without an explicit cap.
             max_size = int(self.infer_max_size) if self.infer_max_size is not None else 1280
-            runner = _run_crefnet if self.is_crefnet else _run_ordinal
+            runner = (_run_crefnet if self.is_crefnet
+                      else _run_cdiid if self.is_cdiid
+                      else _run_rgbx if self.is_rgbx else _run_ordinal)
             alb, _ = runner(self.model, np.clip(rgb_tm, 0.0, 1.0).astype(np.float32), max_size, self.device)
             return alb.astype(np.float32)
         else:
@@ -910,7 +947,7 @@ def main():
     for label, ckpt_path, version in ckpt_specs:
         is_dir_model = os.path.isdir(str(ckpt_path))
         # Ordinal Shading fetches its own weights via torch.hub; its path arg is a placeholder.
-        needs_path = version not in _ORDINAL_VERSIONS
+        needs_path = version not in (_ORDINAL_VERSIONS | _CDIID_VERSIONS | _RGBX_VERSIONS)
         if needs_path and not is_dir_model and not os.path.exists(str(ckpt_path)):
             print(f'[SKIP] checkpoint not found: {ckpt_path}')
             continue
