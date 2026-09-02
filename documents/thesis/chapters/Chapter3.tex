@@ -252,20 +252,8 @@ $\mathbf{I}_2$ show the same scene under two different coloured light sources.
 Let $\mathbf{A}_1 = \mathbf{A}(\mathbf{I}_1)$ and $\mathbf{A}_2 = \mathbf{A}(\mathbf{I}_2)$
 be the albedos predicted by the model for each image, and let $S_1$ and $S_2$ be
 the corresponding shadings.
-
-\begin{figure}[t!]
-  \centering
-  \includegraphics[width=\textwidth]{images/cari/cari_mechanism.png}
-  \caption[The CARI training-time mechanism.]{%
-    CARI applies only during training. The same shared-weight model runs twice,
-    once per illuminant, on two real photographs of one MID scene; the resulting
-    albedo predictions $\mathbf{A}_1$ and $\mathbf{A}_2$ are pushed together by
-    $\mathcal{L}_{\text{inv}}$ (\eqnref{eq:linv}). Inference sees only one branch
-    of this diagram: a single image through a single forward pass, with no pairing
-    and no extra cost.
-  }
-  \label{fig:cari_mechanism}
-\end{figure}
+\figref{fig:cari} at the end of this section shows the complete mechanism, once
+both losses below have been defined.
 
 \subsection{Invariance Loss}
 
@@ -353,6 +341,22 @@ whereas the colour variation is needed by the RGB invariance and reconstruction
 constraints. If both images are white-balanced to look neutral, much of that RGB
 variation is removed before training, so CARI can no longer teach the model which
 colour belongs to the illuminant rather than the surface.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/wb/wb_lanes.png}
+  \caption[Two supervision lanes: a white-balanced anchor and a raw CARI pair.]{%
+    The two supervision lanes are built from different pre-processing of the same
+    kind of scene, not different data. The absolute anchor (left) is
+    white-balanced, so the sofa's material colour is the only signal left to
+    supervise --- this is what pins $\mathbf{A}$ to a true colour rather than an
+    arbitrary one. The CARI pair (right) is deliberately left raw: both
+    observations still carry their illuminant's cast, which is exactly the
+    variation $\mathcal{L}_{\text{inv}}$ and $\mathcal{L}_{\text{expl}}$ need to
+    see in order to learn what to discard.
+  }
+  \label{fig:wb_lanes}
+\end{figure}
 
 We confirm this by measuring the chromaticity spread of the MID dataset with and
 without white balance.

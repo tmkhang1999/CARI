@@ -239,6 +239,18 @@ coloured illuminant change \emph{and} a ground-truth albedo for the same camera.
 It enters at the refinement stage, where \secref{sec:lever_sweep} studies its
 contribution in an exploratory configuration comparison.
 
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/data/dataset_roles.jpg}
+  \caption[One representative frame per dataset, with its training role.]{%
+    Hypersim and InteriorVerse are both synthetic and both supply supervised
+    albedo; MID is real and is the only source of the paired cross-illuminant
+    observations CARI is trained on. No single dataset provides everything the
+    model needs.
+  }
+  \label{fig:dataset_roles}
+\end{figure}
+
 \subsection{Hypersim}
 
 Hypersim \mycite{roberts21hypersim} is a large photorealistic synthetic dataset
