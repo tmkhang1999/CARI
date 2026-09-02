@@ -26,7 +26,13 @@ Outputs (written to --out, default documents/thesis/images/web/):
   cari-architecture.jpg     thesis Fig. 3.3
   cari-metric.jpg           a desaturated prediction scoring as more constant
   cari-chroma-fidelity.jpg  the same collapse, seen across methods
-  cari-qualitative.jpg      held-out scene, all methods, three lamp settings
+  cari-qualitative.jpg      held-out scene, all SEVEN methods (regenerated
+                            2026-09-02 via tests/viz/build_all_models_light_matrix.py
+                            to add CD-IID and RGB->X), three lamp settings
+  cari-qualitative-crops.jpg  full-resolution zoom of the two tracked boxes
+                            (mirror sphere, dark jacket) across all seven
+                            methods -- the matrix's boxes are too small to
+                            read at web display size, this is the legible view
   cari-ablation.jpg         2x2 CARI ablation across four lamp settings
   cari-tradeoff.jpg         Cast_rel vs Chroma_err with 95% bootstrap CIs; bubble AREA
                             (not radius) is linear in Chroma_fid -- see build_tradeoff
@@ -90,7 +96,10 @@ COPIES = [
     (DECK / 'slide18_image60.png',  'cari-architecture.jpg',    1400),
     (DECK / 'slide22_image66.png',  'cari-metric.jpg',          1500),
     (THESIS / 'chroma_fidelity/chroma_fidelity.jpg', 'cari-chroma-fidelity.jpg', 1500),
-    (DECK / 'slide32_image78.jpeg', 'cari-qualitative.jpg',     1700),
+    (ROOT / 'presentation/assets/generated/all_models_light_matrix/'
+     'all_models_everett_lobby3.jpg',                     'cari-qualitative.jpg', 1900),
+    (ROOT / 'presentation/assets/generated/all_models_light_matrix/'
+     'all_models_everett_lobby3_crops.jpg',                'cari-qualitative-crops.jpg', 1400),
     (DECK / 'slide29_image75.jpg',  'cari-ablation.jpg',        1700),
 ]
 
@@ -155,7 +164,7 @@ def build_paired(out: Path, n_boot: int = 20000, seed: int = 0):
     n = len(payload['scenes'])
     idx = rng.integers(0, n, size=(n_boot, n))
 
-    fig, axes = plt.subplots(1, 3, figsize=(11.4, 4.4), dpi=200, sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(11.4, 4.4), dpi=150, sharey=True)
     fig.patch.set_facecolor(BG)
 
     for ax, (key, title) in zip(axes, metrics):
@@ -178,8 +187,11 @@ def build_paired(out: Path, n_boot: int = 20000, seed: int = 0):
             ax.scatter(d.mean(), y, s=34, color=c, edgecolors=BG,
                        linewidths=1.2, zorder=4)
         ax.axvline(0, color='#9ca3af', lw=1.0, alpha=0.9, zorder=2)
-        ax.set_title(title, color=FG, fontsize=9.4, pad=9)
-        ax.tick_params(colors=SLATE, labelsize=8)
+        ax.set_title(title, color=FG, fontsize=12.5, pad=10)
+        # Fewer ticks: at the enlarged label size the default density ran
+        # adjacent panels' end labels into each other.
+        ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5, prune='both'))
+        ax.tick_params(colors=SLATE, labelsize=10.5)
         for spine in ax.spines.values():
             spine.set_color(GRID)
         ax.grid(True, axis='x', color=GRID, lw=0.6, alpha=0.8)
@@ -187,15 +199,15 @@ def build_paired(out: Path, n_boot: int = 20000, seed: int = 0):
         ax.set_ylim(-0.6, len(baselines) - 0.4)
 
     axes[0].set_yticks(range(len(baselines)))
-    axes[0].set_yticklabels(baselines[::-1], color=FG, fontsize=8.8)
-    fig.text(0.5, -0.06,
+    axes[0].set_yticklabels(baselines[::-1], color=FG, fontsize=11.5)
+    fig.text(0.5, -0.07,
              'Paired difference:  Ours (full) − baseline,  per scene   ·   '
              'all three metrics are lower-is-better, so left of the line means our model wins',
-             ha='center', color=SLATE, fontsize=8.6)
+             ha='center', color=SLATE, fontsize=11)
     fig.text(0.5, 1.035,
              f'Paired bootstrap over the same 30 MID scenes ({n_boot:,} resamples), '
              '95% intervals — an interval clear of zero is a significant difference',
-             ha='center', color=SLATE, fontsize=8.6)
+             ha='center', color=SLATE, fontsize=11)
     plt.tight_layout()
     plt.savefig(out / 'cari-paired.jpg', facecolor=BG, bbox_inches='tight')
     plt.close(fig)
@@ -254,7 +266,7 @@ def build_tradeoff(out: Path):
     judge area roughly linearly, not its square root). Error bars are the same 95%
     percentile-bootstrap intervals (over scenes) as tab:mid in the thesis, on both axes.
     """
-    fig, ax = plt.subplots(figsize=(8.8, 5.4), dpi=200)
+    fig, ax = plt.subplots(figsize=(8.8, 5.4), dpi=150)
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
 
@@ -293,7 +305,7 @@ def build_tradeoff(out: Path):
     for name, (x, xci, y, yci, fid) in MID_RESULTS.items():
         lx, ly, ha, leader = labels[name]
         ours = name.startswith('Ours')
-        kwargs = dict(fontsize=8.6, linespacing=1.55, ha=ha,
+        kwargs = dict(fontsize=10.5, linespacing=1.5, ha=ha,
                       color='#111827' if ours else FG,
                       fontweight='bold' if ours else 'normal', zorder=6)
         if leader:
@@ -304,10 +316,10 @@ def build_tradeoff(out: Path):
             ax.annotate(f'{name}\n{fid * 100:.0f}% chroma spread kept', (lx, ly), **kwargs)
 
     ax.set_xlabel('Chroma drift across illuminants   $Cast_{rel}$ ↓   (invariance)',
-                  color=FG, fontsize=10.5, labelpad=10)
+                  color=FG, fontsize=12.5, labelpad=10)
     ax.set_ylabel('Chroma error vs pseudo-GT   $Chroma_{err}$ ↓\n(colour calibration)',
-                  color=FG, fontsize=10.5, labelpad=10)
-    ax.tick_params(colors=SLATE, labelsize=9)
+                  color=FG, fontsize=12.5, labelpad=10)
+    ax.tick_params(colors=SLATE, labelsize=10.5)
     for spine in ax.spines.values():
         spine.set_color(GRID)
     ax.grid(True, color=GRID, lw=0.7, alpha=0.85)
@@ -316,10 +328,10 @@ def build_tradeoff(out: Path):
     ax.set_ylim(0.068, 0.262)
     ax.annotate('', xy=(0.2480, 0.0760), xytext=(0.2740, 0.0905),
                 arrowprops=dict(arrowstyle='->', color=SLATE, lw=1.3))
-    ax.annotate('better', xy=(0.2765, 0.0915), fontsize=9, color=SLATE, style='italic')
+    ax.annotate('better', xy=(0.2765, 0.0915), fontsize=10.5, color=SLATE, style='italic')
     ax.set_title('Bubble area ∝ chroma spread preserved · error bars are 95% bootstrap CIs '
                  'over scenes · MID held-out split, 30 scenes',
-                 color=SLATE, fontsize=8.6, pad=13, loc='left')
+                 color=SLATE, fontsize=10.5, pad=13, loc='left')
     plt.tight_layout()
     plt.savefig(out / 'cari-tradeoff.jpg', facecolor=BG, bbox_inches='tight')
     plt.close(fig)
