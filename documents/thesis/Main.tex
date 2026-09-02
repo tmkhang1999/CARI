@@ -71,9 +71,12 @@ twoside,
 \newcommand{\ch}[1]{\ref{#1}}
 
 % Consistent first/second/third-place styling for directly comparable rows.
-\newcommand{\rankone}[1]{\cellcolor{yellow!28}\textbf{#1}}
-\newcommand{\ranktwo}[1]{\cellcolor{gray!20}\underline{#1}}
-\newcommand{\rankthree}[1]{\cellcolor{orange!18}#1}
+% Red / orange / yellow for 1st / 2nd / 3rd: a single warm ramp, so rank reads off
+% the colour alone. Tints stay light enough to keep black body text legible on top,
+% and bold/underline are retained so the ranking survives greyscale printing.
+\newcommand{\rankone}[1]{\cellcolor{red!25}\textbf{#1}}
+\newcommand{\ranktwo}[1]{\cellcolor{orange!28}\underline{#1}}
+\newcommand{\rankthree}[1]{\cellcolor{yellow!30}#1}
 
 % ---------- PDF metadata + link styling (P2, 2026-07-14) ----------
 % hyperref is loaded (option-less) inside mydiss.sty at line 26, before the thesis-info

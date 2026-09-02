@@ -293,6 +293,19 @@ materials,
 Dividing by the mean makes the score scale-free, which matters because albedo is only
 defined up to a global scale.
 
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.72\textwidth]{images/losses/metric_card_cmat.png}
+  \caption[$C_{\text{mat}}$: four illuminants, one material.]{%
+    $C_{\text{mat}}$ is the coefficient of variation of one material's mean
+    luminance across the scene's illuminant conditions. A stable prediction gives
+    four nearly equal bars; a prediction whose brightness tracks the lamp gives
+    four bars with visible spread, which is exactly the quantity the standard
+    deviation in \eqnref{eq:cmat} measures.
+  }
+  \label{fig:metric_card_cmat}
+\end{figure}
+
 The second score asks whether the material's \emph{colour} holds still, which is the
 axis a coloured lamp actually attacks. We reduce each material in each frame to its
 two chromaticity ratios $r_{m,k} = \bar{A}^{R}_{m,k} / \bar{A}^{G}_{m,k}$ and
@@ -357,6 +370,19 @@ different colourfulness penalises the more colourful one for being colourful.
 $\text{Cast}_{\text{rel}}$ instead asks the question that matters perceptually: whether
 two materials remain distinguishable when the lighting changes.
 
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.72\textwidth]{images/losses/metric_card_castrel.png}
+  \caption[$\text{Cast}_{\text{rel}}$: one material's chroma across illuminants.]{%
+    Plotting one material's per-illuminant chromaticity $(r_{m,k}, b_{m,k})$ as a
+    scatter makes the two failure modes visually distinct: a stable material clusters
+    tightly, while a material whose colour tracks the lamp strings out along the
+    illuminant-colour direction. $\delta_m$ (\eqnref{eq:castterms}) is the radius of
+    that cluster.
+  }
+  \label{fig:metric_card_castrel}
+\end{figure}
+
 Invariance alone, however, can never be reported on its own, because a constant
 predictor attains it: a model that emits flat grey albedo is \emph{perfectly}
 illuminant-invariant and scores zero on every drift measure. We therefore pair
@@ -370,7 +396,21 @@ primary guard is the mean per-material chromaticity error,
 \end{equation}
 the distance between each predicted material's chromaticity and its pseudo-GT
 chromaticity $(\bar r^{*}_m,\bar b^{*}_m)$; lower is better, and it is zero only when every
-material matches that reference, not merely its amount of colour. Alongside it we
+material matches that reference, not merely its amount of colour.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.72\textwidth]{images/losses/metric_card_chromaerr.png}
+  \caption[$\text{Chroma}_{\text{err}}$: stable is not the same as correct.]{%
+    $\text{Cast}_{\text{rel}}$ alone cannot see this failure: a prediction can be
+    perfectly clustered (stable) yet sit on entirely the wrong point in chroma space.
+    $\text{Chroma}_{\text{err}}$ is the distance from that cluster to the pseudo-GT
+    reference, so it is zero only when the stable colour is also the right one.
+  }
+  \label{fig:metric_card_chromaerr}
+\end{figure}
+
+Alongside it we
 report a spread ratio,
 \begin{equation}
   \text{Chroma}_{\text{fid}} \;=\; \frac{S(A)}{S(A^{*})} ,

@@ -253,6 +253,20 @@ Let $\mathbf{A}_1 = \mathbf{A}(\mathbf{I}_1)$ and $\mathbf{A}_2 = \mathbf{A}(\ma
 be the albedos predicted by the model for each image, and let $S_1$ and $S_2$ be
 the corresponding shadings.
 
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/cari/cari_mechanism.png}
+  \caption[The CARI training-time mechanism.]{%
+    CARI applies only during training. The same shared-weight model runs twice,
+    once per illuminant, on two real photographs of one MID scene; the resulting
+    albedo predictions $\mathbf{A}_1$ and $\mathbf{A}_2$ are pushed together by
+    $\mathcal{L}_{\text{inv}}$ (\eqnref{eq:linv}). Inference sees only one branch
+    of this diagram: a single image through a single forward pass, with no pairing
+    and no extra cost.
+  }
+  \label{fig:cari_mechanism}
+\end{figure}
+
 \subsection{Invariance Loss}
 
 The albedo must be the same for both images, because the physical material has not

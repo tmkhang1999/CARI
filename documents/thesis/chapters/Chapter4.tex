@@ -96,6 +96,25 @@ This term exists because desaturation is the cheap escape for a pixel-wise loss:
 predicting a slightly grey version of every colour lowers $\ell_1$ risk, and
 $\mathcal{L}_{\text{chroma}}$ makes that escape expensive.
 
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{images/losses/anchor_geometry.png}
+  \caption[$\mathcal{L}_{\text{a}}$ versus $\mathcal{L}_{\text{chroma}}$: what each anchor
+  actually penalises.]{%
+    \eqnref{eq:l_albedo} and \eqnref{eq:l_chroma} differ only in whether the vectors
+    are normalised first, but that changes what error each one can see.
+    $\mathcal{L}_{\text{a}}$ (left) is the raw distance between the predicted and
+    reference albedo vectors, so it conflates hue error with brightness error --- a
+    prediction can lower this loss by getting \emph{closer in scale} without getting
+    the colour right. $\mathcal{L}_{\text{chroma}}$ (right) divides out the length of
+    both vectors before comparing them, so only the angle between them --- the hue ---
+    is penalised. This is the same failure this thesis's corrected MID metrics are built
+    to catch at evaluation time (\secref{sec:mid_results}): a term that cannot
+    distinguish scale from colour will always be satisfiable by discarding colour.
+  }
+  \label{fig:anchor_geometry}
+\end{figure}
+
 \paragraph{Shading SSI ($\mathcal{L}_{\text{s}}$, $\mathcal{L}_{\text{msg-s}}$)}
 Shading is only defined up to an arbitrary global scale: a dimmer light with
 a brighter material explains the same image. The renderer's absolute
