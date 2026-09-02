@@ -60,9 +60,12 @@ THESIS = ROOT / 'documents/thesis/images'
 FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 PER_SCENE = ROOT / 'documents/thesis/data/mid_per_scene.json'
 
-# Page palette, matching css/styles.css on the portfolio.
-BG, FG, GRID = '#0b1220', '#cbd5e1', '#1e293b'
-SKY, SLATE, AMBER = '#38bdf8', '#64748b', '#fbbf24'
+# Light palette. Academic project pages are white-backed (verified against the
+# IntrinsicImageDiffusion, ColorfulShading, RGB->X and Nerfies pages, all
+# rgb(255,255,255)), every other figure in this set is already on white, and
+# GitHub renders the README on white too -- so dark plots were the odd ones out.
+BG, FG, GRID = '#ffffff', '#1f2937', '#e5e7eb'
+SKY, SLATE, AMBER = '#1d4ed8', '#6b7280', '#b45309'
 
 # Chapter 5, tab:mid — held-out MIDIntrinsics split, 30 scenes. Brackets are the same
 # 95% percentile-bootstrap intervals (over scenes) the thesis table reports; Chroma_fid
@@ -174,7 +177,7 @@ def build_paired(out: Path, n_boot: int = 20000, seed: int = 0):
             ax.plot([hi, hi], [y - 0.13, y + 0.13], color=c, lw=1.4, zorder=3)
             ax.scatter(d.mean(), y, s=34, color=c, edgecolors=BG,
                        linewidths=1.2, zorder=4)
-        ax.axvline(0, color='#94a3b8', lw=1.0, alpha=0.75, zorder=2)
+        ax.axvline(0, color='#9ca3af', lw=1.0, alpha=0.9, zorder=2)
         ax.set_title(title, color=FG, fontsize=9.4, pad=9)
         ax.tick_params(colors=SLATE, labelsize=8)
         for spine in ax.spines.values():
@@ -291,7 +294,7 @@ def build_tradeoff(out: Path):
         lx, ly, ha, leader = labels[name]
         ours = name.startswith('Ours')
         kwargs = dict(fontsize=8.6, linespacing=1.55, ha=ha,
-                      color='#f8fafc' if ours else FG,
+                      color='#111827' if ours else FG,
                       fontweight='bold' if ours else 'normal', zorder=6)
         if leader:
             ax.annotate(f'{name}\n{fid * 100:.0f}% chroma spread kept', xy=(x, y),
