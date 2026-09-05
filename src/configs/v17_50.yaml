@@ -54,6 +54,13 @@ train:
   val_interval_iters: 1000
   max_val_batches: 10
 
+  # I/O-bound, not compute-bound: measured 2.29 s/it with GPU util oscillating
+  # 0-39% while the loader decodes MID/Front3D EXRs and Hypersim HDF5, and CARI
+  # doubles the forwards per step (batch 4 x grad_accum 8 at 512px = 16 fwd/bwd).
+  # 24 cores at load ~13 and 77 GB free, so 4 -> 8 workers is headroom we have.
+  # MUST stay identical across both arms or the A/B is confounded by throughput.
+  num_workers: 8
+
 data:
   # Levers OFF -- this is the control. The remaining keys are stated explicitly
   # (rather than omitted) so a diff against v17_51 shows exactly two changed values
