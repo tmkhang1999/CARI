@@ -33,6 +33,31 @@
 #   (0.88x, LOWER) -- mixing averages the shading and destroys the very footprints the
 #   argument relied on. Hence dirs: 1.
 #
+# TENSION WITH THE COVERAGE FINDING (raised against this config, not by it)
+# ------------------------------------------------------------------------
+# The v1-vs-v2 correction (PHASE_A_FINDINGS.md §2) showed 3D-Front v1's weakest
+# decile of pairs sits at 0.069, ABOVE MID's median of 0.030 -- so v1 only ever
+# presented strongly-coloured pairs, and the regime the test set actually lives in
+# was absent from synthetic training. That is a plausible reason its saturated
+# colour invariance (inv_gap 0.0013) never transferred.
+#
+# Lever 1 does the same thing to MID: it moves the training pair distribution from
+# a 0.038 median to 0.098, i.e. AWAY from the 0.030 the test set sits at. By the
+# argument above that is exactly the mistake v1 made.
+#
+# The reason it is still the right move: invariance is expected to generalise
+# DOWNWARD. A model held invariant across a 0.098 colour change should also be
+# invariant across a 0.030 one, because the weaker change is the easier case. The
+# reverse does not hold, which is why training only on 0.030 (status quo) leaves
+# the strong-change behaviour unconstrained -- and Cast_rel rises 1.42x exactly
+# there. The `floor` term keeps weak pairs in the mix rather than abandoning them.
+#
+# This is an ASSUMPTION, not a measured fact, and it is the one most likely to be
+# wrong. The readout tests it directly: if the HIGH/LOW ratio falls while the LOW
+# tercile does not degrade, downward generalisation held. If the LOW tercile gets
+# WORSE while HIGH improves, it did not, and the fix is to widen coverage (sample
+# across the range) rather than shift the median upward.
+#
 # RISK
 # ----
 # Lever 2 is synthetic colour and therefore carries the same transfer risk that
