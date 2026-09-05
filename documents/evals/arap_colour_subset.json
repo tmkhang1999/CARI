@@ -1,0 +1,1864 @@
+{
+ "_generated": "2026-09-05",
+ "_script": "tests/eval/build_arap_colour_subset.py",
+ "_note": "Illuminant chromaticity from median chroma(I/A_gt) over the canonical-albedo valid mask. GT albedo canonicalised by arap_preprocess (three on-disk encodings unified). Gap is Euclidean distance in the (r,b) chromaticity plane -- the same statistic used for MID gray probes and 3D-Front, so numbers are directly comparable across corpora.",
+ "_reference_points": {
+  "MID_median_pair_gap": 0.03,
+  "MID_frac_pairs_ge_0.08": 0.14,
+  "front3d_v1_median_gap": 0.151,
+  "front3d_v2_pilot_median_gap": 0.2425
+ },
+ "min_gap": 0.15,
+ "mask_frac": 0.02,
+ "subset": [
+  {
+   "scene": "conference",
+   "domain": "indoor",
+   "a": "conference_light0",
+   "b": "conference_light1",
+   "gap": 0.668
+  },
+  {
+   "scene": "kitchen",
+   "domain": "indoor",
+   "a": "kitchen_light1",
+   "b": "kitchen_light2",
+   "gap": 0.57148
+  },
+  {
+   "scene": "kitchen",
+   "domain": "indoor",
+   "a": "kitchen_light0",
+   "b": "kitchen_light1",
+   "gap": 0.56842
+  },
+  {
+   "scene": "katie",
+   "domain": "outdoor",
+   "a": "katie_light0",
+   "b": "katie_light2",
+   "gap": 0.3625
+  },
+  {
+   "scene": "alley",
+   "domain": "outdoor",
+   "a": "alley_light0",
+   "b": "alley_light1",
+   "gap": 0.36236
+  },
+  {
+   "scene": "vaulted",
+   "domain": "outdoor",
+   "a": "vaulted_light0",
+   "b": "vaulted_light1",
+   "gap": 0.32298
+  },
+  {
+   "scene": "alley",
+   "domain": "outdoor",
+   "a": "alley_light0",
+   "b": "alley_light2",
+   "gap": 0.30393
+  },
+  {
+   "scene": "bread",
+   "domain": "indoor",
+   "a": "bread_light0",
+   "b": "bread_light1",
+   "gap": 0.30337
+  },
+  {
+   "scene": "caterpillar",
+   "domain": "outdoor",
+   "a": "caterpillar_light2",
+   "b": "caterpillar_light3",
+   "gap": 0.30071
+  },
+  {
+   "scene": "bedroom2",
+   "domain": "indoor",
+   "a": "bedroom2_light0",
+   "b": "bedroom2_light1",
+   "gap": 0.3001
+  },
+  {
+   "scene": "redhead",
+   "domain": "outdoor",
+   "a": "redhead_light0",
+   "b": "redhead_light1",
+   "gap": 0.28506
+  },
+  {
+   "scene": "strawberries",
+   "domain": "indoor",
+   "a": "strawberries_light0",
+   "b": "strawberries_light1",
+   "gap": 0.22811
+  },
+  {
+   "scene": "whiteroom",
+   "domain": "indoor",
+   "a": "whiteroom_light0",
+   "b": "whiteroom_light1",
+   "gap": 0.21156
+  },
+  {
+   "scene": "katie",
+   "domain": "outdoor",
+   "a": "katie_light2",
+   "b": "katie_light3",
+   "gap": 0.2042
+  },
+  {
+   "scene": "street",
+   "domain": "outdoor",
+   "a": "street_light0",
+   "b": "street_light2",
+   "gap": 0.19504
+  },
+  {
+   "scene": "amsterdam",
+   "domain": "outdoor",
+   "a": "amsterdam_light0",
+   "b": "amsterdam_light1",
+   "gap": 0.1895
+  },
+  {
+   "scene": "caterpillar",
+   "domain": "outdoor",
+   "a": "caterpillar_light1",
+   "b": "caterpillar_light2",
+   "gap": 0.18381
+  },
+  {
+   "scene": "caterpillar",
+   "domain": "outdoor",
+   "a": "caterpillar_light0",
+   "b": "caterpillar_light2",
+   "gap": 0.18316
+  },
+  {
+   "scene": "street",
+   "domain": "outdoor",
+   "a": "street_light0",
+   "b": "street_light3",
+   "gap": 0.17971
+  },
+  {
+   "scene": "postit",
+   "domain": "indoor",
+   "a": "postit_light0",
+   "b": "postit_light1",
+   "gap": 0.17968
+  },
+  {
+   "scene": "amsterdam",
+   "domain": "outdoor",
+   "a": "amsterdam_light0",
+   "b": "amsterdam_light2",
+   "gap": 0.17957
+  },
+  {
+   "scene": "skyscraper",
+   "domain": "outdoor",
+   "a": "skyscraper_light0",
+   "b": "skyscraper_light1",
+   "gap": 0.17842
+  },
+  {
+   "scene": "skyscraper",
+   "domain": "outdoor",
+   "a": "skyscraper_light1",
+   "b": "skyscraper_light2",
+   "gap": 0.1774
+  },
+  {
+   "scene": "oldclassroom",
+   "domain": "indoor",
+   "a": "oldclassroom_light3",
+   "b": "oldclassroom_light4",
+   "gap": 0.16827
+  },
+  {
+   "scene": "katie",
+   "domain": "outdoor",
+   "a": "katie_light0",
+   "b": "katie_light3",
+   "gap": 0.15831
+  },
+  {
+   "scene": "corner",
+   "domain": "outdoor",
+   "a": "corner_light0",
+   "b": "corner_light2",
+   "gap": 0.15679
+  }
+ ],
+ "per_scene": {
+  "alley": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.96657,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "alley_light0": [
+     0.185668,
+     0.368358,
+     0.444988
+    ],
+    "alley_light1": [
+     0.453359,
+     0.339044,
+     0.200758
+    ],
+    "alley_light2": [
+     0.420344,
+     0.327766,
+     0.251851
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "alley_light0",
+     "b": "alley_light1",
+     "gap": 0.36236
+    },
+    {
+     "a": "alley_light0",
+     "b": "alley_light2",
+     "gap": 0.30393
+    },
+    {
+     "a": "alley_light1",
+     "b": "alley_light2",
+     "gap": 0.06083
+    }
+   ],
+   "max_gap": 0.36236,
+   "median_gap": 0.30393
+  },
+  "amsterdam": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.92865,
+   "valid_frac": 0.65501,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "amsterdam_light0": [
+     0.461838,
+     0.33488,
+     0.201011
+    ],
+    "amsterdam_light1": [
+     0.329516,
+     0.331745,
+     0.336659
+    ],
+    "amsterdam_light2": [
+     0.317125,
+     0.372789,
+     0.307327
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "amsterdam_light0",
+     "b": "amsterdam_light1",
+     "gap": 0.1895
+    },
+    {
+     "a": "amsterdam_light0",
+     "b": "amsterdam_light2",
+     "gap": 0.17957
+    },
+    {
+     "a": "amsterdam_light1",
+     "b": "amsterdam_light2",
+     "gap": 0.03184
+    }
+   ],
+   "max_gap": 0.1895,
+   "median_gap": 0.17957
+  },
+  "bedroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.95021,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "bedroom_light0": [
+     0.408929,
+     0.3207,
+     0.268362
+    ],
+    "bedroom_light1": [
+     0.436063,
+     0.296184,
+     0.266583
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "bedroom_light0",
+     "b": "bedroom_light1",
+     "gap": 0.02719
+    }
+   ],
+   "max_gap": 0.02719,
+   "median_gap": 0.02719
+  },
+  "bedroom2": {
+   "encoding": "unscaled",
+   "gt_canon_max": 1.39844,
+   "valid_frac": 0.99648,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "bedroom2_light0": [
+     0.455679,
+     0.305389,
+     0.23387
+    ],
+    "bedroom2_light1": [
+     0.22905,
+     0.338816,
+     0.430599
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "bedroom2_light0",
+     "b": "bedroom2_light1",
+     "gap": 0.3001
+    }
+   ],
+   "max_gap": 0.3001,
+   "median_gap": 0.3001
+  },
+  "blenderscene": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.9505,
+   "valid_frac": 0.99974,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "blenderscene_light0": [
+     0.46277,
+     0.334822,
+     0.196661
+    ],
+    "blenderscene_light1": [
+     0.417563,
+     0.336675,
+     0.237412
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "blenderscene_light0",
+     "b": "blenderscene_light1",
+     "gap": 0.06086
+    }
+   ],
+   "max_gap": 0.06086,
+   "median_gap": 0.06086
+  },
+  "bread": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.99969,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "bread_light0": [
+     0.452996,
+     0.33187,
+     0.214423
+    ],
+    "bread_light1": [
+     0.283606,
+     0.250996,
+     0.466102
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "bread_light0",
+     "b": "bread_light1",
+     "gap": 0.30337
+    }
+   ],
+   "max_gap": 0.30337,
+   "median_gap": 0.30337
+  },
+  "breakfast": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.98243,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "breakfast_light0": [
+     0.341595,
+     0.333333,
+     0.32485
+    ],
+    "breakfast_light1": [
+     0.241848,
+     0.333904,
+     0.424528
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "breakfast_light0",
+     "b": "breakfast_light1",
+     "gap": 0.14101
+    }
+   ],
+   "max_gap": 0.14101,
+   "median_gap": 0.14101
+  },
+  "butterfly": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.90134,
+   "valid_frac": 0.93039,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "butterfly_light0": [
+     0.387031,
+     0.297349,
+     0.283114
+    ],
+    "butterfly_light1": [
+     0.338216,
+     0.187364,
+     0.356315
+    ],
+    "butterfly_light2": [
+     0.322992,
+     0.221943,
+     0.386028
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "butterfly_light0",
+     "b": "butterfly_light2",
+     "gap": 0.12121
+    },
+    {
+     "a": "butterfly_light0",
+     "b": "butterfly_light1",
+     "gap": 0.08798
+    },
+    {
+     "a": "butterfly_light1",
+     "b": "butterfly_light2",
+     "gap": 0.03339
+    }
+   ],
+   "max_gap": 0.12121,
+   "median_gap": 0.08798
+  },
+  "camera": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.98328,
+   "valid_frac": 0.93259,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "camera_light0": [
+     0.366133,
+     0.31691,
+     0.316869
+    ],
+    "camera_light1": [
+     0.448464,
+     0.339042,
+     0.212218
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "camera_light0",
+     "b": "camera_light1",
+     "gap": 0.13315
+    }
+   ],
+   "max_gap": 0.13315,
+   "median_gap": 0.13315
+  },
+  "caterpillar": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.9942,
+   "valid_frac": 0.2993,
+   "n_lights_found": 4,
+   "n_lights_measured": 4,
+   "domain": "outdoor",
+   "chroma": {
+    "caterpillar_light0": [
+     0.417548,
+     0.390611,
+     0.172364
+    ],
+    "caterpillar_light1": [
+     0.422288,
+     0.372104,
+     0.180596
+    ],
+    "caterpillar_light2": [
+     0.572225,
+     0.339499,
+     0.074268
+    ],
+    "caterpillar_light3": [
+     0.28755,
+     0.540579,
+     0.171158
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "caterpillar_light2",
+     "b": "caterpillar_light3",
+     "gap": 0.30071
+    },
+    {
+     "a": "caterpillar_light1",
+     "b": "caterpillar_light2",
+     "gap": 0.18381
+    },
+    {
+     "a": "caterpillar_light0",
+     "b": "caterpillar_light2",
+     "gap": 0.18316
+    },
+    {
+     "a": "caterpillar_light1",
+     "b": "caterpillar_light3",
+     "gap": 0.13507
+    },
+    {
+     "a": "caterpillar_light0",
+     "b": "caterpillar_light3",
+     "gap": 0.13
+    },
+    {
+     "a": "caterpillar_light0",
+     "b": "caterpillar_light1",
+     "gap": 0.0095
+    }
+   ],
+   "max_gap": 0.30071,
+   "median_gap": 0.15912
+  },
+  "chocofur": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.99298,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "chocofur_light0": [
+     0.358025,
+     0.328546,
+     0.312281
+    ],
+    "chocofur_light1": [
+     0.339667,
+     0.331418,
+     0.328018
+    ],
+    "chocofur_light2": [
+     0.344538,
+     0.330317,
+     0.323944
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "chocofur_light0",
+     "b": "chocofur_light1",
+     "gap": 0.02418
+    },
+    {
+     "a": "chocofur_light0",
+     "b": "chocofur_light2",
+     "gap": 0.01783
+    },
+    {
+     "a": "chocofur_light1",
+     "b": "chocofur_light2",
+     "gap": 0.00635
+    }
+   ],
+   "max_gap": 0.02418,
+   "median_gap": 0.01783
+  },
+  "classroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.96858,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "classroom_light0": [
+     0.369958,
+     0.345694,
+     0.279873
+    ],
+    "classroom_light1": [
+     0.353395,
+     0.337788,
+     0.308794
+    ],
+    "classroom_light2": [
+     0.422332,
+     0.337143,
+     0.239163
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "classroom_light1",
+     "b": "classroom_light2",
+     "gap": 0.09798
+    },
+    {
+     "a": "classroom_light0",
+     "b": "classroom_light2",
+     "gap": 0.06634
+    },
+    {
+     "a": "classroom_light0",
+     "b": "classroom_light1",
+     "gap": 0.03333
+    }
+   ],
+   "max_gap": 0.09798,
+   "median_gap": 0.06634
+  },
+  "classroom2": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.97532,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "classroom2_light0": [
+     0.289518,
+     0.322709,
+     0.387574
+    ],
+    "classroom2_light1": [
+     0.386417,
+     0.319223,
+     0.295337
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "classroom2_light0",
+     "b": "classroom2_light1",
+     "gap": 0.13378
+    }
+   ],
+   "max_gap": 0.13378,
+   "median_gap": 0.13378
+  },
+  "conference": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 1.0,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "conference_light0": [
+     0.960685,
+     0.020725,
+     0.018606
+    ],
+    "conference_light1": [
+     0.361572,
+     0.323279,
+     0.314058
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "conference_light0",
+     "b": "conference_light1",
+     "gap": 0.668
+    }
+   ],
+   "max_gap": 0.668,
+   "median_gap": 0.668
+  },
+  "corner": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.98874,
+   "valid_frac": 0.96588,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "corner_light0": [
+     0.339881,
+     0.333603,
+     0.326528
+    ],
+    "corner_light1": [
+     0.319778,
+     0.345324,
+     0.334094
+    ],
+    "corner_light2": [
+     0.204115,
+     0.391078,
+     0.404962
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "corner_light0",
+     "b": "corner_light2",
+     "gap": 0.15679
+    },
+    {
+     "a": "corner_light1",
+     "b": "corner_light2",
+     "gap": 0.13565
+    },
+    {
+     "a": "corner_light0",
+     "b": "corner_light1",
+     "gap": 0.02148
+    }
+   ],
+   "max_gap": 0.15679,
+   "median_gap": 0.13565
+  },
+  "corridor": {
+   "encoding": "unscaled",
+   "gt_canon_max": 0.80469,
+   "valid_frac": 0.97653,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "corridor_light0": [
+     0.286013,
+     0.301075,
+     0.412783
+    ],
+    "corridor_light1": [
+     0.396098,
+     0.287781,
+     0.312088
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "corridor_light0",
+     "b": "corridor_light1",
+     "gap": 0.14919
+    }
+   ],
+   "max_gap": 0.14919,
+   "median_gap": 0.14919
+  },
+  "cream": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.92865,
+   "valid_frac": 1.0,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "cream_light0": [
+     0.338571,
+     0.321291,
+     0.335863
+    ],
+    "cream_light1": [
+     0.357363,
+     0.325909,
+     0.31065
+    ],
+    "cream_light2": [
+     0.371188,
+     0.332825,
+     0.292621
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "cream_light0",
+     "b": "cream_light2",
+     "gap": 0.05416
+    },
+    {
+     "a": "cream_light0",
+     "b": "cream_light1",
+     "gap": 0.03145
+    },
+    {
+     "a": "cream_light1",
+     "b": "cream_light2",
+     "gap": 0.02272
+    }
+   ],
+   "max_gap": 0.05416,
+   "median_gap": 0.03145
+  },
+  "hunter": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.98874,
+   "valid_frac": 0.54242,
+   "n_lights_found": 4,
+   "n_lights_measured": 4,
+   "domain": "outdoor",
+   "chroma": {
+    "hunter_light0": [
+     0.35491,
+     0.327718,
+     0.317566
+    ],
+    "hunter_light1": [
+     0.33601,
+     0.33216,
+     0.330898
+    ],
+    "hunter_light2": [
+     0.335021,
+     0.332069,
+     0.331813
+    ],
+    "hunter_light3": [
+     0.336,
+     0.331844,
+     0.331058
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "hunter_light0",
+     "b": "hunter_light2",
+     "gap": 0.02447
+    },
+    {
+     "a": "hunter_light0",
+     "b": "hunter_light3",
+     "gap": 0.02323
+    },
+    {
+     "a": "hunter_light0",
+     "b": "hunter_light1",
+     "gap": 0.02313
+    },
+    {
+     "a": "hunter_light1",
+     "b": "hunter_light2",
+     "gap": 0.00135
+    },
+    {
+     "a": "hunter_light2",
+     "b": "hunter_light3",
+     "gap": 0.00124
+    },
+    {
+     "a": "hunter_light1",
+     "b": "hunter_light3",
+     "gap": 0.00016
+    }
+   ],
+   "max_gap": 0.02447,
+   "median_gap": 0.01224
+  },
+  "iron": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.58177,
+   "valid_frac": 0.85007,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "iron_light0": [
+     0.372275,
+     0.36771,
+     0.260109
+    ],
+    "iron_light1": [
+     0.329268,
+     0.331851,
+     0.338959
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "iron_light0",
+     "b": "iron_light1",
+     "gap": 0.08982
+    }
+   ],
+   "max_gap": 0.08982,
+   "median_gap": 0.08982
+  },
+  "katie": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.63913,
+   "valid_frac": 0.37372,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "katie_light0": [
+     0.288954,
+     0.340911,
+     0.370824
+    ],
+    "katie_light2": [
+     0.556201,
+     0.318682,
+     0.1259
+    ],
+    "katie_light3": [
+     0.404846,
+     0.331758,
+     0.262981
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "katie_light0",
+     "b": "katie_light2",
+     "gap": 0.3625
+    },
+    {
+     "a": "katie_light2",
+     "b": "katie_light3",
+     "gap": 0.2042
+    },
+    {
+     "a": "katie_light0",
+     "b": "katie_light3",
+     "gap": 0.15831
+    }
+   ],
+   "max_gap": 0.3625,
+   "median_gap": 0.2042
+  },
+  "kitchen": {
+   "encoding": "unscaled",
+   "gt_canon_max": 1.34375,
+   "valid_frac": 0.99967,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "kitchen_light0": [
+     0.501901,
+     0.325522,
+     0.169701
+    ],
+    "kitchen_light1": [
+     0.094915,
+     0.338565,
+     0.566524
+    ],
+    "kitchen_light2": [
+     0.515852,
+     0.303018,
+     0.18
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "kitchen_light1",
+     "b": "kitchen_light2",
+     "gap": 0.57148
+    },
+    {
+     "a": "kitchen_light0",
+     "b": "kitchen_light1",
+     "gap": 0.56842
+    },
+    {
+     "a": "kitchen_light0",
+     "b": "kitchen_light2",
+     "gap": 0.01734
+    }
+   ],
+   "max_gap": 0.57148,
+   "median_gap": 0.56842
+  },
+  "livingroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.99141,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "livingroom_light0": [
+     0.378378,
+     0.323944,
+     0.298624
+    ],
+    "livingroom_light1": [
+     0.360587,
+     0.326882,
+     0.315126
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "livingroom_light0",
+     "b": "livingroom_light1",
+     "gap": 0.02427
+    }
+   ],
+   "max_gap": 0.02427,
+   "median_gap": 0.02427
+  },
+  "office": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.97407,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "office_light0": [
+     0.472396,
+     0.344214,
+     0.18076
+    ],
+    "office_light1": [
+     0.390768,
+     0.344765,
+     0.25783
+    ],
+    "office_light2": [
+     0.372298,
+     0.342863,
+     0.28356
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "office_light0",
+     "b": "office_light2",
+     "gap": 0.14348
+    },
+    {
+     "a": "office_light0",
+     "b": "office_light1",
+     "gap": 0.11226
+    },
+    {
+     "a": "office_light1",
+     "b": "office_light2",
+     "gap": 0.03167
+    }
+   ],
+   "max_gap": 0.14348,
+   "median_gap": 0.11226
+  },
+  "oldclassroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.78662,
+   "valid_frac": 1.0,
+   "n_lights_found": 5,
+   "n_lights_measured": 5,
+   "domain": "indoor",
+   "chroma": {
+    "oldclassroom_light0": [
+     0.397263,
+     0.345964,
+     0.25689
+    ],
+    "oldclassroom_light1": [
+     0.353048,
+     0.337413,
+     0.309407
+    ],
+    "oldclassroom_light2": [
+     0.353144,
+     0.337509,
+     0.309196
+    ],
+    "oldclassroom_light3": [
+     0.292999,
+     0.35002,
+     0.357085
+    ],
+    "oldclassroom_light4": [
+     0.40965,
+     0.354602,
+     0.235815
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "oldclassroom_light3",
+     "b": "oldclassroom_light4",
+     "gap": 0.16827
+    },
+    {
+     "a": "oldclassroom_light0",
+     "b": "oldclassroom_light3",
+     "gap": 0.1446
+    },
+    {
+     "a": "oldclassroom_light1",
+     "b": "oldclassroom_light4",
+     "gap": 0.09284
+    },
+    {
+     "a": "oldclassroom_light2",
+     "b": "oldclassroom_light4",
+     "gap": 0.09262
+    },
+    {
+     "a": "oldclassroom_light2",
+     "b": "oldclassroom_light3",
+     "gap": 0.07688
+    },
+    {
+     "a": "oldclassroom_light1",
+     "b": "oldclassroom_light3",
+     "gap": 0.07668
+    },
+    {
+     "a": "oldclassroom_light0",
+     "b": "oldclassroom_light1",
+     "gap": 0.06865
+    },
+    {
+     "a": "oldclassroom_light0",
+     "b": "oldclassroom_light2",
+     "gap": 0.06843
+    },
+    {
+     "a": "oldclassroom_light0",
+     "b": "oldclassroom_light4",
+     "gap": 0.02445
+    },
+    {
+     "a": "oldclassroom_light1",
+     "b": "oldclassroom_light2",
+     "gap": 0.00023
+    }
+   ],
+   "max_gap": 0.16827,
+   "median_gap": 0.07678
+  },
+  "postit": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.87949,
+   "valid_frac": 1.0,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "postit_light0": [
+     0.443566,
+     0.327465,
+     0.228
+    ],
+    "postit_light1": [
+     0.324314,
+     0.314805,
+     0.362406
+    ],
+    "postit_light2": [
+     0.352445,
+     0.347881,
+     0.296848
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "postit_light0",
+     "b": "postit_light1",
+     "gap": 0.17968
+    },
+    {
+     "a": "postit_light0",
+     "b": "postit_light2",
+     "gap": 0.11421
+    },
+    {
+     "a": "postit_light1",
+     "b": "postit_light2",
+     "gap": 0.07134
+    }
+   ],
+   "max_gap": 0.17968,
+   "median_gap": 0.11421
+  },
+  "redhead": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.57085,
+   "valid_frac": 0.25913,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "outdoor",
+   "chroma": {
+    "redhead_light0": [
+     0.205606,
+     0.32929,
+     0.466557
+    ],
+    "redhead_light1": [
+     0.404749,
+     0.333888,
+     0.262592
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "redhead_light0",
+     "b": "redhead_light1",
+     "gap": 0.28506
+    }
+   ],
+   "max_gap": 0.28506,
+   "median_gap": 0.28506
+  },
+  "restroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.97781,
+   "valid_frac": 0.99995,
+   "n_lights_found": 4,
+   "n_lights_measured": 4,
+   "domain": "indoor",
+   "chroma": {
+    "restroom_light0": [
+     0.404715,
+     0.34435,
+     0.246971
+    ],
+    "restroom_light1": [
+     0.417892,
+     0.339714,
+     0.236918
+    ],
+    "restroom_light2": [
+     0.44717,
+     0.38094,
+     0.169558
+    ],
+    "restroom_light5": [
+     0.40806,
+     0.343469,
+     0.243204
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "restroom_light0",
+     "b": "restroom_light2",
+     "gap": 0.08829
+    },
+    {
+     "a": "restroom_light2",
+     "b": "restroom_light5",
+     "gap": 0.08339
+    },
+    {
+     "a": "restroom_light1",
+     "b": "restroom_light2",
+     "gap": 0.07345
+    },
+    {
+     "a": "restroom_light0",
+     "b": "restroom_light1",
+     "gap": 0.01657
+    },
+    {
+     "a": "restroom_light1",
+     "b": "restroom_light5",
+     "gap": 0.01167
+    },
+    {
+     "a": "restroom_light0",
+     "b": "restroom_light5",
+     "gap": 0.00504
+    }
+   ],
+   "max_gap": 0.08829,
+   "median_gap": 0.04501
+  },
+  "revolution": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.76477,
+   "valid_frac": 0.31388,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "outdoor",
+   "chroma": {
+    "revolution_light0": [
+     0.345623,
+     0.328118,
+     0.327069
+    ],
+    "revolution_light1": [
+     0.406702,
+     0.334506,
+     0.259177
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "revolution_light0",
+     "b": "revolution_light1",
+     "gap": 0.09132
+    }
+   ],
+   "max_gap": 0.09132,
+   "median_gap": 0.09132
+  },
+  "skyscraper": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.95626,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "outdoor",
+   "chroma": {
+    "skyscraper_light0": [
+     0.340878,
+     0.327479,
+     0.328767
+    ],
+    "skyscraper_light1": [
+     0.196289,
+     0.370427,
+     0.433308
+    ],
+    "skyscraper_light2": [
+     0.337241,
+     0.337027,
+     0.325586
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "skyscraper_light0",
+     "b": "skyscraper_light1",
+     "gap": 0.17842
+    },
+    {
+     "a": "skyscraper_light1",
+     "b": "skyscraper_light2",
+     "gap": 0.1774
+    },
+    {
+     "a": "skyscraper_light0",
+     "b": "skyscraper_light2",
+     "gap": 0.00483
+    }
+   ],
+   "max_gap": 0.17842,
+   "median_gap": 0.1774
+  },
+  "strawberries": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.79755,
+   "valid_frac": 0.5049,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "strawberries_light0": [
+     0.298913,
+     0.321908,
+     0.367347
+    ],
+    "strawberries_light1": [
+     0.506849,
+     0.236625,
+     0.273556
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "strawberries_light0",
+     "b": "strawberries_light1",
+     "gap": 0.22811
+    }
+   ],
+   "max_gap": 0.22811,
+   "median_gap": 0.22811
+  },
+  "street": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.77808,
+   "n_lights_found": 4,
+   "n_lights_measured": 4,
+   "domain": "outdoor",
+   "chroma": {
+    "street_light0": [
+     0.407668,
+     0.378381,
+     0.213873
+    ],
+    "street_light1": [
+     0.360029,
+     0.36993,
+     0.269622
+    ],
+    "street_light2": [
+     0.274115,
+     0.370126,
+     0.356011
+    ],
+    "street_light3": [
+     0.281437,
+     0.375424,
+     0.341786
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "street_light0",
+     "b": "street_light2",
+     "gap": 0.19504
+    },
+    {
+     "a": "street_light0",
+     "b": "street_light3",
+     "gap": 0.17971
+    },
+    {
+     "a": "street_light1",
+     "b": "street_light2",
+     "gap": 0.12184
+    },
+    {
+     "a": "street_light1",
+     "b": "street_light3",
+     "gap": 0.1067
+    },
+    {
+     "a": "street_light0",
+     "b": "street_light1",
+     "gap": 0.07333
+    },
+    {
+     "a": "street_light2",
+     "b": "street_light3",
+     "gap": 0.016
+    }
+   ],
+   "max_gap": 0.19504,
+   "median_gap": 0.11427
+  },
+  "tiger": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.97781,
+   "valid_frac": 0.99704,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "outdoor",
+   "chroma": {
+    "tiger_light0": [
+     0.386087,
+     0.336044,
+     0.276326
+    ],
+    "tiger_light1": [
+     0.333965,
+     0.426757,
+     0.153076
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "tiger_light0",
+     "b": "tiger_light1",
+     "gap": 0.13382
+    }
+   ],
+   "max_gap": 0.13382,
+   "median_gap": 0.13382
+  },
+  "vaulted": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.9942,
+   "valid_frac": 0.98314,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "outdoor",
+   "chroma": {
+    "vaulted_light0": [
+     0.502234,
+     0.315384,
+     0.182096
+    ],
+    "vaulted_light1": [
+     0.24998,
+     0.368899,
+     0.383799
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "vaulted_light0",
+     "b": "vaulted_light1",
+     "gap": 0.32298
+    }
+   ],
+   "max_gap": 0.32298,
+   "median_gap": 0.32298
+  },
+  "villa": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.93955,
+   "n_lights_found": 4,
+   "n_lights_measured": 4,
+   "domain": "indoor",
+   "chroma": {
+    "villa_light0": [
+     0.350272,
+     0.326087,
+     0.323838
+    ],
+    "villa_light1": [
+     0.431298,
+     0.332239,
+     0.235602
+    ],
+    "villa_light2": [
+     0.345578,
+     0.334146,
+     0.32037
+    ],
+    "villa_light3": [
+     0.344942,
+     0.334038,
+     0.321117
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "villa_light1",
+     "b": "villa_light3",
+     "gap": 0.12153
+    },
+    {
+     "a": "villa_light1",
+     "b": "villa_light2",
+     "gap": 0.12055
+    },
+    {
+     "a": "villa_light0",
+     "b": "villa_light1",
+     "gap": 0.11979
+    },
+    {
+     "a": "villa_light0",
+     "b": "villa_light3",
+     "gap": 0.00598
+    },
+    {
+     "a": "villa_light0",
+     "b": "villa_light2",
+     "gap": 0.00584
+    },
+    {
+     "a": "villa_light2",
+     "b": "villa_light3",
+     "gap": 0.00098
+    }
+   ],
+   "max_gap": 0.12153,
+   "median_gap": 0.06288
+  },
+  "violin": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.84671,
+   "valid_frac": 0.86549,
+   "n_lights_found": 7,
+   "n_lights_measured": 7,
+   "domain": "indoor",
+   "chroma": {
+    "violin_light0": [
+     0.33422,
+     0.333784,
+     0.331783
+    ],
+    "violin_light1": [
+     0.334633,
+     0.333955,
+     0.331272
+    ],
+    "violin_light2": [
+     0.335199,
+     0.334244,
+     0.330154
+    ],
+    "violin_light3": [
+     0.254429,
+     0.297801,
+     0.44766
+    ],
+    "violin_light4": [
+     0.333845,
+     0.333174,
+     0.332871
+    ],
+    "violin_light5": [
+     0.334803,
+     0.333824,
+     0.331342
+    ],
+    "violin_light6": [
+     0.336259,
+     0.334705,
+     0.328467
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "violin_light3",
+     "b": "violin_light6",
+     "gap": 0.14458
+    },
+    {
+     "a": "violin_light2",
+     "b": "violin_light3",
+     "gap": 0.14259
+    },
+    {
+     "a": "violin_light3",
+     "b": "violin_light5",
+     "gap": 0.14138
+    },
+    {
+     "a": "violin_light1",
+     "b": "violin_light3",
+     "gap": 0.14135
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light3",
+     "gap": 0.14069
+    },
+    {
+     "a": "violin_light3",
+     "b": "violin_light4",
+     "gap": 0.13958
+    },
+    {
+     "a": "violin_light4",
+     "b": "violin_light6",
+     "gap": 0.00502
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light6",
+     "gap": 0.00389
+    },
+    {
+     "a": "violin_light1",
+     "b": "violin_light6",
+     "gap": 0.00324
+    },
+    {
+     "a": "violin_light5",
+     "b": "violin_light6",
+     "gap": 0.00322
+    },
+    {
+     "a": "violin_light2",
+     "b": "violin_light4",
+     "gap": 0.00304
+    },
+    {
+     "a": "violin_light2",
+     "b": "violin_light6",
+     "gap": 0.00199
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light2",
+     "gap": 0.0019
+    },
+    {
+     "a": "violin_light4",
+     "b": "violin_light5",
+     "gap": 0.0018
+    },
+    {
+     "a": "violin_light1",
+     "b": "violin_light4",
+     "gap": 0.00178
+    },
+    {
+     "a": "violin_light1",
+     "b": "violin_light2",
+     "gap": 0.00125
+    },
+    {
+     "a": "violin_light2",
+     "b": "violin_light5",
+     "gap": 0.00125
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light4",
+     "gap": 0.00115
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light5",
+     "gap": 0.00073
+    },
+    {
+     "a": "violin_light0",
+     "b": "violin_light1",
+     "gap": 0.00066
+    },
+    {
+     "a": "violin_light1",
+     "b": "violin_light5",
+     "gap": 0.00018
+    }
+   ],
+   "max_gap": 0.14458,
+   "median_gap": 0.00304
+  },
+  "whiteroom": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.94018,
+   "n_lights_found": 3,
+   "n_lights_measured": 3,
+   "domain": "indoor",
+   "chroma": {
+    "whiteroom_light0": [
+     0.249383,
+     0.341246,
+     0.410029
+    ],
+    "whiteroom_light1": [
+     0.404959,
+     0.328537,
+     0.266667
+    ],
+    "whiteroom_light2": [
+     0.331754,
+     0.33414,
+     0.334112
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "whiteroom_light0",
+     "b": "whiteroom_light1",
+     "gap": 0.21156
+    },
+    {
+     "a": "whiteroom_light0",
+     "b": "whiteroom_light2",
+     "gap": 0.11202
+    },
+    {
+     "a": "whiteroom_light1",
+     "b": "whiteroom_light2",
+     "gap": 0.09954
+    }
+   ],
+   "max_gap": 0.21156,
+   "median_gap": 0.11202
+  },
+  "workshop": {
+   "encoding": "radiance_179",
+   "gt_canon_max": 0.99966,
+   "valid_frac": 0.97078,
+   "n_lights_found": 2,
+   "n_lights_measured": 2,
+   "domain": "indoor",
+   "chroma": {
+    "workshop_light0": [
+     0.341042,
+     0.339242,
+     0.316017
+    ],
+    "workshop_light1": [
+     0.280005,
+     0.363593,
+     0.355152
+    ]
+   },
+   "skipped": {},
+   "pairs": [
+    {
+     "a": "workshop_light0",
+     "b": "workshop_light1",
+     "gap": 0.07251
+    }
+   ],
+   "max_gap": 0.07251,
+   "median_gap": 0.07251
+  }
+ }
+}
