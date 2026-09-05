@@ -1,0 +1,71 @@
+# V17.51 -- Phase B TREATMENT arm. Identical to v17_50 except the two colour levers.
+#
+# See v17_50.yaml for the full rationale, the Phase A measurement that motivates this,
+# and the LR-confound note. This file documents only what differs.
+#
+# LEVER 1 -- mid_chroma_stratified_pairs
+#   Weight the flash-pair draw by the REAL measured gap between the two frames' gray
+#   probes, instead of drawing uniformly (midintrinsic_dataset.py:211). Adds no
+#   synthetic assumption; it only re-weights evidence already in the corpus.
+#   Measured over 8 train scenes (src/data/mid_illuminant.py):
+#       median pair gap   0.038 -> 0.098   (2.6x)
+#       pairs >= 0.08       27% -> 61%     (2.3x)
+#   `floor` keeps every pair reachable, so pure direction/intensity pairs are still
+#   seen -- dropping them would trade one blind spot for another.
+#
+# LEVER 2 -- mid_per_direction_tint
+#   Give the RAW pair frame a lamp colour from a CALIBRATED blackbody distribution.
+#   This is NOT the legacy chromatic_aug, which regressed indoor-ARAP Cast_RMS
+#   0.035 -> 0.078. Two things differ, and both were the stated cause of that failure:
+#     (a) distribution -- 3000-6000 K, chosen by sweeping the induced pair-gap
+#         distribution against V21 §4.4's 0.08-0.20 band (median 0.099). The legacy
+#         U[0.6,1.4]^3 box was never checked this way; 2200-10000 K would give p90
+#         0.447, more extreme than any measured corpus.
+#     (b) application point -- applied to the RAW frame, so it compounds with the real
+#         bounce colour raw_color_pair preserves, rather than replacing it on an
+#         already-white-balanced frame.
+#   Applied ONLY to rgb2. The supervised primary must stay consistent with the WB'd
+#   pseudo-GT albedo.exr, or the absolute albedo loss fights the augmentation.
+#
+#   DISPROVED, and recorded so it is not re-attempted: mixing several tinted
+#   directions does NOT create spatially-varying cast. Spatial std of the pair chroma
+#   difference is 0.0204 for a 3-direction mix vs 0.0233 for a single global tint
+#   (0.88x, LOWER) -- mixing averages the shading and destroys the very footprints the
+#   argument relied on. Hence dirs: 1.
+#
+# RISK
+# ----
+# Lever 2 is synthetic colour and therefore carries the same transfer risk that
+# already sank the 3D-Front route: V17 saturates synthetic colour invariance
+# (front3d val inv_gap 0.0013) without it reaching real-domain Cast_rel (0.421).
+# Lever 1 is real measured signal and carries no such risk. If the arms disagree,
+# a lever-1-only run is the follow-up, not more synthetic colour.
+#
+# LAUNCH:
+#   INITIAL_RESUME=checkpoints/v17_34/checkpoint_iter_60000.pth \
+#   INITIAL_SKIP_OPTIMIZER=1 VERSION=17.51 CUDA=1 bash scripts/train_resilient.sh
+
+extends: '17_34'
+
+train:
+  lr: 2.0e-5
+  use_cosine_lr: false
+  reset_lr: false
+  # MUST match v17_50 -- see the confound note there.
+  skip_optimizer: true
+
+  extend_iterations: 68000
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 1000
+  max_val_batches: 10
+
+data:
+  # Lever 1: real measured colour signal, concentrated.
+  mid_chroma_stratified_pairs: true
+  mid_chroma_stratify_power: 2.0
+  mid_chroma_stratify_floor: 0.05
+
+  # Lever 2: calibrated synthetic lamp colour on the raw pair frame.
+  mid_per_direction_tint: true
+  mid_per_direction_tint_prob: 0.5
+  mid_per_direction_tint_dirs: 1

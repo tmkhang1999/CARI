@@ -1635,6 +1635,24 @@ def main():
             mid_pair_mode=str(config['data'].get('mid_pair_mode', 'raw')),
             mid_chromatic_aug=bool(config['data'].get('mid_chromatic_aug', False)),
             mid_raw_color_pair=bool(config['data'].get('mid_raw_color_pair', False)),
+            # Phase B: concentrate the ILLUMINANT-COLOUR signal in each CARI step.
+            # MID's per-scene median illuminant chroma gap is 0.021 and only 14% of
+            # pairs reach 0.08, so a uniform pair draw spends most steps on
+            # direction/intensity change alone -- which is exactly the measured
+            # outcome (C_mat won, Cast_rel flat and unchanged by CARI: 1.42 vs 1.43).
+            # See documents/evals/PHASE_A_FINDINGS.md §3. Both default OFF.
+            mid_chroma_stratified_pairs=bool(
+                config['data'].get('mid_chroma_stratified_pairs', False)),
+            mid_chroma_stratify_power=float(
+                config['data'].get('mid_chroma_stratify_power', 2.0)),
+            mid_chroma_stratify_floor=float(
+                config['data'].get('mid_chroma_stratify_floor', 0.05)),
+            mid_per_direction_tint=bool(
+                config['data'].get('mid_per_direction_tint', False)),
+            mid_per_direction_tint_prob=float(
+                config['data'].get('mid_per_direction_tint_prob', 0.5)),
+            mid_per_direction_tint_dirs=int(
+                config['data'].get('mid_per_direction_tint_dirs', 1)),
             hypersim_color_pair_prob=float(config['data'].get('hypersim_color_pair_prob', 0.0)),
             hypersim_color_tint_min=float(config['data'].get('hypersim_color_tint_min', 0.8)),
             hypersim_color_tint_max=float(config['data'].get('hypersim_color_tint_max', 1.25)),

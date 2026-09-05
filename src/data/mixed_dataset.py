@@ -104,6 +104,14 @@ def get_mixed_loader(
             pair_mode=kwargs.get('mid_pair_mode', 'raw'),
             chromatic_aug=kwargs.get('mid_chromatic_aug', False),
             raw_color_pair=kwargs.get('mid_raw_color_pair', False),
+            # Phase B colour-signal levers (documents/evals/PHASE_A_FINDINGS.md).
+            # Both default off, so omitting them reproduces prior runs exactly.
+            chroma_stratified_pairs=kwargs.get('mid_chroma_stratified_pairs', False),
+            chroma_stratify_power=kwargs.get('mid_chroma_stratify_power', 2.0),
+            chroma_stratify_floor=kwargs.get('mid_chroma_stratify_floor', 0.05),
+            per_direction_tint=kwargs.get('mid_per_direction_tint', False),
+            per_direction_tint_prob=kwargs.get('mid_per_direction_tint_prob', 0.5),
+            per_direction_tint_dirs=kwargs.get('mid_per_direction_tint_dirs', 1),
         )
         
     if 'interiorverse' in mix_weights and mix_weights['interiorverse'] > 0:
