@@ -101,3 +101,19 @@ data:
   mid_per_direction_tint: true
   mid_per_direction_tint_prob: 0.5
   mid_per_direction_tint_dirs: 1
+
+# Checkpoints and TensorBoard logs are redirected OFF the quota'd filesystem.
+# The first attempt at this run died at step 1999/8000 with
+# "OSError: [Errno 122] Disk quota exceeded" raised from the TensorBoard writer
+# thread, which propagated into the training loop and killed it. /home/khang sits
+# on a per-user quota with only ~4-6 GB of headroom, while a run needs ~4.3 GB at
+# peak (2 retained checkpoints of 1.43 GB plus the transient .tmp during a save).
+# df reports 298 GB free on that mount, which is FILESYSTEM space and says nothing
+# about the quota -- checking df was the mistake that let this happen.
+# /tmp is a different filesystem with 334 GB free and no quota. The final
+# checkpoint is copied back into checkpoints/v17_51/ afterwards (1.43 GB fits).
+# This changes only WHERE files are written, not the training computation, so the
+# A/B against v17_50 is unaffected.
+paths:
+  checkpoint_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/phaseB_ckpt'
+  log_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/phaseB_logs'
