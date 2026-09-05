@@ -12,13 +12,14 @@ The starting observation was: *MID's 25 illuminants change direction and intensi
 not colour — that is why `Cast_rel` never improved.*
 
 Measured: **the observation is correct about MID, but the causal story is different
-and more useful.** We did have colour supervision (3D-Front v1, 5× MID's colour
+and more useful.** We did have colour supervision (3D-Front v1, ~5× MID's colour
 range, 25% sampling weight, CARI losses applied). The model **saturated** it
 (`val inv_gap 0.0013`). It did not transfer to real photographs.
 
 So the bottleneck is not missing colour signal. It is:
 
-1. **Real** colour supervision is nearly absent (MID median gap **0.028**).
+1. **Real** colour supervision is nearly absent (MID median gap **0.030** over all
+   pairs; **0.021** as a per-scene median).
 2. **Synthetic** colour supervision is present, saturated, and **does not transfer**.
 3. The benchmark we report the colour claim on **cannot resolve it** (MID's whole
    colour dynamic range is 0.019–0.115).
@@ -41,9 +42,11 @@ light) and, for ARAP/3D-Front, from `I/A_gt` medians. Gap = Euclidean distance i
 | **MID** (30 test scenes, 9000 pairs) | CARI real pairs **and** `Cast_rel` benchmark | **0.030** | 14% | 1.0× |
 | ARAP indoor (22 scenes, 73 pairs) | external constancy eval | 0.061 | 37% | 2.0× |
 | 3D-Front v1 (611 rooms, in training) | synthetic CARI pairs | 0.151¹ | — | 5.0× |
-| 3D-Front v2 pilot (82 views, rendered) | proposed | **0.243** | — | **8.1×** |
+| 3D-Front v2 pilot (82 views, rendered) | proposed | **0.123**² | — | **4.1×** |
 
-¹ from `V21_TRIFACTOR_FRONT3D_V2_PIPELINE.md` §1.2.
+¹ measured here as 0.153, confirming the 0.151 in `V21_TRIFACTOR_FRONT3D_V2_PIPELINE.md` §1.2.
+
+² CORRECTED. Previously listed as 0.243, which is the *validator's* statistic (rg plane, MAX over rig pairs) and not comparable with the rb/median figures in this column. On one convention v2's typical pair is WEAKER than v1's (0.123 vs 0.153) while its extremes are stronger (rg/MAX 0.268 vs 0.182), because v2 adds a neutral anchor rig. Crucially v1's p10 is 0.069 -- above MID's median -- so v1 never presented a subtle colour change; v2's p10 is 0.008. See documents/evals/PHASE_A_FINDINGS.md §2.
 
 **86% of MID pairs fall below 0.08** — the threshold V21 itself sets as the minimum
 meaningful colour separation. MID per-scene medians span only 0.019–0.115.
@@ -52,7 +55,7 @@ The residual colour variation MID *does* have is not lamp colour: MID's 25 flash
 are white. It is **bounce colour** off coloured walls. The code already knew this —
 `midintrinsic_dataset.py:48` says "MID's 25 flashes are all WHITE and probe-WB'd, so
 raw pairs carry almost no illuminant-COLOR variation." The `raw_color_pair` fix
-recovers that bounce term, and 0.028 is its ceiling.
+recovers that bounce term, and ~0.03 is its ceiling.
 
 ### 1.2 Is `Cast_rel` on MID actually measuring colour constancy?
 
@@ -114,8 +117,12 @@ supervision and not decoder capacity.**
 | Factor arithmetic | < 1e-3 | ~1.9e-9 | PASS |
 | **Overall `passed`** | | | **False** |
 
-The corpus is blocked **solely** by the hard-shadow gate, while delivering the best
-colour separation of any corpus we have (8× MID). Hard edges did improve 2.7×
+The corpus is blocked **solely** by the hard-shadow gate. (Both numbers in the
+chroma row are the validator's own rg/MAX convention against its own threshold, so
+that row is internally consistent — but it must NOT be compared with the rb/median
+figures in §1.1; see the correction there. On the comparable convention v2's typical
+pair is 0.123 vs v1's 0.153, and its real gain is coverage: p10 0.069 → 0.008, so it
+reaches MID's subtle range that v1 never presented.) Hard edges did improve 2.7×
 (0.022 → 0.0596); they just missed a gate.
 
 ---
@@ -153,7 +160,10 @@ the primary open problem, not a property to preserve.
 
 **(c) The plan doubles down on synthetic rendering, but §1.3 shows synthetic colour
 supervision already saturated without transferring.** Rendering v2 with an even
-larger colour gap (0.243) may buy nothing on the real-domain colour axis. V21 has no
+larger colour gap may buy nothing on the real-domain colour axis -- though see the
+correction in PHASE_A_FINDINGS.md §2: v2's real gain is BROADER COVERAGE (p10
+0.069 -> 0.008), not a larger gap, and covering MID's subtle range is a mechanism
+v1 genuinely lacked. V21 has no
 step that tests transfer *before* committing multi-day render and training compute.
 This is the plan's most expensive unexamined assumption.
 
@@ -191,7 +201,7 @@ ARAP indoor already contains genuinely colour-varying scenes that MID does not:
 `whiteroom` 0.17, `corridor` 0.16. Pre-register an **ARAP-Colour subset**
 (pairs with gap ≥ 0.15, n ≈ 8 pairs) and report `C_arap`/`Cast_rel` on it separately.
 This is a real, external, colour-varying test we already have and have never used as
-such. Also evaluate on the 3D-Front v2 pilot's held-out split (gap 0.243) as the
+such. Also evaluate on the 3D-Front v2 pilot's held-out split as the
 high-range synthetic control.
 
 **0.3 State the measurement limit in the thesis.**
@@ -293,7 +303,7 @@ evidence supports a stronger and more defensible one:
 > Cross-render invariance is only as good as the colour variation in the pairs. The
 > real corpus the field uses for multi-illumination supervision (MID) varies
 > direction and intensity, not lamp colour — its median illuminant chroma gap is
-> 0.028, and 86% of its pairs fall below the separation a purpose-built synthetic
+> 0.030, and 86% of its pairs fall below the separation a purpose-built synthetic
 > corpus reaches 8× over. Our model saturates synthetic colour invariance
 > (`inv_gap` 0.0013) without transferring it to real photographs. The corrected
 > constancy metric is therefore being reported, by us and by everyone else, on a

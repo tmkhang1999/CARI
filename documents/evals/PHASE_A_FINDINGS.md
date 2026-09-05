@@ -124,11 +124,43 @@ gap ≥ 0.15.
 
 | Corpus | median pair gap | vs MID |
 |---|---:|---:|
-| **MID** (train pairs *and* Cast_rel benchmark) | **0.021** | 1.0× |
-| ARAP, all measurable pairs (n=117) | 0.088 | 4.2× |
-| ARAP indoor only (n=74) | 0.070 | 3.3× |
-| 3D-Front v1 | 0.151 | 7.2× |
-| 3D-Front v2 pilot | 0.243 | 11.6× |
+| **MID** (train pairs *and* Cast_rel benchmark) | **0.030** | 1.0× |
+| ARAP, all measurable pairs (n=117) | 0.088 | 2.9× |
+| ARAP indoor only (n=74) | 0.070 | 2.3× |
+| 3D-Front v1 | 0.153 | 5.1× |
+| 3D-Front v2 pilot | 0.123 | 4.1× |
+
+> **CORRECTION (2026-09-05, same day).** An earlier version of this table listed
+> 3D-Front v2 at **0.243** and concluded it sat furthest from the test distribution.
+> That was wrong: 0.243 comes from `scripts/validate_3dfront_v2.py`, which uses a
+> **different statistic** — the *rg* plane (R/Σ, G/Σ) and the **max** over rig pairs
+> per view — while every other number in this table is the *rb* plane (R/Σ, B/Σ) and
+> the **median** over pairs. Max-over-pairs is systematically larger than
+> median-over-pairs, so an upper-tail statistic was being compared against central
+> ones.
+>
+> Measured both ways on the same 60 views, so the two are reconciled rather than
+> merely flagged:
+>
+> | corpus | rg / **MAX** (validator) | rb / **MEDIAN** (this table) |
+> |---|---:|---:|
+> | 3D-Front v1 | 0.182 | 0.165 |
+> | 3D-Front v2 pilot | **0.268** | **0.130** |
+>
+> (the validator's own run reports 0.2425 over 82 views; 0.268 here over 60 views
+> with a slightly different mask — same statistic, reproduced.)
+>
+> Both are true and they describe different things. v2's **extremes are stronger**
+> than v1's (0.268 vs 0.182) while its **typical pair is weaker** (0.130 vs 0.165),
+> because v2's six-rig roster includes a neutral anchor whereas v1 enforced a
+> minimum chromatic separation on every pair.
+>
+> The consequence matters more than the arithmetic. v1's **p10 is 0.069** — its
+> weakest decile sits *above* MID's median (0.030), so **v1 never showed the model a
+> subtle colour change at all**. v2's p10 is **0.008** and its p90 is 0.352, so it
+> spans from near-neutral to more extreme and covers the test range for the first
+> time. On the colour axis v2 is therefore a genuine distributional improvement over
+> v1, not merely a larger number — the opposite of what the earlier version claimed.
 
 Strongest indoor (in-domain) pairs: `conference` 0.668, `kitchen` 0.572/0.568,
 `bread` 0.303, `bedroom2` 0.300, `strawberries` 0.228, `whiteroom` 0.212,

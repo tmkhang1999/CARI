@@ -124,7 +124,7 @@ def main():
     print(f'MID test: {len(scenes)} scenes')
     print(f'per-scene median illuminant gap: min {gaps.min():.4f}  '
           f'median {np.median(gaps):.4f}  max {gaps.max():.4f}')
-    print('reference: 3D-Front v1 = 0.151, 3D-Front v2 pilot = 0.243, '
+    print('reference: 3D-Front v1 = 0.153, 3D-Front v2 pilot = 0.123, '
           'ARAP indoor = 0.070\n')
 
     # Terciles by per-scene colour range.

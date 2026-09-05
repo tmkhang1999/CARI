@@ -10,7 +10,8 @@ the 30-scene test split (documents/evals/mid_illuminant_gaps.json):
     fraction of all pairs >= 0.08                14%
 
 For comparison, on the same statistic: ARAP indoor 0.070, 3D-Front v1 0.151,
-3D-Front v2 pilot 0.243.
+3D-Front v2 pilot 0.123 (all on the rb/median convention -- the 0.243 quoted
+elsewhere is the validator's rg/MAX statistic and is NOT comparable).
 
 `__getitem__` currently draws pairs uniformly (`np.random.choice(valid_indices, 2)`),
 so the strongest 14% of pairs are seen no more often than the flattest. Two levers
@@ -218,7 +219,7 @@ def _blackbody_rgb(kelvin: float) -> np.ndarray:
 #   3500-5500      0.065        0.153   41%   <- too weak, near ARAP indoor
 #
 # For reference on the same statistic: MID real 0.021, ARAP indoor 0.070,
-# 3D-Front v1 0.151, 3D-Front v2 pilot 0.243, V21 §4.4 target band 0.08-0.20.
+# 3D-Front v1 0.153, 3D-Front v2 pilot 0.123, V21 §4.4 target band 0.08-0.20.
 # 3000-6000 K puts the median inside the target band at ~4.7x MID's real signal,
 # without a tail more extreme than any measured corpus.
 KELVIN_RANGE = (3000.0, 6000.0)

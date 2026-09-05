@@ -176,8 +176,11 @@ def main():
         '_reference_points': {
             'MID_median_pair_gap': 0.030,
             'MID_frac_pairs_ge_0.08': 0.14,
-            'front3d_v1_median_gap': 0.151,
-            'front3d_v2_pilot_median_gap': 0.2425,
+            'front3d_v1_median_gap': 0.153,
+            'front3d_v2_pilot_median_gap': 0.123,
+            '_gap_convention': ('rb plane (R/sum,B/sum), MEDIAN over pairs. The 0.2425 in '
+                                'validate_3dfront_v2.py is rg plane + MAX over pairs and is NOT '
+                                'comparable -- see PHASE_A_FINDINGS.md section 2.'),
         },
         'min_gap': args.min_gap,
         'mask_frac': args.mask_frac,
