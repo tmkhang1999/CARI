@@ -177,13 +177,42 @@ def main():
         print(f'   paired bootstrap 95% CI on the ratio change: [{lo_ci:+.3f}, {hi_ci:+.3f}]')
         print(f'   -> {"SIGNIFICANT" if hi_ci < 0 else "not separable from zero"}')
 
-        verdict = ('TREATMENT REDUCES COLOUR-DEPENDENCE'
-                   if (d_ratio < 0 and hi_ci < 0 and d_fid > -0.05)
-                   else 'NULL on the colour axis')
+        # Downward-generalisation check. Lever 1 shifts the MID training pair median
+        # from 0.038 to 0.098, i.e. AWAY from the 0.030 the test set sits at -- the
+        # same criticism that applies to 3D-Front v1 (p10 0.069, above MID's median).
+        # It is justified only if invariance generalises DOWNWARD, so a ratio that
+        # falls because the LOW tercile got WORSE is a failure wearing a success's
+        # clothes. Report the terciles separately rather than trusting the ratio.
+        d_low = treat['tercile_means'][0] - ctrl['tercile_means'][0]
+        d_high = treat['tercile_means'][2] - ctrl['tercile_means'][2]
+        print(f'   LOW tercile     {d_low:+.4f}   (want <= 0: weak-colour scenes must not regress)')
+        print(f'   HIGH tercile    {d_high:+.4f}   (want < 0)')
+
+        low_regressed = d_low > 0.01
+        real_gain = d_ratio < 0 and hi_ci < 0 and d_fid > -0.05 and not low_regressed
+
+        if real_gain:
+            verdict = 'TREATMENT REDUCES COLOUR-DEPENDENCE'
+        elif d_ratio < 0 and low_regressed:
+            verdict = ('RATIO FELL BUT LOW TERCILE REGRESSED -- downward generalisation '
+                       'FAILED')
+        else:
+            verdict = 'NULL on the colour axis'
         print(f'\nVERDICT: {verdict}')
+
+        if d_ratio < 0 and low_regressed:
+            print('   The ratio improved only because weak-colour scenes got worse, not')
+            print('   because strong-colour scenes got better. Shifting the training')
+            print('   median upward traded one regime for another -- the fix is to WIDEN')
+            print('   coverage across the range, not move the mean. Same conclusion')
+            print('   would then apply to the 3D-Front rigs.')
         if d_cast < 0 and d_ratio >= 0:
             print('   NOTE: mean Cast_rel fell while the ratio did not. That is NOT a')
             print('   colour-constancy gain -- check Chroma_fid for desaturation.')
+        if d_fid < -0.05:
+            print(f'   WARNING: Chroma_fid fell {d_fid:.3f}. Any Cast_rel gain here is')
+            print('   suspect -- this is the desaturation route the corrected metric exists')
+            print('   to catch (cf. CRefNet at 0.484).')
 
     payload = {'_script': 'tests/eval/phase_b_readout.py', 'scenes': scenes,
                'gaps': gaps.tolist(), 'runs': res, 'reference': REFERENCE}
