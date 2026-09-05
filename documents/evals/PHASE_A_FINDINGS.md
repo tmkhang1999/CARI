@@ -74,6 +74,45 @@ Values are deliberately **not clipped** to [0,1]: `kitchen` (1.34) and `bedroom2
 
 ---
 
+### 1.5 Measured impact on the reported numbers
+
+`v17_34/checkpoint_latest.pth`, full ARAP, identical settings apart from the mask:
+
+| | old mask | canonical mask | change |
+|---|---:|---:|---|
+| images evaluated | 136 | **157** | **+21 recovered** |
+| Albedo LMSE | 0.0347 | 0.0622 | **+79%** |
+| Albedo RMSE | 0.1550 | 0.1364 | −12% |
+| Albedo si-RMSE | 0.2813 | **0.5209** | **+85%** |
+| Albedo SSIM | 0.8152 | 0.4855 | **−40%** |
+| Albedo `_fixed_ssim` | 0.6327 | 0.6311 | **−0.3%** |
+
+Two things to read here.
+
+**The 21 recovered images** are scenes the old mask dropped entirely (`valid_mask.sum() < 88`
+after an empty or near-empty threshold) — they were silently absent from every
+reported ARAP average.
+
+**`_fixed_ssim` barely moves (−0.3%) while plain SSIM moves −40%.** That is the
+control: `_fixed_ssim` already rescales by the GT's own maximum, so it was
+structurally immune to the encoding problem. The metrics that were *not* scale-robust
+move a lot; the one that was does not. This is independent evidence the fix targets
+the real defect rather than perturbing everything indiscriminately.
+
+**Which number is "right" is a separate question.** The canonical mask scores ~96–99%
+of the frame including dark regions where albedo is genuinely hard, so errors rise;
+the old mask scored a bright sliver. Neither is self-evidently the published ARAP
+protocol, and we do not know the mask Ordinal Shading et al. used. What is not
+defensible is the status quo: a 68× coverage spread across scenes plus 21 silently
+dropped images.
+
+Mitigating: every model in the thesis was scored through the *same* broken mask, so
+relative rankings may partly survive. But the mask is biased toward bright regions,
+which need not be neutral across methods, and no absolute number or per-scene
+analysis survives. Regenerate before publishing.
+
+---
+
 ## 2. ARAP-Colour: a real external benchmark that actually varies illuminant colour
 
 Measured as median `chroma(I / A_gt)` over the canonical mask, per light variant.

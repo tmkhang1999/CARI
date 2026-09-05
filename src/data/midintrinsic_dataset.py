@@ -27,6 +27,12 @@ class MIDIntrinsicDataset(Dataset):
         pair_mode: str = 'raw',
         chromatic_aug: bool = False,
         raw_color_pair: bool = False,
+        chroma_stratified_pairs: bool = False,
+        chroma_stratify_power: float = 2.0,
+        chroma_stratify_floor: float = 0.05,
+        per_direction_tint: bool = False,
+        per_direction_tint_prob: float = 0.5,
+        per_direction_tint_dirs: int = 1,
     ):
         self.root_dir = os.path.join(root_dir, split)
         self.split = split
@@ -61,6 +67,41 @@ class MIDIntrinsicDataset(Dataset):
         # decisive ablation: raw-color-pair vs WB-pair(+synth). See
         # documents/evals/eval_arap_indoor_analysis.md.
         self.raw_color_pair = bool(raw_color_pair)
+
+        # ── Phase B: put more ILLUMINANT-COLOUR signal into each CARI step ──────────
+        # Measured (documents/evals/PHASE_A_FINDINGS.md §3): MID's per-scene median
+        # illuminant chromaticity gap is 0.021 and only 14% of pairs reach 0.08, so a
+        # uniform pair draw spends most steps on direction/intensity change alone. That
+        # matches the observed outcome exactly -- we win C_mat (the lightness axis MID
+        # does vary) and Cast_rel is flat, unchanged by CARI (1.42 vs 1.43 low->high
+        # colour tercile, with and without CARI).
+        #
+        # chroma_stratified_pairs: weight the pair draw by the REAL measured gap between
+        #   the two flashes' gray probes. No synthetic assumption -- it only re-weights
+        #   evidence already in the corpus.
+        self.chroma_stratified_pairs = bool(chroma_stratified_pairs)
+        self.chroma_stratify_power = float(chroma_stratify_power)
+        self.chroma_stratify_floor = float(chroma_stratify_floor)
+        self._gap_cache = {}
+        # per_direction_tint: give the RAW pair frame a lamp colour drawn from a
+        #   CALIBRATED blackbody distribution (3000-6000 K), rather than the legacy
+        #   chromatic_aug's U[0.6,1.4]^3 box applied to an already-WB'd frame. The two
+        #   differences that matter are the distribution and the application point:
+        #   tinting the raw frame compounds with the real bounce colour that
+        #   raw_color_pair preserves, instead of replacing it.
+        #   It is NOT a way to create spatially-varying cast -- that was measured and
+        #   disproved (mixing directions gives 0.88x the spatial structure of a single
+        #   tinted direction, because mixing averages the shading). See
+        #   src/data/mid_illuminant.py header.
+        #   Applied ONLY to rgb2: the supervised primary must stay consistent with the
+        #   WB'd pseudo-GT albedo.exr.
+        self.per_direction_tint = bool(per_direction_tint)
+        self.per_direction_tint_prob = float(per_direction_tint_prob)
+        # 1 = tint the single raw pair frame (DEFAULT). >1 mixes that many tinted
+        # directions -- physically a multi-lamp scene, but MEASURED to LOWER the
+        # spatial cast structure (0.88x vs a single-direction tint), because mixing
+        # averages the shading. See src/data/mid_illuminant.py header.
+        self.per_direction_tint_dirs = max(1, int(per_direction_tint_dirs))
 
         # Indices with hard flash / saturated pixels to avoid
         self.skip_list = [2, 3, 20, 21, 24]
@@ -167,6 +208,73 @@ class MIDIntrinsicDataset(Dataset):
             raise OSError(f"Failed to load image: {img_path}")
         return img[:, :, ::-1].astype(np.float32)  # BGR→RGB, illuminant color INTACT
 
+    def _sample_pair_by_chroma(self, scene_path: str):
+        """Draw a flash pair weighted by the REAL measured illuminant-colour gap.
+
+        Falls back to a uniform draw whenever the probe-derived gap matrix is missing
+        or unusable, so a damaged scene degrades to current behaviour instead of
+        killing the run.
+        """
+        from .mid_illuminant import gap_matrix, sample_pair_stratified
+        if scene_path not in self._gap_cache:
+            try:
+                self._gap_cache[scene_path] = gap_matrix(scene_path, self.valid_indices)
+            except Exception:
+                self._gap_cache[scene_path] = None
+        gaps = self._gap_cache[scene_path]
+        if gaps is None:
+            a, b = np.random.choice(self.valid_indices, size=2, replace=False)
+            return int(a), int(b)
+        return sample_pair_stratified(
+            gaps, self.valid_indices,
+            power=self.chroma_stratify_power, floor=self.chroma_stratify_floor)
+
+    def _tinted_direction_mix(self, scene_path: str, primary_idx: int,
+                              exclude_idx: int) -> np.ndarray:
+        """Build rgb2 as a mixture of raw flash directions, each with its own lamp colour.
+
+            rgb2 = sum_k  w_k * (c_k  I_k)
+
+        Each direction contributes its own real spatial footprint, so the synthesised
+        illuminant colour varies across the image and regions lit by different lamps
+        take different casts -- the structure a single global tint cannot produce and
+        a grey-world gain cannot remove.
+
+        The albedo is untouched by construction: every I_k is the same scene under the
+        same camera, so the shared albedo factors out and only shading chromaticity
+        moves. That keeps L_inv exact.
+
+        `exclude_idx` is the primary frame's direction, kept out of the mixture so the
+        pair does not partly collapse onto the same illumination.
+        """
+        from .mid_illuminant import sample_illuminant_rgb, mix_tinted
+        pool = [i for i in self.valid_indices if i != exclude_idx]
+        if primary_idx in pool:
+            pool.remove(primary_idx)
+        n_extra = min(self.per_direction_tint_dirs - 1, len(pool))
+        chosen = [primary_idx]
+        if n_extra > 0:
+            chosen += list(np.random.choice(pool, size=n_extra, replace=False))
+
+        frames, tints = [], []
+        for idx in chosen:
+            try:
+                frames.append(self._load_raw_frame(scene_path, int(idx), wb=False))
+            except OSError:
+                continue
+            tints.append(sample_illuminant_rgb())
+        if not frames:
+            return self._load_raw_frame(scene_path, primary_idx, wb=False)
+        if len(frames) == 1:
+            return (frames[0] * tints[0].reshape(1, 1, 3)).astype(np.float32)
+
+        # Dirichlet weights, but keep the primary direction dominant so the mixture
+        # stays a recognisable lighting rather than an averaged-out flat field.
+        w = np.random.dirichlet(np.ones(len(frames)))
+        w[0] = max(w[0], 0.5)
+        w = w / w.sum()
+        return mix_tinted(frames, w, tints).astype(np.float32)
+
     def __len__(self):
         return len(self.scenes)
 
@@ -208,7 +316,10 @@ class MIDIntrinsicDataset(Dataset):
         extra_valid = None
         if paired and self.pair_mode == 'raw':
             # CARI core: two measured frames (real multi-illumination) of the same scene.
-            a, b = np.random.choice(self.valid_indices, size=2, replace=False)
+            if self.chroma_stratified_pairs:
+                a, b = self._sample_pair_by_chroma(scene_path)
+            else:
+                a, b = np.random.choice(self.valid_indices, size=2, replace=False)
             # Primary stays WHITE-BALANCED — it carries the supervised albedo loss, which is
             # against the WB'd pseudo-GT albedo.exr; an un-WB primary would fight that target.
             primary = self._load_raw_frame(scene_path, int(a), wb=True)
@@ -218,6 +329,9 @@ class MIDIntrinsicDataset(Dataset):
                 # REAL colored-illuminant difference between dir_a and dir_b — the actual
                 # thesis claim, not a synthetic proxy. No tint: the real cast IS the signal.
                 extra_rgb = self._load_raw_frame(scene_path, int(b), wb=False)
+                if (self.per_direction_tint
+                        and np.random.rand() < self.per_direction_tint_prob):
+                    extra_rgb = self._tinted_direction_mix(scene_path, int(b), int(a))
             else:
                 # Legacy: both WB'd, then optionally tint the extra with a SYNTHETIC cast.
                 extra_rgb = self._load_raw_frame(scene_path, int(b), wb=True)

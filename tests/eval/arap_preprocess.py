@@ -114,6 +114,20 @@ def detect_encoding(rgb: np.ndarray, path: str) -> str:
     return 'radiance_179' if float(rgb.max()) < _SCALED_MAX_CUTOFF else 'unscaled'
 
 
+def canonicalise_albedo_array(rgb: np.ndarray) -> np.ndarray:
+    """Canonicalise GT albedo from the array alone, no path needed.
+
+    Only the /179 group needs rescaling; both `unscaled` and `ldr_srgb` are already
+    in a [0,1]-reflectance range and take scale 1.0. So the file extension affects
+    only the *label*, never the arithmetic -- which lets callers that hold just an
+    array (e.g. after a resize) canonicalise without threading the path through.
+
+    The two populations are separated by ~180x, so the cutoff is not a tuned value.
+    """
+    scale = RADIANCE_EFFICACY if float(np.nanmax(rgb)) < _SCALED_MAX_CUTOFF else 1.0
+    return (rgb * scale).astype(np.float32)
+
+
 def canonicalise_albedo(rgb: np.ndarray, path: str) -> ArapImage:
     """Rescale GT albedo to a canonical [0,1]-reflectance range.
 

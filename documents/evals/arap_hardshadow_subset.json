@@ -1,0 +1,679 @@
+{
+ "_generated": "2026-09-05",
+ "_script": "tests/eval/build_arap_hardshadow_subset.py",
+ "_definition": "mean(|grad(log S_lum)| > 0.3) over canonical-mask valid pixels, S = I / A_gt; identical to scripts/validate_3dfront_v2.py:91",
+ "_reference": {
+  "front3d_v1": 0.022,
+  "front3d_v2_pilot": 0.0596,
+  "front3d_v2_gate": 0.07
+ },
+ "mask_frac": 0.02,
+ "per_scene": {
+  "alley": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9666,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.1096,
+   "hard_edge_fraction_max": 0.4129,
+   "per_frame": {
+    "alley": 0.0892,
+    "alley_light0": 0.0992,
+    "alley_light1": 0.4129,
+    "alley_light2": 0.1199
+   }
+  },
+  "amsterdam": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.655,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.1906,
+   "hard_edge_fraction_max": 0.4331,
+   "per_frame": {
+    "amsterdam": 0.2383,
+    "amsterdam_light0": 0.4331,
+    "amsterdam_light1": 0.143,
+    "amsterdam_light2": 0.1375
+   }
+  },
+  "arabic": {
+   "domain": "outdoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 0.9734,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0937,
+   "hard_edge_fraction_max": 0.0937,
+   "per_frame": {
+    "arabic": 0.0937
+   }
+  },
+  "attic": {
+   "domain": "indoor",
+   "encoding": "unscaled",
+   "valid_frac": 0.8564,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.3023,
+   "hard_edge_fraction_max": 0.3023,
+   "per_frame": {
+    "attic": 0.3023
+   }
+  },
+  "babylone": {
+   "domain": "outdoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 0.9947,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0423,
+   "hard_edge_fraction_max": 0.0423,
+   "per_frame": {
+    "babylone": 0.0423
+   }
+  },
+  "bamboo": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9327,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.1459,
+   "hard_edge_fraction_max": 0.1459,
+   "per_frame": {
+    "bamboo": 0.1459
+   }
+  },
+  "bedroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9502,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1323,
+   "hard_edge_fraction_max": 0.2895,
+   "per_frame": {
+    "bedroom": 0.1323,
+    "bedroom_light0": 0.1314,
+    "bedroom_light1": 0.2895
+   }
+  },
+  "bedroom2": {
+   "domain": "indoor",
+   "encoding": "unscaled",
+   "valid_frac": 0.9965,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1121,
+   "hard_edge_fraction_max": 0.1144,
+   "per_frame": {
+    "bedroom2": 0.0945,
+    "bedroom2_light0": 0.1144,
+    "bedroom2_light1": 0.1121
+   }
+  },
+  "blenderscene": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9997,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1899,
+   "hard_edge_fraction_max": 0.19,
+   "per_frame": {
+    "blenderscene": 0.1899,
+    "blenderscene_light0": 0.19,
+    "blenderscene_light1": 0.1714
+   }
+  },
+  "bread": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9997,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.127,
+   "hard_edge_fraction_max": 0.295,
+   "per_frame": {
+    "bread": 0.127,
+    "bread_light0": 0.295,
+    "bread_light1": 0.0372
+   }
+  },
+  "breakfast": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9824,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0838,
+   "hard_edge_fraction_max": 0.1055,
+   "per_frame": {
+    "breakfast": 0.0837,
+    "breakfast_light0": 0.1055,
+    "breakfast_light1": 0.0838
+   }
+  },
+  "butterfly": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9304,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.3083,
+   "hard_edge_fraction_max": 0.6555,
+   "per_frame": {
+    "butterfly": 0.0147,
+    "butterfly_light0": 0.0147,
+    "butterfly_light1": 0.6555,
+    "butterfly_light2": 0.602
+   }
+  },
+  "camera": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9326,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0194,
+   "hard_edge_fraction_max": 0.0284,
+   "per_frame": {
+    "camera": 0.0194,
+    "camera_light0": 0.0284,
+    "camera_light1": 0.0192
+   }
+  },
+  "caterpillar": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.2993,
+   "n_frames": 5,
+   "hard_edge_fraction_median": 0.16,
+   "hard_edge_fraction_max": 0.1823,
+   "per_frame": {
+    "caterpillar": 0.1015,
+    "caterpillar_light0": 0.1823,
+    "caterpillar_light1": 0.1686,
+    "caterpillar_light2": 0.16,
+    "caterpillar_light3": 0.1404
+   }
+  },
+  "cathedral": {
+   "domain": "indoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 0.5466,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.238,
+   "hard_edge_fraction_max": 0.238,
+   "per_frame": {
+    "cathedral": 0.238
+   }
+  },
+  "chocofur": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.993,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.1304,
+   "hard_edge_fraction_max": 0.3522,
+   "per_frame": {
+    "chocofur": 0.0279,
+    "chocofur_light0": 0.0264,
+    "chocofur_light1": 0.3522,
+    "chocofur_light2": 0.2329
+   }
+  },
+  "classroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9686,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.1814,
+   "hard_edge_fraction_max": 0.2719,
+   "per_frame": {
+    "classroom": 0.1813,
+    "classroom_light0": 0.1815,
+    "classroom_light1": 0.1444,
+    "classroom_light2": 0.2719
+   }
+  },
+  "classroom2": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9753,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.101,
+   "hard_edge_fraction_max": 0.1032,
+   "per_frame": {
+    "classroom2": 0.1032,
+    "classroom2_light0": 0.0843,
+    "classroom2_light1": 0.101
+   }
+  },
+  "conference": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 1.0,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0479,
+   "hard_edge_fraction_max": 0.2136,
+   "per_frame": {
+    "conference": 0.0479,
+    "conference_light0": 0.2136,
+    "conference_light1": 0.0443
+   }
+  },
+  "corner": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9659,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.1194,
+   "hard_edge_fraction_max": 0.4983,
+   "per_frame": {
+    "corner": 0.1161,
+    "corner_light0": 0.0335,
+    "corner_light1": 0.4983,
+    "corner_light2": 0.1227
+   }
+  },
+  "corridor": {
+   "domain": "indoor",
+   "encoding": "unscaled",
+   "valid_frac": 0.9765,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0499,
+   "hard_edge_fraction_max": 0.051,
+   "per_frame": {
+    "corridor": 0.0499,
+    "corridor_light0": 0.0404,
+    "corridor_light1": 0.051
+   }
+  },
+  "cream": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 1.0,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.0082,
+   "hard_edge_fraction_max": 0.0136,
+   "per_frame": {
+    "cream": 0.0082,
+    "cream_light0": 0.0024,
+    "cream_light1": 0.0136,
+    "cream_light2": 0.0082
+   }
+  },
+  "dragonfly": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.2151,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.088,
+   "hard_edge_fraction_max": 0.088,
+   "per_frame": {
+    "dragonfly": 0.088
+   }
+  },
+  "head": {
+   "domain": "outdoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 0.9905,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0063,
+   "hard_edge_fraction_max": 0.0063,
+   "per_frame": {
+    "head": 0.0063
+   }
+  },
+  "hunter": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.5424,
+   "n_frames": 5,
+   "hard_edge_fraction_median": 0.1731,
+   "hard_edge_fraction_max": 0.2925,
+   "per_frame": {
+    "hunter": 0.0561,
+    "hunter_light0": 0.2925,
+    "hunter_light1": 0.1453,
+    "hunter_light2": 0.1731,
+    "hunter_light3": 0.1732
+   }
+  },
+  "iron": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.8501,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0486,
+   "hard_edge_fraction_max": 0.0507,
+   "per_frame": {
+    "iron": 0.0486,
+    "iron_light0": 0.0507,
+    "iron_light1": 0.0365
+   }
+  },
+  "italian": {
+   "domain": "outdoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 0.9968,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0671,
+   "hard_edge_fraction_max": 0.0671,
+   "per_frame": {
+    "italian": 0.0671
+   }
+  },
+  "katie": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.3737,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.3158,
+   "hard_edge_fraction_max": 0.5371,
+   "per_frame": {
+    "katie": 0.2793,
+    "katie_light0": 0.2611,
+    "katie_light2": 0.5371,
+    "katie_light3": 0.3523
+   }
+  },
+  "kitchen": {
+   "domain": "indoor",
+   "encoding": "unscaled",
+   "valid_frac": 0.9997,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.0926,
+   "hard_edge_fraction_max": 0.1948,
+   "per_frame": {
+    "kitchen": 0.0923,
+    "kitchen_light0": 0.1948,
+    "kitchen_light1": 0.0623,
+    "kitchen_light2": 0.0929
+   }
+  },
+  "livingroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9914,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0615,
+   "hard_edge_fraction_max": 0.0985,
+   "per_frame": {
+    "livingroom": 0.0615,
+    "livingroom_light0": 0.0985,
+    "livingroom_light1": 0.047
+   }
+  },
+  "lobby": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9856,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0617,
+   "hard_edge_fraction_max": 0.0617,
+   "per_frame": {
+    "lobby": 0.0617
+   }
+  },
+  "office": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9741,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.0433,
+   "hard_edge_fraction_max": 0.3211,
+   "per_frame": {
+    "office": 0.0351,
+    "office_light0": 0.0376,
+    "office_light1": 0.3211,
+    "office_light2": 0.0491
+   }
+  },
+  "oldclassroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 1.0,
+   "n_frames": 6,
+   "hard_edge_fraction_median": 0.069,
+   "hard_edge_fraction_max": 0.1222,
+   "per_frame": {
+    "oldclassroom": 0.0121,
+    "oldclassroom_light0": 0.0331,
+    "oldclassroom_light1": 0.1048,
+    "oldclassroom_light2": 0.1082,
+    "oldclassroom_light3": 0.0106,
+    "oldclassroom_light4": 0.1222
+   }
+  },
+  "postit": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 1.0,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.0369,
+   "hard_edge_fraction_max": 0.0567,
+   "per_frame": {
+    "postit": 0.026,
+    "postit_light0": 0.0567,
+    "postit_light1": 0.0157,
+    "postit_light2": 0.0477
+   }
+  },
+  "redhead": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.2591,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.17,
+   "hard_edge_fraction_max": 0.1735,
+   "per_frame": {
+    "redhead": 0.17,
+    "redhead_light0": 0.17,
+    "redhead_light1": 0.1735
+   }
+  },
+  "restroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 1.0,
+   "n_frames": 5,
+   "hard_edge_fraction_median": 0.2298,
+   "hard_edge_fraction_max": 0.4245,
+   "per_frame": {
+    "restroom": 0.1263,
+    "restroom_light0": 0.2298,
+    "restroom_light1": 0.1615,
+    "restroom_light2": 0.4245,
+    "restroom_light5": 0.313
+   }
+  },
+  "revolution": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.3139,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1417,
+   "hard_edge_fraction_max": 0.3171,
+   "per_frame": {
+    "revolution": 0.1417,
+    "revolution_light0": 0.1411,
+    "revolution_light1": 0.3171
+   }
+  },
+  "sanmiguel": {
+   "domain": "indoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 1.0,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.4211,
+   "hard_edge_fraction_max": 0.4211,
+   "per_frame": {
+    "sanmiguel": 0.4211
+   }
+  },
+  "skin": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.6377,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0095,
+   "hard_edge_fraction_max": 0.0095,
+   "per_frame": {
+    "skin": 0.0095
+   }
+  },
+  "skyscraper": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9563,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.3026,
+   "hard_edge_fraction_max": 0.3498,
+   "per_frame": {
+    "skyscraper": 0.2748,
+    "skyscraper_light0": 0.3303,
+    "skyscraper_light1": 0.2275,
+    "skyscraper_light2": 0.3498
+   }
+  },
+  "sponza": {
+   "domain": "indoor",
+   "encoding": "ldr_srgb",
+   "valid_frac": 1.0,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0518,
+   "hard_edge_fraction_max": 0.0518,
+   "per_frame": {
+    "sponza": 0.0518
+   }
+  },
+  "staircase": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9997,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0529,
+   "hard_edge_fraction_max": 0.0529,
+   "per_frame": {
+    "staircase": 0.0529
+   }
+  },
+  "strawberries": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.5049,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1027,
+   "hard_edge_fraction_max": 0.1237,
+   "per_frame": {
+    "strawberries": 0.1027,
+    "strawberries_light0": 0.1237,
+    "strawberries_light1": 0.0886
+   }
+  },
+  "street": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.7781,
+   "n_frames": 5,
+   "hard_edge_fraction_median": 0.5698,
+   "hard_edge_fraction_max": 0.6395,
+   "per_frame": {
+    "street": 0.1779,
+    "street_light0": 0.6046,
+    "street_light1": 0.1069,
+    "street_light2": 0.6395,
+    "street_light3": 0.5698
+   }
+  },
+  "tiger": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.997,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0349,
+   "hard_edge_fraction_max": 0.1106,
+   "per_frame": {
+    "tiger": 0.0349,
+    "tiger_light0": 0.0349,
+    "tiger_light1": 0.1106
+   }
+  },
+  "toad": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.6211,
+   "n_frames": 1,
+   "hard_edge_fraction_median": 0.0311,
+   "hard_edge_fraction_max": 0.0311,
+   "per_frame": {
+    "toad": 0.0311
+   }
+  },
+  "vaulted": {
+   "domain": "outdoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9831,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.0224,
+   "hard_edge_fraction_max": 0.0229,
+   "per_frame": {
+    "vaulted": 0.0224,
+    "vaulted_light0": 0.0229,
+    "vaulted_light1": 0.0221
+   }
+  },
+  "villa": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9395,
+   "n_frames": 5,
+   "hard_edge_fraction_median": 0.299,
+   "hard_edge_fraction_max": 0.3325,
+   "per_frame": {
+    "villa": 0.2356,
+    "villa_light0": 0.2905,
+    "villa_light1": 0.3325,
+    "villa_light2": 0.3283,
+    "villa_light3": 0.299
+   }
+  },
+  "violin": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.8655,
+   "n_frames": 8,
+   "hard_edge_fraction_median": 0.1312,
+   "hard_edge_fraction_max": 0.2324,
+   "per_frame": {
+    "violin": 0.0275,
+    "violin_light0": 0.1402,
+    "violin_light1": 0.1458,
+    "violin_light2": 0.2115,
+    "violin_light3": 0.045,
+    "violin_light4": 0.1222,
+    "violin_light5": 0.0669,
+    "violin_light6": 0.2324
+   }
+  },
+  "whiteroom": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9402,
+   "n_frames": 4,
+   "hard_edge_fraction_median": 0.0532,
+   "hard_edge_fraction_max": 0.0784,
+   "per_frame": {
+    "whiteroom": 0.0442,
+    "whiteroom_light0": 0.0421,
+    "whiteroom_light1": 0.0784,
+    "whiteroom_light2": 0.0622
+   }
+  },
+  "workshop": {
+   "domain": "indoor",
+   "encoding": "radiance_179",
+   "valid_frac": 0.9708,
+   "n_frames": 3,
+   "hard_edge_fraction_median": 0.1536,
+   "hard_edge_fraction_max": 0.2884,
+   "per_frame": {
+    "workshop": 0.1525,
+    "workshop_light0": 0.2884,
+    "workshop_light1": 0.1536
+   }
+  }
+ }
+}

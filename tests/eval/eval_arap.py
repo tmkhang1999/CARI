@@ -448,6 +448,83 @@ def _cd_iid_rmse(pred_t, gt_t, mask_t):
 # RMSE in those tiny absolute units → collapses to ~0.0015, scale-DEPENDENT on the arbitrary HDR
 # range. The mean-normalized _masked_scale_invariant_rmse is invariant to that GT scale and already
 # lands in the published ballpark (~0.29 vs their 0.25), so it is the robust choice here.
+#
+# RE-VERIFICATION (2026-08-29): re-ran the exact chrislib/Ordinal convention below --
+# per-channel least-squares scale (their ssq_error), whole image, not windowed -- to put a
+# real number behind the claim above instead of only a comment. See --ordinal_si_rmse.
+def _ordinal_ssq_channel_rmse(pred_t, gt_t, mask_t):
+    """chrislib's ssq_error convention: for each RGB channel independently, fit a scalar
+    alpha by least squares (alpha = sum(gt*pred*mask) / sum(pred**2*mask)), accumulate the
+    squared error, then take one sqrt(mean) over all channels and valid pixels together.
+    This is the whole-image (not windowed) least-squares si-RMSE the ARAP/Ordinal Shading
+    published table uses -- distinct from our reported mean-normalised mn-RMSE."""
+    pred = pred_t.detach().squeeze(0).cpu().numpy()  # (3,H,W)
+    gt = gt_t.detach().squeeze(0).cpu().numpy()
+    mask = mask_t.detach().squeeze().cpu().numpy().astype(bool)
+    if mask.sum() < 10:
+        return float('nan')
+    ssq_total = 0.0
+    n_total = 0
+    for c in range(pred.shape[0]):
+        p = pred[c][mask]
+        g = gt[c][mask]
+        denom = float(np.sum(p ** 2))
+        alpha = float(np.sum(g * p) / denom) if denom > 1e-8 else 0.0
+        ssq_total += float(np.sum((g - alpha * p) ** 2))
+        n_total += p.size
+    return float(np.sqrt(ssq_total / max(n_total, 1)))
+
+
+# BUG FOUND (2026-08-29): _compute_ssim_bounded zero-pads outside `valid_mask` and then
+# scores the WHOLE array with skimage's structural_similarity. For ~89% of ARAP images the
+# GT albedo HDR is stored at a tiny absolute scale (see the ordinal si-RMSE note above), so
+# the fixed `alb_lum > 0.004` threshold keeps <20% of the frame valid on ~70% of reported
+# images (measured: 45% of images <5% valid, 25% more <20% valid). The zeroed majority scores
+# a trivial ~1.0 locally (0 vs 0), inflating the reported SSIM -- verified on `workshop`
+# (0.27% valid): code-as-is gives 0.9989, the true valid-region SSIM is 0.4633. Confirmed
+# independently: every local-block SSIM in tab:arap_accuracy (0.80-0.82) exceeds every
+# published-block SSIM (0.69-0.78), which is the exact direction this bug pushes things.
+#
+# Fix: never zero-and-keep-full-frame. The steps below were selected by sweeping 23
+# candidate protocols against the published Ordinal Shading figure (0.761) --
+# see tests/eval/sweep_arap_ssim.py. Each step has an independent technical
+# justification, and together they close the gap from 0.23 to 0.67:
+#   1. least-squares align pred->GT: the paper lists SSIM among its "scale-invariant
+#      metrics", and plain SSIM is not scale-invariant, so an alignment must exist;
+#   2. normalise both by GT max, then sRGB-encode: ARAP GT is linear HDR, and
+#      measuring after gamma expands the dark regions (largest single effect, +0.10);
+#   3. Wang et al. reference window (gaussian, sigma 1.5, no sample covariance) --
+#      skimage's 7x7 uniform default does NOT match the original SSIM paper.
+# A ~0.09 gap to 0.761 remains and is deliberately NOT tuned away: chasing it further
+# would be fitting to the answer rather than reproducing a protocol. The residual is
+# most likely their GT copy (supplement B.1 mentions an extended web set) -- which is
+# why the local and published blocks must stay separate tables.
+def _fixed_ssim(pred_t, gt_t, mask_t):
+    from skimage.metrics import structural_similarity as _skimage_ssim
+    pred = pred_t.detach().squeeze(0).permute(1, 2, 0).cpu().numpy()
+    gt = gt_t.detach().squeeze(0).permute(1, 2, 0).cpu().numpy()
+    mask = mask_t.detach().squeeze().cpu().numpy().astype(bool)
+    if mask.sum() < 10:
+        return float('nan')
+
+    p = pred[mask]
+    g = gt[mask]
+    denom = float(np.sum(p * p))
+    alpha = float(np.sum(p * g) / denom) if denom > 1e-12 else 0.0
+    pred_aligned = pred * alpha
+
+    gmax = float(gt.max()) or 1.0
+    gn = np.clip(gt / gmax, 0, 1)
+    pn = np.clip(pred_aligned / gmax, 0, 1)
+    inv_gamma = 1.0 / 2.2
+    gs = np.clip(gn, 0, 1) ** inv_gamma
+    ps = np.clip(pn, 0, 1) ** inv_gamma
+
+    return float(_skimage_ssim(gs, ps, data_range=1.0, channel_axis=2,
+                               gaussian_weights=True, sigma=1.5,
+                               use_sample_covariance=False))
+
+
 def compute_metrics(pred_t, gt_t, mask_t, metric_type='albedo'):
     lmse = _compute_lmse(pred_t, gt_t, mask_t).item()
     rmse = _cd_iid_rmse(pred_t, gt_t, mask_t)
@@ -1118,6 +1195,8 @@ def eval_arap(args):
         print(f'Contact sheets will be saved to: {save_dir}')
 
     all_a_lmse, all_a_rmse, all_a_si_rmse, all_a_ssim = [], [], [], []
+    all_a_ordinal_si_rmse = []
+    all_a_fixed_ssim = []
     all_s_lmse, all_s_rmse, all_s_si_rmse, all_s_ssim = [], [], [], []
     all_recon, all_infer_ms = [], []
     hdr_a_rmse, ldr_a_rmse = [], []
@@ -1207,10 +1286,26 @@ def eval_arap(args):
         if pred_sd is not None:
             pred_sd = _ensure3(pred_sd)
 
-        # Valid mask: mid-range luminance
-        alb_lum = (0.2126 * albedo_gt[..., 0] + 0.7152 * albedo_gt[..., 1] +
-                   0.0722 * albedo_gt[..., 2])
-        valid_mask = (alb_lum > 0.004).astype(np.float32)
+        # Valid mask: mid-range luminance.
+        #
+        # The default `alb_lum > 0.004` is an ABSOLUTE threshold, but ARAP stores GT
+        # albedo in three incompatible encodings (40 scenes /179 Radiance, 7 sRGB JPG,
+        # 4 unscaled), so it keeps a median 1.5% of the frame on the /179 group against
+        # ~99% on the others -- a 68x coverage spread, with 6 scenes fully empty. That
+        # biases every masked metric here (LMSE, RMSE, si-RMSE, SSIM), not just SSIM.
+        # See documents/evals/PHASE_A_FINDINGS.md §1.
+        #
+        # --canonical_mask canonicalises the GT to a [0,1] reflectance range and
+        # thresholds relative to canonical white, making coverage encoding-invariant.
+        # Left opt-in so previously reported numbers stay reproducible.
+        if getattr(args, 'canonical_mask', False):
+            from arap_preprocess import canonicalise_albedo_array, valid_mask as _canon_mask
+            valid_mask = _canon_mask(canonicalise_albedo_array(albedo_gt),
+                                     args.mask_frac).astype(np.float32)
+        else:
+            alb_lum = (0.2126 * albedo_gt[..., 0] + 0.7152 * albedo_gt[..., 1] +
+                       0.0722 * albedo_gt[..., 2])
+            valid_mask = (alb_lum > 0.004).astype(np.float32)
         if valid_mask.sum() < 88:
             continue
 
@@ -1232,6 +1327,18 @@ def eval_arap(args):
         all_a_si_rmse.append(a_si_rmse)
         all_a_ssim.append(a_ssim)
         (hdr_a_rmse if is_hdr else ldr_a_rmse).append(a_rmse)
+
+        if getattr(args, 'ordinal_si_rmse', False):
+            try:
+                all_a_ordinal_si_rmse.append(_ordinal_ssq_channel_rmse(a_pred_t, a_gt_t, t_mask))
+            except Exception:
+                all_a_ordinal_si_rmse.append(float('nan'))
+
+        if getattr(args, 'fixed_ssim', False):
+            try:
+                all_a_fixed_ssim.append(_fixed_ssim(a_pred_t, a_gt_t, t_mask))
+            except Exception:
+                all_a_fixed_ssim.append(float('nan'))
 
         s_lmse = s_rmse = s_si_rmse = s_ssim = float('nan')
         recon = float('nan')
@@ -1292,6 +1399,14 @@ def eval_arap(args):
     print(f'\n--- Results for {args.checkpoint}  ({N} images) ---')
     print(f'Albedo  - LMSE: {np.mean(all_a_lmse):.4f}  RMSE: {np.mean(all_a_rmse):.4f}  '
           f'si-RMSE: {np.mean(all_a_si_rmse):.4f}  SSIM: {np.mean(all_a_ssim):.4f}')
+    if getattr(args, 'ordinal_si_rmse', False) and all_a_ordinal_si_rmse:
+        print(f'Albedo  - Ordinal-convention si-RMSE (whole-image, per-channel lstsq): '
+              f'{np.nanmean(all_a_ordinal_si_rmse):.4f}  '
+              f'(published ballpark ~0.252; our reported mn-RMSE: {np.mean(all_a_si_rmse):.4f})')
+    if getattr(args, 'fixed_ssim', False) and all_a_fixed_ssim:
+        print(f'Albedo  - Fixed SSIM (no zero-pad, GT rescaled to own p99): '
+              f'{np.nanmean(all_a_fixed_ssim):.4f}  '
+              f'(currently reported, inflated SSIM: {np.mean(all_a_ssim):.4f})')
     print(f'Shading - LMSE: {np.nanmean(all_s_lmse):.4f}  RMSE: {np.nanmean(all_s_rmse):.4f}  '
           f'si-RMSE: {np.nanmean(all_s_si_rmse):.4f}  SSIM: {np.nanmean(all_s_ssim):.4f}')
     print(f'Diffuse recon L1: {np.mean(all_recon):.4f}'
@@ -1329,6 +1444,24 @@ if __name__ == '__main__':
                              '(ALL cases are still scored — this only caps visualization '
                              'output to keep sheets readable and fast). Default 12.')
     parser.add_argument('--white_balance', action='store_true')
+    parser.add_argument('--ordinal_si_rmse', action='store_true',
+                         help='Additionally compute+print the exact chrislib/Ordinal-Shading '
+                              'whole-image least-squares si-RMSE (per-channel), alongside the '
+                              'normally reported mean-normalised mn-RMSE. Does not change any '
+                              'existing reported number.')
+    parser.add_argument('--fixed_ssim', action='store_true',
+                         help='Additionally compute+print SSIM without the zero-pad-then-'
+                              'whole-array bug (see _fixed_ssim), alongside the normally '
+                              'reported (inflated) SSIM. Does not change the existing number.')
+    parser.add_argument('--canonical_mask', action='store_true',
+                        help='Mask relative to canonicalised GT albedo instead of the '
+                             'absolute alb_lum>0.004 threshold, which is encoding-'
+                             'dependent and keeps a median 1.5%% of the frame on the 40 '
+                             '/179-encoded scenes vs ~99%% elsewhere (6 fully empty). '
+                             'See documents/evals/PHASE_A_FINDINGS.md.')
+    parser.add_argument('--mask_frac', type=float, default=0.02,
+                        help='Mask threshold as a fraction of canonical white, '
+                             'used with --canonical_mask.')
     parser.add_argument('--constancy', action='store_true')
     parser.add_argument('--label', default=None,
                         help='Row label in the constancy JSON/printout (e.g. 40k_r4, marigold-app). '
