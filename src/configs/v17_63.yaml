@@ -48,6 +48,11 @@ extends: '17'
 train:
   extend_iterations: 40000
   skip_optimizer: false          # see v17_61.yaml -- CLI flag on first launch only
+  # Only 1 iter checkpoint retained (+ checkpoint_latest.pth). Two concurrent rows on
+  # the ~16 GB session scratchpad peak at 11.4 GB with the default 2, and that margin
+  # is what killed both Round-1 rows at step 2000. Evaluation uses the FINAL checkpoint
+  # only, so retaining intermediates buys nothing here.
+  keep_checkpoints: 1
   checkpoint_interval_iters: 1000
   val_interval_iters: 2000
   max_val_batches: 10

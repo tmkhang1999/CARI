@@ -71,6 +71,11 @@ train:
   # the CLI flag with this value, so false here is what makes that split possible.
   skip_optimizer: false
 
+  # Only 1 iter checkpoint retained (+ checkpoint_latest.pth). Two concurrent rows on
+  # the ~16 GB session scratchpad peak at 11.4 GB with the default 2, and that margin
+  # is what killed both Round-1 rows at step 2000. Evaluation uses the FINAL checkpoint
+  # only, so retaining intermediates buys nothing here.
+  keep_checkpoints: 1
   checkpoint_interval_iters: 1000
   val_interval_iters: 2000
   max_val_batches: 10
@@ -97,12 +102,15 @@ loss:
   lambda_explain: 0.0
   lambda_chr_explain: 0.0
 
-# /home/khang is quota-bound (a run needs ~4.3 GB at peak: 2 retained 1.43 GB
-# checkpoints plus the transient .tmp during a save). That is what killed the
-# first v17_51 at step 1999 with "OSError: [Errno 122] Disk quota exceeded" --
-# df showed 298 GB free, which is filesystem space and says nothing about the
-# quota. /tmp is a different filesystem with no quota. The final checkpoint is
-# copied back into checkpoints/ deliberately after the run.
+# STORAGE. Measured headroom, versus what df claims:
+#     /home/khang   df says 298 G   real ~3 G   (per-user quota)
+#     /tmp          df says 321 G   real ~16 G  (session cap)
+# df is blind to both, and trusting it is what killed v17_51 at step 1999 with
+# Errno 122 and BOTH Round-1 rows at step 2000 with exit 120 and no traceback.
+# Runs write to /tmp because home cannot hold even one row's working set; the
+# study's 18 finals (~26 GB) fit nowhere, so the workflow is evaluate-then-discard
+# (keep the metrics JSON, free the weights). scripts/train_resilient.sh probes the
+# filesystem for real before launching, and archives only when ARCHIVE=1.
 paths:
   checkpoint_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_ckpt'
   log_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_logs'

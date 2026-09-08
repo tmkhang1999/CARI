@@ -1900,14 +1900,23 @@ def main():
             save_checkpoint(model, optimizer, avg, config, ckpt_path, global_step=step)
             save_checkpoint(model, optimizer, avg, config, os.path.join(ckpt_dir, 'checkpoint_latest.pth'), global_step=step)
 
-            # Keep maximum 2 checkpoints (exclude checkpoint_latest.pth)
+            # Keep at most `keep_checkpoints` iter checkpoints (checkpoint_latest.pth is
+            # separate and always kept). Default 2 preserves the previous hardcoded
+            # behaviour exactly.
+            #
+            # Worth lowering to 1 when several rows share a capped filesystem. Each file
+            # is ~1.43 GB, and a save transiently needs a .tmp alongside, so two
+            # concurrent rows peak at 2x(keep + latest + tmp) x 1.43 GB: 11.4 GB at
+            # keep=2 versus 8.6 GB at keep=1. The session scratchpad here caps near
+            # 16 GB, and that margin is what killed both Round-1 rows at step 2000.
+            keep_ckpts = max(1, int(config['train'].get('keep_checkpoints', 2)))
             all_ckpts = [
                 os.path.join(ckpt_dir, f)
                 for f in os.listdir(ckpt_dir)
                 if f.startswith('checkpoint_iter_') and f.endswith('.pth')
             ]
             all_ckpts.sort(key=_extract_iter_from_name)
-            while len(all_ckpts) > 2:
+            while len(all_ckpts) > keep_ckpts:
                 oldest_ckpt = all_ckpts.pop(0)
                 try:
                     os.remove(oldest_ckpt)
