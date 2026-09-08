@@ -30,8 +30,26 @@
 # last_epoch=completed_opt_steps-1 (train_v17.py:1749-1755); a restart restores the saved
 # initial_lr. Both give the same LR at the same step. Only Adam's moments differ.
 #
+# HOW TO STOP A RUN  -- READ THIS BEFORE KILLING ANYTHING
+# ------------------------------------------------------
+# This script RESTARTS training whenever the python process exits non-zero. So
+# `pkill -f train_v17.py` does not stop a run -- it triggers a restart 60s later.
+# That already caused one incident: two wrappers thought to be dead relaunched
+# themselves onto both GPUs alongside a new pair of runs, putting two ~11 GiB
+# processes on one 23.6 GiB card and OOM-ing all four.
+#
+# Kill the WRAPPER first, then the python:
+#     pkill -f train_resilient.sh && sleep 3 && pkill -f train_v17.py
+# Or drop a stop file, which makes the wrapper exit cleanly after the current
+# attempt instead of retrying:
+#     touch /tmp/cari_runs/STOP_v17_62_s42
+# Always confirm BOTH are gone before launching anything new:
+#     ps aux | grep -c '[t]rain_resilient'   # must be 0
+#     ps aux | grep -c '[t]rain_v17.py'      # must be 0
+#
 # USAGE
 #   INITIAL_RESUME=<fork ckpt> VERSION=17.61 CUDA=0 bash scripts/train_resilient.sh
+#   SEED=42 INITIAL_RESUME=<fork ckpt> VERSION=17.62 CUDA=0 bash scripts/train_resilient.sh
 #
 # ENV
 #   VERSION          required, e.g. 17.61 (dots are converted to underscores)
@@ -47,7 +65,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${VERSION:?set VERSION, e.g. VERSION=17.61}"
-TAG="${VERSION//./_}"
+CFG_TAG="${VERSION//./_}"
+# SEED selects a replicate. The config is shared across replicates -- only --seed
+# differs -- so the RUN tag carries the seed and each replicate gets its own
+# checkpoint/log directory. Without this, two seeds of one config would write to the
+# same v17_NN/ directory and --auto-resume would silently continue the WRONG run.
+SEED="${SEED:-}"
+if [ -n "$SEED" ]; then TAG="${CFG_TAG}_s${SEED}"; else TAG="$CFG_TAG"; fi
 CUDA="${CUDA:-0}"
 MAX_RETRIES="${MAX_RETRIES:-20}"
 SLEEP_SEC="${SLEEP_SEC:-60}"
@@ -58,10 +82,10 @@ INITIAL_RESUME="${INITIAL_RESUME:-}"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/train_v${TAG}.log"
 PY="${PY:-/home/khang/miniconda3/envs/IR/bin/python}"
-CFG="$ROOT/src/configs/v${TAG}.yaml"
+CFG="$ROOT/src/configs/v${CFG_TAG}.yaml"
 [ -f "$CFG" ] || { echo "ERROR: config not found: $CFG"; exit 2; }
 
-echo "===== v$TAG | GPU $CUDA | log $LOG ====="
+echo "===== v$TAG | cfg v$CFG_TAG | seed ${SEED:-<unseeded>} | GPU $CUDA | log $LOG ====="
 
 attempt=0
 while :; do
@@ -71,10 +95,12 @@ while :; do
     [ -f "$INITIAL_RESUME" ] || { echo "ERROR: fork checkpoint missing: $INITIAL_RESUME"; exit 2; }
     ARGS=(--version "$TAG" --config "$CFG" --device cuda --resume "$INITIAL_RESUME")
     [ "$SKIP_INITIAL" = "1" ] && ARGS+=(--skip-optimizer)
+    [ -n "$SEED" ] && ARGS+=(--seed "$SEED")
     echo "--- launch 0 (fresh Adam=$SKIP_INITIAL) from $INITIAL_RESUME  $(date +%H:%M) ---"
   else
     # RESTART: continue this row, keeping its own optimizer state.
     ARGS=(--version "$TAG" --config "$CFG" --device cuda --auto-resume)
+    [ -n "$SEED" ] && ARGS+=(--seed "$SEED")
     echo "--- restart $attempt (own optimizer state)  $(date +%H:%M) ---"
   fi
 
@@ -92,6 +118,22 @@ while :; do
     echo "===== v$TAG COMPLETE $(date +%H:%M) ====="
     break
   fi
+
+  # Deliberate stop: exit instead of restarting. Without this the only way to stop
+  # a run is to kill the wrapper, and killing the python alone RESTARTS it.
+  if [ -f "$LOG_DIR/STOP_v$TAG" ]; then
+    echo "===== v$TAG STOPPED by $LOG_DIR/STOP_v$TAG (rc=$rc) ====="
+    exit 0
+  fi
+
+  # Do not retry into an OOM: a second process on the same GPU is the usual cause,
+  # and retrying 20 times just fights whatever else is resident. Surface it instead.
+  if tr '\r' '\n' <"$LOG" | tail -50 | grep -q "OutOfMemoryError"; then
+    echo "!!! CUDA OOM in $LOG -- not retrying."
+    echo "!!! Check for another process on GPU $CUDA:  nvidia-smi --query-compute-apps=pid,used_memory --format=csv"
+    exit 4
+  fi
+
   attempt=$((attempt+1))
   if [ "$attempt" -gt "$MAX_RETRIES" ]; then
     echo "===== v$TAG GAVE UP after $MAX_RETRIES retries (last rc=$rc) ====="

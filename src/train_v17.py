@@ -6,6 +6,7 @@ import argparse
 import math
 import inspect
 import os
+import random
 import re
 import sys
 import time
@@ -195,6 +196,9 @@ def parse_args():
     parser.add_argument('--auto-resume', action='store_true', help='Resume from latest checkpoint in version checkpoint dir')
     parser.add_argument('--reset-lr', action='store_true', help='Override checkpoint LR with value from config')
     parser.add_argument('--skip-optimizer', action='store_true', help='Resume from checkpoint but skip loading optimizer state')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Override train.seed. Replicates of one config differ only '
+                             'in this, so N seeds need no new config files.')
     parser.add_argument('--start-step', type=int, default=None,
                         help='Override the resume start step (micro-batch units). Use when changing '
                              'batch_size mid-run: the checkpoint global_step is in the OLD bs units, so '
@@ -274,6 +278,9 @@ def save_checkpoint(model, optimizer, losses, config, filename, global_step):
         'optimizer_state_dict': optimizer.state_dict(),
         'losses': losses,
         'config': config,
+        # Promoted out of config so a result can be traced to its replicate without
+        # loading and walking the whole config dict. None means the run was unseeded.
+        'seed': config.get('train', {}).get('seed'),
     }
     tmp_filename = f"{filename}.tmp.{os.getpid()}"
     try:
@@ -1596,7 +1603,42 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    torch.backends.cudnn.benchmark = True
+    # ── Seeding ────────────────────────────────────────────────────────────────────
+    # `train.seed` and `train.deterministic` existed in the configs but were NEVER READ:
+    # there was no manual_seed anywhere in this file and cudnn.benchmark was set to True
+    # unconditionally. So no v17 run was ever reproducible, and every run drew a
+    # different data order from OS entropy while the config claimed seed 42.
+    #
+    # Two consequences worth stating, because the ablation depends on both:
+    #   - Re-running one config twice yields an INDEPENDENT replicate, which is what
+    #     measures the seed noise floor. That was true before this change too.
+    #   - A result could not be traced to the run that produced it. It can now: the
+    #     seed is resolved here, echoed, and written into every checkpoint.
+    #
+    # --seed overrides the config so N replicates need no new config files.
+    seed = args.seed if getattr(args, 'seed', None) is not None else config['train'].get('seed', None)
+    if seed is not None:
+        seed = int(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    config['train']['seed'] = seed
+
+    # HONEST DETERMINISM. Seeding fixes data order, augmentation and init. It does NOT
+    # give bitwise reproducibility while cuDNN autotunes kernels and reductions use
+    # atomics, so `deterministic: true` is honoured explicitly rather than assumed:
+    # it costs throughput, which is why it is not the default for the ablation rows
+    # (they need identical throughput across rows, not bitwise replay).
+    deterministic = bool(config['train'].get('deterministic', False))
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    else:
+        torch.backends.cudnn.benchmark = True
+    print(f"Seed: {seed if seed is not None else 'UNSEEDED (nondeterministic run)'} | "
+          f"deterministic kernels: {deterministic}")
 
     # Use command-line version for paths if provided, else fall back to config's model version
     path_version = args.version if args.version is not None else config['model']['version']
@@ -1650,6 +1692,9 @@ def main():
             input_size=int(config['train']['input_size']),
             cache_max_items=cache_max_items,
             mix_weights=config['train'].get(weights_key, {'hypersim': 1.0, 'midintrinsic': 0.0}),
+            # Seeds the sampler AND each worker's numpy stream. None = old unseeded
+            # behaviour, so a run that does not set a seed is unchanged by this.
+            seed=seed,
             strict_split=strict_split,
             load_geometry=False,
             load_normals=False,

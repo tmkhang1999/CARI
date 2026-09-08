@@ -67,9 +67,10 @@ train:
   # The 19k ckpt already has absolute albedo color/scale (the "supervised warmup" the
   # cross-render losses require so L_inv does not collapse to gray). So we do NOT retrain
   # from scratch — resume and turn CARI on. Phase boundaries are set so that:
-  #  Phase 1 [0     .. 15000) — Hypersim only (DONE in the 19k ckpt).
-  #  Phase 2 [15000 .. 25000) — +InteriorVerse, synthetic only.
-  #  Phase 3 [25000 .. 40000) — CARI: add MID RAW PAIRS (cross-render L_inv/L_explain),
+  #  Phase 1 [0     .. 15000) — Hypersim only.
+  #  Phase 2 [15000 .. 19000) — +InteriorVerse, synthetic only. Ends AT the 19k fork,
+  #           so the fork contains phases 1-2 and no cross-render pairs have been seen.
+  #  Phase 3 [19000 .. 40000) — CARI: add MID RAW PAIRS (cross-render L_inv/L_explain),
   #           KEEP synthetic (Hypersim+IV) running to anchor absolute color / prevent
   #           prior drift (expert consensus). Shading sign-prior is on for all phases.
   # Resume-safe: train_v17 selects the correct phase from the checkpoint step.
@@ -104,7 +105,21 @@ train:
   max_val_batches: 10
   compute_val_losses: true
   seed: 42
-  deterministic: true
+  # WAS `true`, but the key was NEVER READ until 2026-09-08 -- train_v17.py had no
+  # manual_seed and set cudnn.benchmark = True unconditionally. So no v17 run has ever
+  # been deterministic, and every published v17 number was produced with benchmark
+  # kernels. Now that the key is honoured, `true` would CHANGE behaviour for every run
+  # that inherits this file; `false` preserves what actually happened.
+  #
+  # It is also the right setting on the merits. torch.use_deterministic_algorithms is
+  # applied with warn_only=True (several ops here have no deterministic kernel), so
+  # `true` would NOT buy bitwise reproducibility -- it would only cost throughput by
+  # disabling cuDNN autotuning. What replicates actually need is a fixed data order,
+  # augmentation stream and init, and `seed` now provides exactly that.
+  #
+  # So: seeded runs reproduce their DATA and INITIALISATION exactly (verified on the
+  # real Hypersim loader); they are not guaranteed bitwise-identical in the kernels.
+  deterministic: false
 
 data:
   hypersim_root: '../datasets/hypersim'

@@ -56,6 +56,7 @@ def get_mixed_loader(
     input_size: int = 384,
     cache_max_items: int = 512,
     mix_weights: dict[str, float] = None,
+    seed: int | None = None,
     **kwargs
 ) -> DataLoader:
     """
@@ -143,7 +144,33 @@ def get_mixed_loader(
         )
 
     mixed_dataset = MixedDataset(datasets, mix_weights)
-    
+
+    # SEEDING. __getitem__ is stochastic (crop, augmentation, MID pair draw) and uses
+    # numpy's GLOBAL RNG inside each worker process. Without a worker_init_fn, numpy in
+    # a worker is seeded from OS entropy at fork, so the sampling stream was not
+    # reproducible even when torch was seeded -- and torch was never seeded either, so
+    # `seed: 42` / `deterministic: true` in the configs were dead settings describing a
+    # guarantee that did not exist.
+    #
+    # Passing seed=None preserves the old behaviour exactly (unseeded, every run
+    # different), so this change cannot silently alter any run that does not ask for a
+    # seed. With a seed, each worker gets a DISTINCT but DERIVED stream (seed + worker
+    # id), which is what makes replicates both independent within a run and
+    # reproducible across runs.
+    generator = None
+    worker_init_fn = None
+    if seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(int(seed))
+
+        def worker_init_fn(worker_id, _seed=int(seed)):
+            import numpy as _np
+            import random as _random
+            s = (_seed + worker_id) % (2 ** 31 - 1)
+            _np.random.seed(s)
+            _random.seed(s)
+            torch.manual_seed(s)
+
     return DataLoader(
         mixed_dataset,
         batch_size=batch_size,
@@ -153,4 +180,6 @@ def get_mixed_loader(
         drop_last=True,
         persistent_workers=(num_workers > 0),
         prefetch_factor=2 if num_workers > 0 else None,
+        generator=generator,
+        worker_init_fn=worker_init_fn,
     )
