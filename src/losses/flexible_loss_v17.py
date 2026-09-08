@@ -205,6 +205,14 @@ class V17Loss(nn.Module):
         #   ratio S_a/S_b (log domain). Forces the lighting change INTO shading → fixes
         #   texture-in-shading where SSI is absent (InteriorVerse/MID). 0 disables.
         self.lambda_explain = float(config.get('lambda_explain', 0.0))
+        # L_chr_explain: the CHROMA half of the same constraint. lambda_explain above scores
+        #   only luminance (cari_explain calls lum()), so a colour change between frames is
+        #   STRUCTURALLY invisible to it — measured: the model explains just 47.9% of the
+        #   chroma change via shading, and the unpenalised chroma residual (0.0741) is the
+        #   same size as the penalised luminance one (0.0757). Hence the default weight 0.25,
+        #   matching lambda_explain so the two halves enter at equal scale. SPLIT from
+        #   lambda_explain rather than merged so the ablation can attribute the effect. 0 off.
+        self.lambda_chr_explain = float(config.get('lambda_chr_explain', 0.0))
         # Shading sign/inequality prior (SAIL ℒ_reg): in the π-domain S_d=(1−π)/π≥0 always;
         #   the meaningful constraint is that ALBEDO carries the brightening — penalise
         #   shading that EXCEEDS the image (S_d such that A·S_d > I beyond residual), i.e.
@@ -479,6 +487,59 @@ class V17Loss(nn.Module):
         ri = torch.log(lum(rgb1) + eps) - torch.log(lum(rgb2) + eps)
         rs = torch.log(lum(s1) + eps) - torch.log(lum(s2) + eps)
         return self._masked_l1(ri, rs, mask)
+
+    def cari_chr_explain(self, rgb1, rgb2, s1, s2, mask, eps=1e-3):
+        """L_chr_explain: the CHROMA half of L_explain — the inter-frame COLOUR change must
+        be explained by the shading colour change.
+
+        WHY THIS EXISTS. cari_explain() above reduces both ratios through lum(), so a purely
+        chromatic difference between the two frames produces ri = rs = 0 and contributes
+        exactly nothing to the gradient. Colour is not merely down-weighted there, it is
+        structurally invisible. Combined with L_inv — which a constant albedo cast satisfies
+        (its null space, midintrinsic_dataset.py:50) — nothing in CARI penalises putting an
+        illuminant colour change into albedo. Measured on the trained model: only 47.9% of
+        the chroma change is explained by shading, and the unpenalised chroma residual
+        (0.0741) is the same magnitude as the penalised luminance one (0.0757).
+
+        FORM. Work in the log domain like cari_explain, then split each 3-channel residual
+        into its achromatic and chromatic parts using the per-pixel channel mean:
+            r     = log(I1+eps) − log(I2+eps)            (per channel)
+            m(r)  = mean_c r                              (achromatic: log geometric mean)
+            c(r)  = r − m(r)                              (chroma: sums to zero over channels)
+            L     = ‖ c(r_I) − c(r_S) ‖₁
+        The decomposition r = m·(1,1,1) + c is orthogonal, so ‖r‖² = 3m² + ‖c‖², and this
+        term scores precisely the component cari_explain discards.
+
+        WHY SPLIT RATHER THAN JUST SCORING THE 3 CHANNELS DIRECTLY. A plain per-channel L1 on
+        r_I vs r_S would fold the achromatic part back in and count it THREE times (once per
+        channel) against the chroma part's single contribution — the merged term is dominated
+        by the luminance signal it duplicates from cari_explain. Removing the channel mean
+        first makes the two terms disjoint, so lambda_explain and lambda_chr_explain control
+        genuinely separate quantities and the ablation can attribute an effect to either.
+
+        NOTE ON EXACT ORTHOGONALITY. cari_explain's achromatic statistic is the Rec.601
+        WEIGHTED luminance, not the unweighted channel mean used here, so the two terms are
+        not orthogonal to machine precision. This is deliberate: cari_explain is left
+        byte-identical so rows carrying the old loss stay comparable with the existing
+        results. The overlap is small and, importantly, one-sided — this term still carries
+        the chromatic information the other cannot express at all.
+
+        s1, s2 are linear shading (shading_linear); mask is the same per-pair CARI mask.
+        """
+        # A 1-channel shading head (the planned grayscale ablation) has NO chroma to explain:
+        # its chroma residual is identically 0 and would broadcast against the 3-channel image
+        # residual, turning this term into a plain penalty on the image's own colour change —
+        # a different loss wearing this one's name. Fail loudly instead.
+        if s1.shape[1] != 3:
+            raise ValueError(
+                f'cari_chr_explain needs 3-channel shading, got {s1.shape[1]}. A grayscale '
+                'shading head cannot explain a colour change; set lambda_chr_explain: 0.0 '
+                'for that ablation row.')
+
+        def chroma_resid(x1, x2):
+            r = torch.log(x1.clamp_min(0.0) + eps) - torch.log(x2.clamp_min(0.0) + eps)
+            return r - r.mean(dim=1, keepdim=True)
+        return self._masked_l1(chroma_resid(rgb1, rgb2), chroma_resid(s1, s2), mask)
 
     # ── Shadow-invariance self-supervision (V20 — the shadow/lighting removal) ─────
     def shadow_invariance(self, a_clean, a_shadow, mask):

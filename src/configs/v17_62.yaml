@@ -1,0 +1,59 @@
+# ============================================================================
+# STUDY 1, ROW 2 of 4 -- the PUBLISHED CARI loss, reproduced on the rebuilt base.
+# ============================================================================
+#
+# See v17_61.yaml for the full study design, the measurement that motivates it,
+# and everything held fixed across the four rows. This file documents only the
+# loss weights and why this row exists.
+#
+# WEIGHTS: L_inv 0.5, L_explain(lum) 0.25, L_chr_explain 0.0
+#   -- exactly v17.yaml's defaults (lines 177, 180), i.e. the CARI loss as it
+#      appears in the thesis.
+#
+# WHY THIS ROW IS NECESSARY. Rows 3 and 4 are only interpretable against the
+# published loss measured on the SAME base, the same data mix, and the same
+# optimizer path. The original Table-A numbers cannot serve that purpose: their
+# 19k fork checkpoint no longer exists (pruned by train_v17.py:1842, and
+# checkpoints/ is gitignored), and the rows differed in effective LR because of
+# the silent fresh-Adam fallback. So (2 - 1) here re-establishes the published
+# CARI effect on ground that rows 3 and 4 can actually be compared against.
+#
+# The chroma residual is measured but NOT optimised in this row: lambda_chr_explain
+# is 0, so the trainer computes it under no_grad and logs CARI_chr_residual_diag.
+# That curve against row 3's CARI_L_chr_explain is the direct before/after.
+#
+# LAUNCH:
+#   INITIAL_RESUME=checkpoints/v17_60/checkpoint_iter_19000.pth \
+#   VERSION=17.62 CUDA=1 bash scripts/train_resilient.sh
+# ============================================================================
+
+extends: '17'
+
+train:
+  extend_iterations: 40000
+  skip_optimizer: false          # see v17_61.yaml -- CLI flag on first launch only
+  checkpoint_interval_iters: 1000
+  val_interval_iters: 2000
+  max_val_batches: 10
+  num_workers: 8
+
+  sampling_weights_phase3:
+    hypersim: 0.3
+    midintrinsic: 0.3
+    interiorverse: 0.15
+    front3d: 0.25
+
+data:
+  front3d_root: '../datasets/front3d_iid'
+
+loss:
+  # ROW 2 = published CARI. Stated explicitly rather than inherited from v17.yaml,
+  # so the row's identity is readable in one place and cannot drift if the base
+  # config's defaults are ever changed.
+  lambda_alb_invariance: 0.5
+  lambda_explain: 0.25
+  lambda_chr_explain: 0.0
+
+paths:
+  checkpoint_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_ckpt'
+  log_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_logs'

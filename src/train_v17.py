@@ -62,6 +62,13 @@ TB_TAGS = {
     # signal that MID/front3d pairing is not flowing (see 2026-07-07 wiring bug).
     'loss_alb_invariance': '1. Losses/CARI_L_inv',
     'loss_explain': '1. Losses/CARI_L_explain',
+    # The chroma half of L_explain, and its OFF-row diagnostic twin. Both map to curves that
+    # can be overlaid across the ablation: 'loss_chr_explain' is weighted and in loss_total,
+    # 'diag_chr_explain' is the raw unweighted residual measured under no_grad in rows where
+    # the term is disabled. Exactly one of the two is present per row, so together they give
+    # one continuous comparison of the same quantity across all four rows.
+    'loss_chr_explain': '1. Losses/CARI_L_chr_explain',
+    'diag_chr_explain': '1. Losses/CARI_chr_residual_diag',
     # IIW ordinal-hinge fine-tune term (v17_26 and analogues): present only when
     # lambda_ordinal_iiw > 0. Was computed and backpropagated but never logged prior to
     # 2026-07-14 — this is the one term whose OWN trajectory needs to be watched during an
@@ -77,7 +84,7 @@ def _log_ordered_scalars(writer, values, global_step, tag_prefix=None):
         'loss_s', 'loss_shading_mse', 'loss_shading_msg',
         'loss_r', 'loss_residual_mse', 'loss_residual_msg',
         'loss_recon', 'loss_recon_l1', 'loss_recon_msg',
-        'loss_alb_invariance', 'loss_explain',
+        'loss_alb_invariance', 'loss_explain', 'loss_chr_explain', 'diag_chr_explain',
         'loss_ordinal_iiw',
     ]
     for key in ordered:
@@ -473,10 +480,12 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
     # ── 2. CARI cross-render (rgb2 = same scene, different REAL light; paired rows only) ──────
     lam_inv = float(getattr(criterion, 'lambda_alb_invariance', 0.0))
     lam_explain = float(getattr(criterion, 'lambda_explain', 0.0))
+    lam_chr_explain = float(getattr(criterion, 'lambda_chr_explain', 0.0))
     lam_cf_pair = float(getattr(criterion, 'lambda_chroma_field_pair', 0.0))
     rgb2 = batch.get('rgb2', None)
     m_invariant = batch.get('m_invariant', None)
-    if (lam_inv > 0 or lam_explain > 0 or lam_cf_pair > 0) and rgb2 is not None and m_invariant is not None:
+    if (lam_inv > 0 or lam_explain > 0 or lam_chr_explain > 0 or lam_cf_pair > 0) \
+            and rgb2 is not None and m_invariant is not None:
         m_invariant = m_invariant.float().to(device, non_blocking=True)
         if m_invariant.sum() > 0:
             rgb2 = rgb2.to(device, non_blocking=True)
@@ -492,6 +501,23 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
                     rgb, rgb2, predictions['shading_linear'], pred2['shading_linear'].float(), cr_mask)
                 losses['loss_explain'] = lam_explain * l_explain
                 losses['loss_total'] = losses['loss_total'] + losses['loss_explain']
+            if lam_chr_explain > 0:
+                l_chr_explain = criterion.cari_chr_explain(
+                    rgb, rgb2, predictions['shading_linear'], pred2['shading_linear'].float(), cr_mask)
+                losses['loss_chr_explain'] = lam_chr_explain * l_chr_explain
+                losses['loss_total'] = losses['loss_total'] + losses['loss_chr_explain']
+            else:
+                # DIAGNOSTIC, NOT A LOSS. Measure the unexplained chroma residual even in rows
+                # where the term is OFF, so the ablation reads as a controlled comparison of
+                # the SAME quantity rather than a curve that only exists in the treatment arms.
+                # This is the measurement that motivated the term: on the shipped model the
+                # unpenalised chroma residual (0.0741) matches the penalised luminance one
+                # (0.0757), i.e. CARI leaves an error of equal size entirely unconstrained.
+                # no_grad so the control rows stay byte-identical to a run without this code.
+                with torch.no_grad():
+                    losses['diag_chr_explain'] = criterion.cari_chr_explain(
+                        rgb, rgb2, predictions['shading_linear'].detach(),
+                        pred2['shading_linear'].float().detach(), cr_mask)
             # Colored-illuminant chroma target on the pair frame (V20 thesis lever): teach the chroma
             # head the REAL cast from rgb2's colored shading chroma(rgb2/A*) — the signal the neutral
             # WB primary frame cannot give. Same albedo A* (same scene) so material cancels.
