@@ -85,6 +85,16 @@ PY="${PY:-/home/khang/miniconda3/envs/IR/bin/python}"
 CFG="$ROOT/src/configs/v${CFG_TAG}.yaml"
 [ -f "$CFG" ] || { echo "ERROR: config not found: $CFG"; exit 2; }
 
+# Where the run writes checkpoints (config paths.checkpoint_dir), read here so the
+# archive step on success knows where to look. Falls back to the repo default.
+CKPT_DIR="$("$PY" - "$CFG" <<'PYEOF' 2>/dev/null || echo ""
+import sys, yaml, os
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get('paths') or {}).get('checkpoint_dir', ''))
+PYEOF
+)"
+[ -n "$CKPT_DIR" ] || CKPT_DIR="$ROOT/checkpoints"
+
 echo "===== v$TAG | cfg v$CFG_TAG | seed ${SEED:-<unseeded>} | GPU $CUDA | log $LOG ====="
 
 attempt=0
@@ -116,6 +126,23 @@ while :; do
 
   if [ $rc -eq 0 ]; then
     echo "===== v$TAG COMPLETE $(date +%H:%M) ====="
+    # Archive the final checkpoint off /tmp. Runs write to /tmp because /home/khang is
+    # quota-bound (a live run needs ~4.3 GB: two retained 1.43 GB checkpoints plus the
+    # transient .tmp during a save) -- that quota killed v17_51 at step 1999. But /tmp is
+    # session scratch and can be cleared, and each row costs ~7 GPU-hours, so the ONE
+    # checkpoint worth keeping is copied back on success. 18 rows x 1.43 GB = ~26 GB,
+    # which home has room for; a live run's 4.3 GB peak is what it does not.
+    CKPT_SRC="$(ls -1t "$CKPT_DIR/v$TAG"/checkpoint_iter_*.pth 2>/dev/null | head -1)"
+    if [ -n "$CKPT_SRC" ]; then
+      mkdir -p "$ROOT/checkpoints/v$TAG"
+      if cp "$CKPT_SRC" "$ROOT/checkpoints/v$TAG/"; then
+        echo "archived $(basename "$CKPT_SRC") -> checkpoints/v$TAG/"
+      else
+        echo "!!! ARCHIVE FAILED for v$TAG (quota?). Checkpoint is ONLY at $CKPT_SRC"
+      fi
+    else
+      echo "!!! no checkpoint found to archive in $CKPT_DIR/v$TAG"
+    fi
     break
   fi
 
