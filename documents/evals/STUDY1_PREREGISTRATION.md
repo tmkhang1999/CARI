@@ -161,5 +161,41 @@ partial result is still interpretable and the noise floor lands first:
 
 ## Revisions
 
-*(none yet — any change after the first metrics are read goes here, dated, with the
-reason, and the original text above stays untouched)*
+### 2026-09-09 — noise floor measured (§5 gate executed)
+
+`v17_62_s42` vs `v17_62_s43`: identical config, seeds 42 and 43, both clean single
+runs of 21k phase-3 steps. Measured on the primary endpoint:
+
+| | s42 | s43 | gap |
+|---|---|---|---|
+| **HIGH/LOW `Cast_rel` ratio** (primary) | **1.42** | **1.44** | **0.014** |
+| mean `Cast_rel` | 0.390 | 0.395 | 0.004 |
+| `C_mat` | 0.189 | 0.171 | 0.018 (10.7%) |
+| `Chroma_fid` | 1.008 | 0.995 | 0.013 |
+
+Paired bootstrap 95% CI on the ratio gap: **[-0.011, +0.047]**.
+
+**The §5 gate fires.** The noise floor (0.014) is LARGER than the effect CARI
+itself produced in Phase A (1.43 → 1.42 = 0.01). Two consequences, and they point
+in opposite directions:
+
+1. **A correction to an existing claim.** The Phase A "CARI moves colour-dependence
+   1.43 → 1.42" delta is *within seed noise* and cannot be reported as an effect.
+   Both were n=1. This is a finding about the existing result, not only about this
+   study. The much larger gap to CD-IID (1.42 vs 1.02 = 0.40) is ~29x the noise
+   floor and is unaffected.
+
+2. **The study is still well-powered for the effect that matters.** Closing the gap
+   to CD-IID is 0.42. Even a partial success — say 0.10 — is 7x the noise floor.
+   What we cannot detect is a *small* effect, and a small effect would not be worth
+   publishing: the paper's claim has to be a meaningful move toward 1.0, not 0.01.
+
+**Consequent decision, fixed now:** the primary endpoint tests for a MEANINGFUL
+effect, and the threshold is stated in advance. With n=3 paired and sd ~0.014, the
+minimum detectable difference at 95% is roughly **0.035**. An observed
+`(63 − 62)` smaller than that is reported as a null regardless of its sign, and
+NOT as a trend. To detect 0.01 would need n~35 per arm, which is neither feasible
+nor worth it.
+
+`C_mat` seed noise is 10.7% relative. Any single-seed `C_mat` comparison in the
+thesis at or below that magnitude is likewise not an effect, and should be checked.
