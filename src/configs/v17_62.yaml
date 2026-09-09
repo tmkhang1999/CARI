@@ -42,14 +42,34 @@ train:
   max_val_batches: 10
   num_workers: 8
 
+  # TABLE-A MIX -- matches v17_41..44 exactly (hypersim 0.4 / mid 0.3 / IV 0.3).
+  # NO front3d, deliberately.
+  #
+  # This was WRONG before: the mix had been copied from v17_34, which is the Table-B
+  # REFINEMENT ladder, not Table A. Two things follow from that mistake, and both
+  # break the study:
+  #
+  #  1. Row 62 exists to reproduce the PUBLISHED CARI loss so rows 63/64 are legible
+  #     against the thesis numbers. Under a different data mix it reproduces nothing.
+  #
+  #  2. front3d is not merely extra data -- it is a CARI PAIR SOURCE
+  #     (front3d_dataset.py: "synthetic replacement for the unavailable OpenRooms
+  #     pairs... the illuminant COLOR axis is explicitly randomized"). It feeds rgb2,
+  #     the same channel L_inv / L_explain / L_chr_explain read. And its colour gaps
+  #     dwarf MID's: v1's p10 is 0.069, ABOVE MID's median of 0.030
+  #     (PHASE_A_FINDINGS.md). Since L_chr_explain only fires on chromatic
+  #     differences, nearly all of its gradient came from SYNTHETIC pairs with
+  #     exaggerated colour changes rather than from real measured illuminants.
+  #     That is a candidate cause of the measured desaturation (Chroma_fid -0.098),
+  #     and it makes "does the chroma loss work on MID" unanswerable from those runs.
+  #
+  # front3d belongs on STUDY 2's data axis, which is where the runs that used it now
+  # sit -- they are relabelled, not discarded.
   sampling_weights_phase3:
-    hypersim: 0.3
+    hypersim: 0.4
     midintrinsic: 0.3
-    interiorverse: 0.15
-    front3d: 0.25
+    interiorverse: 0.3
 
-data:
-  front3d_root: '../datasets/front3d_iid'
 
 loss:
   # ROW 2 = published CARI. Stated explicitly rather than inherited from v17.yaml,

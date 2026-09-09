@@ -199,3 +199,36 @@ nor worth it.
 
 `C_mat` seed noise is 10.7% relative. Any single-seed `C_mat` comparison in the
 thesis at or below that magnitude is likewise not an effect, and should be checked.
+
+### 2026-09-09 — CORRECTION: front3d removed from the Study 1 mix; earlier runs relabelled
+
+The mix in §2 was wrong. It read hypersim 0.3 / mid 0.3 / IV 0.15 / **front3d 0.25**,
+copied from `v17_34` — the Table-B REFINEMENT ladder. The old Table A rows
+(`v17_41..44`) use hypersim 0.4 / mid 0.3 / IV 0.3 and **no front3d**. Corrected to
+match Table A.
+
+**Why it matters, beyond tidiness.** front3d is not extra data, it is a CARI PAIR
+SOURCE: `front3d_dataset.py` supplies `extra_rgb`/`extra_valid`, i.e. the `rgb2`
+channel that `L_inv`, `L_explain` and `L_chr_explain` all read, and its docstring
+states the illuminant COLOUR axis is explicitly randomised. Its colour gaps dwarf
+MID's — v1's p10 is 0.069, above MID's median of 0.030 (`PHASE_A_FINDINGS.md`).
+Because `L_chr_explain` fires only on chromatic differences, nearly all of its
+gradient came from synthetic pairs with exaggerated colour changes rather than from
+real measured illuminants.
+
+**Effect on the reported result.** The contrasts were not confounded — front3d was
+constant across rows — so `(63 − 62)` remains a valid loss comparison. But it
+answers a different question than the one asked. What those runs show is *"the
+chroma loss, trained mostly on synthetic coloured pairs, desaturates on real data"*,
+not *"the chroma loss does not work on MID"*. The synthetic-pair diet is now itself
+a leading candidate explanation for the desaturation.
+
+**Disposition.** The completed runs are relabelled `study1_f3d_*` and become the
+MID+front3d cells of Study 2's data axis — relabelled, not discarded. Study 1
+restarts on the Table A mix. The findings that carry over unchanged:
+
+- seed noise floor 0.014 on the ratio (a property of the training setup; measured
+  under the front3d mix, so treat as an order-of-magnitude prior until re-measured)
+- the evaluator is deterministic to 0.0e+00 per scene
+- `L_chr_explain` trains down 77%, target residual 73% below control — the mechanism
+  is wired correctly and that is independent of the data mix
