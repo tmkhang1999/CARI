@@ -309,6 +309,12 @@ def main():
                     default=f'{ROOT}/tests/testing_data/MAW/images_png/scene_0/_DSC4366.png',
                     help='photograph for the decomposition and editing figures')
     ap.add_argument('--out', default=f'{ROOT}/tests/visualizations/ch6')
+    ap.add_argument('--application-ckpt', default=APPLICATION_CKPT,
+                    help='checkpoint used for the qualitative factor-space edits')
+    ap.add_argument('--application-cap', type=int, default=1792,
+                    help='long-side inference cap for the editing figure')
+    ap.add_argument('--skip-thesis-copy', action='store_true',
+                    help='leave documents/thesis/images/ch6 unchanged')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     dst = f'{ROOT}/documents/thesis/images/ch6'
@@ -332,19 +338,44 @@ def main():
     ia, ib = idxs[0], idxs[len(idxs) // 2]
     print(f'figures on scene={scene}  pair=({ia},{ib})')
 
-    application_model = load_v17(APPLICATION_CKPT, 'cuda')
-    fig_edits(application_model, args.real, args.out, cap=1792)
+    application_model = load_v17(args.application_ckpt, 'cuda')
+    fig_edits(application_model, args.real, args.out, cap=args.application_cap)
     if args.score_transfer:
         benchmark_model = load_v17(BENCHMARK_CKPT, 'cuda')
         fig_relight(benchmark_model, scene, ia, ib, args.out)
         del benchmark_model
         torch.cuda.empty_cache()
-    for f in ('ch6_edits.jpg',):
-        Image.open(os.path.join(args.out, f)).save(os.path.join(dst, f), quality=94)
-    if args.score_transfer:
-        Image.open(os.path.join(args.out, 'relight_transfer.jpg')).save(
-            os.path.join(dst, 'relight_transfer.jpg'), quality=94)
-    print('copied into', dst)
+    with open(os.path.join(args.out, 'ch6_edits.jpg.json'), 'w') as f:
+        json.dump({
+            'asset': os.path.join(args.out, 'ch6_edits.jpg'),
+            'source_image': args.real,
+            'checkpoint': args.application_ckpt,
+            'inference_long_side_cap': args.application_cap,
+            'display_normalization': (
+                'Input/edit panels use the existing linear-to-sRGB display conversion; '
+                'no white balance, hue, or saturation correction.'
+            ),
+            'crop_coordinates': {
+                'focus_crop_normalized': [0.17, 0.05, 0.88, 0.80],
+                'presentation_panels': {
+                    'input': '640x450+0+691',
+                    'factor_space_gamma_0.5': '640x450+1290+691',
+                    'naive_image_lift': '640x450+1935+691',
+                },
+            },
+            'scientific_transformations': [
+                'Model inference at the recorded long-side cap',
+                'Shading lift defined in build_ch6_figures.py',
+                'No aesthetic colour correction',
+            ],
+        }, f, indent=2)
+    if not args.skip_thesis_copy:
+        for name in ('ch6_edits.jpg',):
+            Image.open(os.path.join(args.out, name)).save(os.path.join(dst, name), quality=94)
+        if args.score_transfer:
+            Image.open(os.path.join(args.out, 'relight_transfer.jpg')).save(
+                os.path.join(dst, 'relight_transfer.jpg'), quality=94)
+        print('copied into', dst)
 
 
 if __name__ == '__main__':

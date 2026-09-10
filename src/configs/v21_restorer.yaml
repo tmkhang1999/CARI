@@ -1,0 +1,44 @@
+base:
+  config: src/configs/v21.yaml
+  checkpoint: checkpoints/v21/checkpoint_latest.pth
+
+model:
+  flow_width: 48
+  adapter_width: 32
+  adapter_max_delta: 0.10
+  minimum_prior_gate: 0.25
+  inference_steps: 4
+
+train:
+  batch_size: 1
+  input_size: 512
+  num_workers: 4
+  grad_accum_steps: 8
+  grad_clip_max_norm: 1.0
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  max_iterations: 20000
+  log_interval: 50
+  checkpoint_interval_iters: 1000
+  seed: 42
+  amp: true
+  # Keep exact clean-albedo sources dominant. MID is intentionally excluded:
+  # its pseudo target is useful for the base CARI stage, not generative detail.
+  sampling_weights:
+    hypersim: 0.45
+    interiorverse: 0.15
+    midintrinsic: 0.00
+    front3d_v2: 0.40
+
+loss:
+  lambda_flow: 1.0
+  lambda_rgb: 1.0
+  lambda_log: 0.25
+  lambda_grad: 0.5
+  lambda_identity: 0.10
+  lambda_physics: 0.20
+  lambda_invariance: 0.50
+
+output:
+  checkpoint_dir: checkpoints/v21_restorer
+  log_dir: logs/v21_restorer

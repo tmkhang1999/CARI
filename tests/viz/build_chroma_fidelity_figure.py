@@ -31,7 +31,7 @@ MID = '/home/khang/datasets/MIDIntrinsics/test'
 
 # label, path, version, Chroma_err, ratio of aggregate predicted/pseudo-GT spread
 MODELS = [
-    ('Ours (full model)',  f'{ROOT}/checkpoints/v17_34/checkpoint_iter_60000.pth', '17', 0.121, 0.941),
+    ('Ours (full model)',  f'{ROOT}/checkpoints/v17_29/checkpoint_iter_60000.pth', '17', 0.121, 0.941),
     ('Ours, colour path OFF',   f'{ROOT}/checkpoints/v17_42/checkpoint_iter_40000.pth', '17', 0.201, 0.484),
     ('CRefNet',                 f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet', 0.201, 0.484),
     ('Marigold-App',            f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1',
@@ -67,7 +67,7 @@ def _panel(arr, w, h):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--scenes', nargs=2,
-                    default=['everett_dining1', 'everett_kitchen18'])
+                    default=['everett_dining1', 'everett_kitchen5'])
     ap.add_argument('--lights', type=int, nargs=2, default=[0, 18],
                     help='One illuminant index for each scene.')
     ap.add_argument('--panel-w', type=int, default=430)
@@ -146,12 +146,9 @@ def main():
     out = os.path.join(args.out, 'chroma_fidelity.jpg')
     canvas.save(out, quality=94)
     print(f'wrote {out}  ({canvas.size[0]}x{canvas.size[1]})')
-
-    # copy into the thesis image tree
-    dst = f'{ROOT}/documents/thesis/images/chroma_fidelity'
-    os.makedirs(dst, exist_ok=True)
-    canvas.save(os.path.join(dst, 'chroma_fidelity.jpg'), quality=94)
-    print(f'wrote {dst}/chroma_fidelity.jpg')
+    # Note: no longer copies into documents/thesis/images/ -- that tree is the
+    # submitted thesis's own asset set and should not be overwritten by
+    # presentation-side regenerations.
 
     with open(os.path.join(args.out, 'manifest.txt'), 'w') as f:
         f.write(f'cases: {cases}\ninfer: {args.infer}\n')

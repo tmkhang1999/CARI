@@ -1,0 +1,68 @@
+model:
+  version: 21
+  dino_variant: large
+  dino_pretrained: true
+  dpt_feat_ch: 512
+  dpt_fusion_ch: 256
+  dpt_out_ch: 256
+  detail_ch: 64
+  head_mid: 128
+  log_shading_limit: 6.0
+  log_chroma_limit: 2.5
+  canonical_max: 4.0
+  observable_low: 0.01
+  observable_high: 0.985
+
+train:
+  # Three heads plus a paired forward fit conservatively on one 24 GB GPU.
+  batch_size: 1
+  input_size: 512
+  num_workers: 4
+  grad_accum_steps: 16
+  grad_clip_max_norm: 1.0
+  lr: 2.0e-5
+  weight_decay: 1.0e-4
+  max_iterations: 40000
+  log_interval: 50
+  val_interval_iters: 1000
+  checkpoint_interval_iters: 1000
+  max_val_batches: 8
+  seed: 42
+  amp: true
+  # This initializes only shape-compatible DINO/DPT/albedo weights. New
+  # luminance/chroma heads always start clean, and the V21 step remains zero.
+  init_checkpoint: checkpoints/v17_29/checkpoint_iter_60000.pth
+  albedo_freeze_steps: 0
+  sampling_weights:
+    hypersim: 0.30
+    interiorverse: 0.15
+    midintrinsic: 0.25
+    front3d_v2: 0.30
+
+data:
+  hypersim_root: ../datasets/hypersim
+  hypersim_split_file: hypersim_split.json
+  hypersim_strict_split: false
+  interiorverse_root: ../datasets/IndoorInverseRendering/interiorverse/interiorverse/interverse
+  midintrinsic_root: ../datasets/MIDIntrinsics
+  front3d_v2_root: ../datasets/front3d_iid_v2
+  cache_max_items: 64
+
+loss:
+  lambda_albedo: 1.0
+  lambda_albedo_grad: 0.5
+  lambda_albedo_ssim: 0.2
+  lambda_shading_lum: 1.0
+  lambda_shading_lum_grad: 0.5
+  lambda_shading_chroma: 1.0
+  lambda_shading_chroma_grad: 0.25
+  lambda_ordinal: 0.5
+  lambda_diffuse: 1.0
+  lambda_residual: 0.25
+  lambda_edge_ownership: 0.3
+  lambda_invariance: 0.5
+  lambda_explain: 0.25
+
+output:
+  checkpoint_dir: checkpoints/v21
+  log_dir: logs/v21
