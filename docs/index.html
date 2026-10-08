@@ -852,6 +852,9 @@
     .paper-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg) !important; }
     .paper-btn.secondary { background: var(--accent-bg); border-color: transparent; color: var(--accent) !important; }
 
+    /* Results table scrolls inside its own box on narrow screens instead of being clipped. */
+    .results-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
     /* ── Slim top bar (replaces the portfolio navbar) ───────────────── */
     .sitebar { position: fixed; top: 0; left: 0; right: 0; height: 58px; z-index: 50;
       background: var(--bg); background: color-mix(in srgb, var(--bg) 90%, transparent);
