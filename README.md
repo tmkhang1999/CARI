@@ -8,7 +8,7 @@ Erasmus Mundus Joint Master in Computational Colour and Spectral Imaging (COSI)<
 Norwegian University of Science and Technology (NTNU), Gjøvik
 
 [![Thesis](https://img.shields.io/badge/Thesis-PDF-b31b1b.svg?style=for-the-badge)](documents/thesis/Main.pdf)
-[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/research/cari/)
+[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io%2FCARI-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/CARI/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 
