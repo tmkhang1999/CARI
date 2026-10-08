@@ -27,7 +27,7 @@ scene under different coloured lamps are pushed through the same one-pass model,
 predicted albedos are constrained to agree. Evaluating that claim required first repairing a
 gameable constancy metric that rewards discarding colour — the fix reverses the ranking of our own
 ablation. Full write-up, all results, and the corrected-metric analysis:
-**[project page](https://tmkhang1999.github.io/research/cari/)** · **[thesis PDF](documents/thesis/Main.pdf)**.
+**[project page](https://tmkhang1999.github.io/CARI/)** · **[thesis PDF](documents/thesis/Main.pdf)**.
 
 ---
 

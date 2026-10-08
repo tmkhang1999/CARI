@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the figure set for the CARI project page (tmkhang1999.github.io/research/cari/).
+"""Build the figure set for the CARI project page (tmkhang1999.github.io/CARI/, served from docs/).
 
 Every image on the public page must trace to a file this repository produced. Two
 sources qualify, and nothing else is allowed in here:
@@ -39,10 +39,11 @@ Outputs (written to --out, default documents/thesis/images/web/):
   cari-paired.jpg           paired per-scene differences vs each baseline, the test the
                             marginal intervals in cari-tradeoff.jpg cannot substitute for
   cari-limits.jpg           the three failure modes, composed into one strip
-  cari-thumb.jpg            card thumbnail for research.html (232x142 aspect, not square)
+  cari-thumb.jpg            card thumbnail for the portfolio's research.html (232x142 aspect, not
+                            square); it is not used by docs/, copy it to the portfolio by hand
 
 Run:
-  python tests/viz/build_web_figures.py --out /path/to/portfolio/images/research
+  python tests/viz/build_web_figures.py --out docs/static/img
 """
 from __future__ import annotations
 
@@ -341,7 +342,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', type=Path, default=THESIS / 'web',
-                    help='output directory (point at the portfolio images/research/ to publish)')
+                    help='output directory (point at docs/static/img to publish the page)')
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 

@@ -1,7 +1,8 @@
 # CARI project page — what changed, and how to maintain it
 
-Target: `https://tmkhang1999.github.io/research/cari/`
-Repo: `github.com/tmkhang1999/tmkhang1999.github.io`, file `research/cari/index.html`
+Target: `https://tmkhang1999.github.io/CARI/` (GitHub Pages, source `main` / `docs`)
+Repo: this one, file `docs/index.html`, figures in `docs/static/img/`. The old portfolio URL
+`tmkhang1999.github.io/research/cari/` redirects here.
 Figures are built by `tests/viz/build_web_figures.py` in the IR-IID repo.
 
 ---
@@ -91,7 +92,7 @@ was tightened, since the SOTA runs for three of those four are still in flight.
 ```bash
 cd ~/IR-IID
 python tests/viz/build_web_figures.py          # -> documents/thesis/images/web/
-cp documents/thesis/images/web/*.jpg  <site>/images/research/
+cp documents/thesis/images/web/*.jpg  docs/static/img/
 ```
 
 Everything is derived from thesis figures that already exist, so it needs no GPU.
@@ -124,7 +125,7 @@ installed in this environment — so the layout is verified structurally (well-f
 all six images resolve, table CSS has a mobile fallback) but **not** visually. Please open
 it locally before you trust it:
 ```bash
-cd <site> && python3 -m http.server 8899   # then visit localhost:8899/research/cari/
+cd docs && python3 -m http.server 8899   # then visit localhost:8899/
 ```
 Check especially: the results table on a narrow phone viewport (it scrolls horizontally
 inside its own wrapper), and the hero on a very wide monitor.
