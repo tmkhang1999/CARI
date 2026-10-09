@@ -7,7 +7,7 @@
 This chapter describes how our model works.
 We start with the physical model that underlies IID (\secref{sec:physics}),
 then describe the network architecture (\secref{sec:architecture}),
-and finally explain the CIAI training strategy (\secref{sec:cari}).
+and finally explain the CIAI training strategy (\secref{sec:ciai}).
 
 
 \section{Physical Model}
@@ -94,7 +94,7 @@ illuminant colour that \emph{differs} between the two frames can no longer sit i
 albedo. Two limits follow directly, and both turn out to matter. A colour common to both
 frames (a constant tint) satisfies the constraint and is left unresolved; and the
 constraint can only remove colour differences that the training pairs actually contain.
-\secref{sec:cari} defines the losses and \secref{sec:colour_axis} measures how much of
+\secref{sec:ciai} defines the losses and \secref{sec:colour_axis} measures how much of
 this the real pairs deliver.
 
 \subsection{The Shading Parameterisation}
@@ -210,9 +210,8 @@ value.
 The RGB skip, together with the chroma-direction loss on albedo of
 \secref{sec:losses}, forms what we call the \emph{colour path}. It is a design choice of this
 model and not part of CIAI: the frozen semantic tokens do not seem to carry all of the
-local, absolute colour needed for albedo, and without the skip the predicted albedo keeps
-only about half of the between-material chroma spread of the reference albedo
-(\secref{sec:ablation}); we did not probe the encoder directly, so the reason is a
+local, absolute colour needed for albedo, and without the skip the predicted albedo comes out visibly pale, with a
+higher chroma error against the pseudo-ground truth (\secref{sec:ablation}); we did not probe the encoder directly, so the reason is a
 hypothesis. The skip has a cost as well: it is a direct route by which the
 \emph{illuminant} colour of the input can reach the albedo as a colour cast, which the
 invariance loss must then counteract. The colour path is one of the two ablation axes in
@@ -243,7 +242,7 @@ are both derived from the same underlying scene representation.
 
 
 \section{Cross-Illumination Albedo Invariance (CIAI)}
-\label{sec:cari}
+\label{sec:ciai}
 
 \subsection{The Core Idea}
 
@@ -260,7 +259,7 @@ different flash directions.
 Let $\mathbf{A}_1 = \mathbf{A}(\mathbf{I}_1)$ and $\mathbf{A}_2 = \mathbf{A}(\mathbf{I}_2)$
 be the albedos predicted by the model for each image, and let $S_1$ and $S_2$ be
 the corresponding shadings.
-\figref{fig:cari} at the end of this section shows the complete mechanism, once
+\figref{fig:ciai} at the end of this section shows the complete mechanism, once
 both losses below have been defined.
 
 \subsection{Invariance Loss}
@@ -367,4 +366,4 @@ supervision, and our ablations do not isolate its effect from the other componen
   \label{fig:wb_lanes}
 \end{figure}
 
-\input{./chapters/fig_cari}
+\input{./chapters/fig_ciai}

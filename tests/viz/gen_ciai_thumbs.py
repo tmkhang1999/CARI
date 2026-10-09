@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Thumbnails for fig:cari: two illuminant conditions of one MID scene + their predicted
-albedos and shadings. CPU (no GPU contention). -> documents/thesis/images/arch/cari_*.png
+"""Thumbnails for fig:ciai: two illuminant conditions of one MID scene + their predicted
+albedos and shadings. CPU (no GPU contention). -> documents/thesis/images/arch/ciai_*.png
 
 I1 and I2 are two flash directions of one scene; A1/A2 are tied by L_inv and S1/S2 by the
 luminance explanation loss. The albedos agree closely in lightness and less in colour.
@@ -11,7 +11,7 @@ os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 import cv2, numpy as np, torch
 sys.path.insert(0, f'{ROOT}/tests/eval')
 os.chdir(f'{ROOT}/tests/eval')
-from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame
+from eval_mid_constancy import load_ours, _raw_frame, _tonemap_frame
 
 DST = f'{ROOT}/documents/thesis/images/arch'
 os.makedirs(DST, exist_ok=True)
@@ -26,7 +26,7 @@ def save(a, name, gamma=True, sz=300):
     im = cv2.resize(im, (sz, int(sz*a.shape[0]/a.shape[1])), interpolation=cv2.INTER_AREA)
     cv2.imwrite(f'{DST}/{name}.png', im[..., ::-1]); print('wrote', name)
 
-m = load_v17(f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', 'cpu')
+m = load_ours(f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth', 'cpu')
 sp = os.path.join(MID, 'everett_dining1')
 
 # pick two illuminants with the largest chroma difference among a few candidates
@@ -46,7 +46,7 @@ for tag, fr in (('1', warm), ('2', cool)):
     Is = cv2.resize(I, (int(W*s)//14*14, int(H*s)//14*14), interpolation=cv2.INTER_AREA)
     with torch.no_grad():
         o = m(torch.from_numpy(Is).permute(2,0,1)[None].float())
-    save(Is, f'cari_I{tag}')
-    save(norm(o['a_d'].squeeze(0).permute(1,2,0).numpy()), f'cari_A{tag}')
-    save(norm(o['shading_linear'].squeeze(0).permute(1,2,0).numpy()), f'cari_S{tag}')
+    save(Is, f'ciai_I{tag}')
+    save(norm(o['a_d'].squeeze(0).permute(1,2,0).numpy()), f'ciai_A{tag}')
+    save(norm(o['shading_linear'].squeeze(0).permute(1,2,0).numpy()), f'ciai_S{tag}')
 print('done')

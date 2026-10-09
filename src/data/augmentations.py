@@ -51,16 +51,16 @@ def random_colored_illumination(S_diff, max_tint=0.25, p_spatial=0.5):
 
     CCR (cross color ratio) cancels a GLOBAL colored cast (its zero-sum kernel
     differentiates a constant away) but provably CANNOT cancel SPATIALLY-VARYING
-    colored illumination — at a single boundary a material edge and an
+    colored illumination - at a single boundary a material edge and an
     illumination-color edge are indistinguishable. So colored shadows leak into
     albedo unless the decoder is shown such cases with flat-albedo / colored-shading
     supervision. Two modes:
       - 'ambient' (additive): a constant ambient color vector. Where shading is
         bright the color barely changes; where it is dark (shadow) it takes on the
-        ambient tint — a first-order colored-shadow model.
+        ambient tint - a first-order colored-shadow model.
       - 'spatial' (multiplicative): a smooth low-frequency per-channel gain field so
         different regions carry different illumination color (e.g. warm interior vs
-        cool window light) — the case CCR cannot disentangle.
+        cool window light) - the case CCR cannot disentangle.
     Per-pixel luminance is preserved so albedo scale-matching stays stable.
     """
     C, H, W = S_diff.shape
@@ -86,7 +86,7 @@ def apply_physical_augmentations(t, seg_t,
     (white balance / albedo / shadow) are skipped because they modify t[0:3] using
     the albedo/shading channels and would desynchronise a same-albedo image pair.
     """
-    # ── 1. Spatial Augmentations (Can happen concurrently) ──
+    # -- 1. Spatial Augmentations (Can happen concurrently) --
     if force_type == 'spatial' or (force_type is None and np.random.rand() < p_hflip):
         t     = torch.flip(t,     dims=[2])
         seg_t = torch.flip(seg_t, dims=[2])
@@ -97,7 +97,7 @@ def apply_physical_augmentations(t, seg_t,
     if not apply_photometric:
         return t, seg_t
 
-    # ── MUTUALLY EXCLUSIVE PHYSICAL AUGMENTATIONS ──
+    # -- MUTUALLY EXCLUSIVE PHYSICAL AUGMENTATIONS --
     # Default training: only apply ONE major photometric shift per image.
     # force_type: allows selecting specific ones for visualization summary.
     
@@ -107,7 +107,7 @@ def apply_physical_augmentations(t, seg_t,
         aug_roll = np.random.rand()
 
     if force_type == 'wb' or (aug_roll >= 0 and aug_roll < 0.33):
-        # ── 2. Global White Balance Augmentation ──
+        # -- 2. Global White Balance Augmentation --
         rgb_view, illum_view = t[0:3], t[6:9]
         _, gain = random_color_shift(rgb_view, mean=0.5, std=0.05)
 
@@ -128,7 +128,7 @@ def apply_physical_augmentations(t, seg_t,
             t[6:9] = illum_gained.clamp(0.0, 60000.0)
 
     elif force_type in ('albedo_hue', 'albedo_scale') or (aug_roll >= 0 and aug_roll < 0.66):
-        # ── 3. Albedo Augmentation (Paint Changes) ──
+        # -- 3. Albedo Augmentation (Paint Changes) --
         I_orig, A_orig, S_diff = t[0:3], t[3:6], t[6:9]
         R_specular = (I_orig - (A_orig * S_diff)).clamp_min(0.0)
         
@@ -151,7 +151,7 @@ def apply_physical_augmentations(t, seg_t,
             # t[6:9] = S_diff  (already assigned above)
         
     elif force_type in ('shadow_weak', 'shadow_strong') or (aug_roll >= 0.66):
-        # ── 4. Shadow & Illumination Augmentation ──
+        # -- 4. Shadow & Illumination Augmentation --
         I_orig, A_orig, S_diff = t[0:3], t[3:6], t[6:9]
         R_specular = (I_orig - (A_orig * S_diff)).clamp_min(0.0)
         
@@ -169,7 +169,7 @@ def apply_physical_augmentations(t, seg_t,
         S_new = S_new.clamp(min=1e-4).pow(gamma).clamp(max=60000.0)
 
         # 4b. Colored illumination (teaches the decoder to keep albedo flat under
-        # colored shadows / multi-illuminant scenes — CCR alone cannot, since it
+        # colored shadows / multi-illuminant scenes - CCR alone cannot, since it
         # only cancels a global cast, not spatially-varying illumination color).
         if force_type is None:
             if np.random.rand() < 0.8:

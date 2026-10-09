@@ -1,5 +1,5 @@
 # ============================================================
-#  IR-IID — Coloured Illumination Constancy in IID (CARI)
+#  CIAI: Cross-Illumination Albedo Invariance
 #  Rule of thumb: commit SOURCE that reproduces the thesis;
 #  ignore DATA, WEIGHTS, RENDERS and BUILD ARTIFACTS.
 # ============================================================
@@ -96,3 +96,13 @@ tests/viz/front3d_smoke_glbs/
 .claude/**/*.tmp.*
 
 presentation/*
+
+# Thesis administration papers (guidelines, assessment forms): kept on disk, not published.
+documents/thesis/eval/
+
+# Defence slides (large binary, not part of the project).
+Khang_presentation.pptx
+
+# Private development history (old code, results and notes): kept on disk, not published.
+# Everything in it is also in git history, before the 2026-10-09 cleanup (commit c4162a8).
+documents/history/

@@ -1,9 +1,9 @@
-"""Marigold-IID v1-1 albedo extraction — shared by eval_mid/eval_maw/eval_arap/eval_iiw.
+"""Marigold-IID v1-1 albedo extraction - shared by eval_mid/eval_maw/eval_arap/eval_iiw.
 
 The Marigold-IID v1-1 pipeline (documents/references/marigold) returns
 ``MarigoldIIDOutput`` objects whose per-target ``out['albedo']`` is an ``IIDEntry``
 holding the prediction in ``.array`` (CHW, [0,1]). The colour-space metadata lives on
-the PIPELINE (``pipe.target_properties[name]``), NOT on the entry — so the older
+the PIPELINE (``pipe.target_properties[name]``), NOT on the entry - so the older
 ``out['albedo'].target_properties`` access raises ``AttributeError: 'IIDEntry' object
 has no attribute 'target_properties'`` and ``np.array(out['albedo'])`` yields a 0-d
 object array. This helper reads the correct locations and returns LINEAR albedo HWC,
@@ -11,7 +11,7 @@ matching the crefnet_adapter / ordinal_adapter output convention.
 
 Verified against documents/references/marigold/marigold/marigold_iid_pipeline.py
 (IIDEntry.array is [3,H,W] in the model's native prediction space; fill_entry's
-per-space handling — 'srgb' left as-is, 'linear' optionally up_to_scale-normalised):
+per-space handling - 'srgb' left as-is, 'linear' optionally up_to_scale-normalised):
   - appearance: target_properties['albedo'] = {'prediction_space': 'srgb'}
   - lighting  : target_properties['albedo'] = {'prediction_space': 'linear', 'up_to_scale': False}
 """

@@ -30,11 +30,11 @@ except ImportError as e:
     print(f"Warning: Could not import guided_filter from common.general: {e}")
     guided_filter = None
 
-# ── External SOTA models (Marigold / CRefNet / Ordinal Shading) ───────────────
+# -- External SOTA models (Marigold / CRefNet / Ordinal Shading) ---------------
 # Wired through the same adapters eval_maw/eval_arap use. Contract: display-linear
 # [0,1] HWC in -> linear albedo [0,1] HWC out, matching what this evaluator's WHDR
 # loop already expects for pred_ad. Passed via --model_version; anything else is
-# treated as one of our checkpoints (V17 or V21) and loaded by infer_wild.load_model.
+# treated as one of our checkpoints (RGBShadingNet or TriFactorNet) and loaded by infer_wild.load_model.
 _MARIGOLD_VERSIONS = {'marigold-appearance', 'marigold-lighting'}
 _CREFNET_VERSIONS = {'crefnet', 'crefnet-e'}
 _ORDINAL_VERSIONS = {'ordinal', 'ordinal-rendered-only'}
@@ -166,7 +166,7 @@ def eval_iiw(args):
         inferred_version = external_kind
     else:
         model, inferred_version = load_model(args.checkpoint, device)
-        print(f"Loaded V{inferred_version} checkpoint {args.checkpoint}")
+        print(f"Loaded {inferred_version} checkpoint {args.checkpoint}")
 
     # 2. Get Test Split
     test_ids = get_iiw_test_split(args.dataset_dir)

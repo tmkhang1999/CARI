@@ -7,7 +7,7 @@ RGB injects the high-frequency detail the /14 tokens lack (sharp albedo edges).
 
 This is the Depth-Anything head, made patch-size agnostic by resampling each
 level to an explicit target size (computed from the native input resolution)
-rather than assuming a /16 token grid. GroupNorm throughout — BatchNorm would
+rather than assuming a /16 token grid. GroupNorm throughout - BatchNorm would
 normalise out the per-image illumination statistics IID depends on.
 """
 
@@ -82,14 +82,14 @@ class FeatureFusionBlock(nn.Module):
 
 
 class DetailStem(nn.Module):
-    """Tiny trainable conv stem on the gamma-encoded input → /2 detail feature.
+    """Tiny trainable conv stem on the gamma-encoded input -> /2 detail feature.
 
     Restores the high-frequency edges DINOv2's /14 tokens cannot represent.
     """
     def __init__(self, out_ch: int = 48):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(3, 32, 3, stride=2, padding=1, bias=False),  # H → H/2
+            nn.Conv2d(3, 32, 3, stride=2, padding=1, bias=False),  # H -> H/2
             _gn(32), nn.ReLU(inplace=True),
             nn.Conv2d(32, out_ch, 3, padding=1, bias=False),
             _gn(out_ch), nn.ReLU(inplace=True),
@@ -101,7 +101,7 @@ class DetailStem(nn.Module):
 
 
 class DPTTrunk(nn.Module):
-    """4-level DPT reassemble + top-down fusion → shared trunk feature at /2.
+    """4-level DPT reassemble + top-down fusion -> shared trunk feature at /2.
 
     Args:
         in_dim     : ViT embed dim (1024 for DINOv2-L).
@@ -110,13 +110,13 @@ class DPTTrunk(nn.Module):
         out_ch     : trunk output channels (fed to both heads).
         detail_ch  : DetailStem output channels (concatenated at /2).
     """
-    STRIDES = (4, 8, 16, 32)   # shallow→deep ViT layer target strides
+    STRIDES = (4, 8, 16, 32)   # shallow->deep ViT layer target strides
 
     def __init__(self, in_dim: int, feat_ch: int = 256, fusion_ch: int = 128,
                  out_ch: int = 128, detail_ch: int = 48):
         super().__init__()
         self.reassemble = nn.ModuleList([Reassemble(in_dim, feat_ch) for _ in range(4)])
-        # "scratch" 3×3 to bring each pyramid level to the fusion width
+        # "scratch" 3x3 to bring each pyramid level to the fusion width
         self.scratch = nn.ModuleList([
             nn.Conv2d(feat_ch, fusion_ch, 3, padding=1, bias=False) for _ in range(4)
         ])
@@ -130,7 +130,7 @@ class DPTTrunk(nn.Module):
         self.out_channels = out_ch
 
     def forward(self, dino_feats, rgb, out_size):
-        """dino_feats: 4× (B, in_dim, Hp, Wp); rgb: (B,3,H,W); out_size=(H,W)."""
+        """dino_feats: 4x (B, in_dim, Hp, Wp); rgb: (B,3,H,W); out_size=(H,W)."""
         s4, s8, s16, s32 = (_target_size(out_size, s) for s in self.STRIDES)
 
         # Reassemble each ViT layer to its pyramid scale, then to fusion width.
@@ -139,7 +139,7 @@ class DPTTrunk(nn.Module):
         l2 = self.scratch[2](self.reassemble[2](dino_feats[2], s16))   # /16
         l3 = self.scratch[3](self.reassemble[3](dino_feats[3], s32))   # /32
 
-        # Top-down fusion: /32 → /16 → /8 → /4 → /2
+        # Top-down fusion: /32 -> /16 -> /8 -> /4 -> /2
         size_half = _target_size(out_size, 2)
         p = self.fuse[3](l3, skip=None, size=s16)
         p = self.fuse[2](p, skip=l2, size=s8)

@@ -111,23 +111,23 @@ def main():
 
     # ---- 1. MID (chapter order: first) ----
     mid = f'{ROOT}/../datasets/MIDIntrinsics/test/everett_kitchen12'
-    rows.append(('MID — real, multi-illuminant capture of one scene; no measured albedo '
+    rows.append(('MID - real, multi-illuminant capture of one scene; no measured albedo '
                  '(GT-free constancy diagnostic)',
                  [panel(pil(load_hdr(f'{mid}/dir_0_mip2.exr')), 'input, light A'),
                   panel(pil(load_hdr(f'{mid}/dir_18_mip2.exr')), 'input, light B'),
                   panel(pil(load_hdr(f'{mid}/albedo.exr')), 'pseudo-GT albedo', gt=True)]))
 
-    # ---- 2. IIW (chapter order: second) — show the judgements, not a blank row ----
-    rows.append(('IIW — real photographs; NO albedo ground truth, only sparse pairwise '
+    # ---- 2. IIW (chapter order: second) - show the judgements, not a blank row ----
+    rows.append(('IIW - real photographs; NO albedo ground truth, only sparse pairwise '
                  'human lightness judgements (this is all WHDR scores)',
                  [panel(pil(load_png(f'{ROOT}/tests/testing_data/iiw-dataset/data/1094.png')),
                         'input photograph'),
                   panel(pil(iiw_judgements('1094')),
-                        'the annotation: darker (●) vs lighter (○)', gt=True)]))
+                        'the annotation: darker (*) vs lighter (o)', gt=True)]))
 
     # ---- 3. MAW ----
     b = f'{ROOT}/tests/testing_data/MAW'
-    rows.append(('MAW — real photographs; physically measured albedo on masked patches',
+    rows.append(('MAW - real photographs; physically measured albedo on masked patches',
                  [panel(pil(load_png(f'{b}/images_png/scene_28/_DSC2770.png')),
                         'input photograph'),
                   panel(pil(load_png(f'{b}/labels/new_masks/scene_28/_DSC2770_albedo.png')),
@@ -135,7 +135,7 @@ def main():
 
     # ---- 4. ARAP ----
     arap = f'{ROOT}/tests/testing_data/ARAP_dataset'
-    rows.append(('ARAP — synthetic renders; dense ground-truth albedo',
+    rows.append(('ARAP - synthetic renders; dense ground-truth albedo',
                  [panel(pil(load_hdr(f'{arap}/bedroom.hdr')), 'rendered input'),
                   panel(pil(load_hdr(f'{arap}/bedroom_albedo.hdr')), 'GT albedo', gt=True)]))
 

@@ -186,7 +186,7 @@ the image.
 \subsection{CIAI Losses}
 
 The two CIAI losses $\mathcal{L}_{\text{inv}}$ (weight 0.5) and
-$\mathcal{L}_{\text{expl}}$ (weight 0.25) are defined in \secref{sec:cari}.
+$\mathcal{L}_{\text{expl}}$ (weight 0.25) are defined in \secref{sec:ciai}.
 They are computed by running the network a second time on the paired frame
 $\mathbf{I}_2$ within the same training step (a Siamese second forward with
 shared weights) and are masked by the intersection of the loss mask, the

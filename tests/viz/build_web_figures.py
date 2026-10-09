@@ -4,20 +4,20 @@
 Every image on the public page must trace to a file this repository produced. Two
 sources qualify, and nothing else is allowed in here:
 
-  1. `presentation/assets/from_submission/` — the figures of the defence deck, exported
+  1. `presentation/assets/from_submission/` - the figures of the defence deck, exported
      from `Khang_submission.pptx`. Each one was hash-matched back to a repo file or to a
      crop of `documents/thesis/Main.pdf`; see MANIFEST.json in that directory.
-  2. `documents/thesis/images/` — figures compiled into the thesis itself.
+  2. `documents/thesis/images/` - figures compiled into the thesis itself.
 
 Outputs (written to --out, default documents/thesis/images/web/):
-  cari-teaser.jpg       one MID scene under four flash directions, with the recovered albedo
-  cari-ambiguity.jpg    why one-channel shading forces the light's hue into the albedo
-  cari-pairs.jpg        one MID pair; the deck's "cool"/"warm" header is repainted as
+  ciai-teaser.jpg       one MID scene under four flash directions, with the recovered albedo
+  ciai-ambiguity.jpg    why one-channel shading forces the light's hue into the albedo
+  ciai-pairs.jpg        one MID pair; the deck's "cool"/"warm" header is repainted as
                         "flash direction A/B" (see relabel_pairs)
-  cari-mechanism.jpg    the CIAI training-time constraint, composed from the thesis thumbnails
-  cari-qualitative.jpg  held-out scene, all seven methods, three flash directions
+  ciai-mechanism.jpg    the CIAI training-time constraint, composed from the thesis thumbnails
+  ciai-qualitative.jpg  held-out scene, all seven methods, three flash directions
                         (from tests/viz/build_all_models_light_matrix.py)
-  cari-thumb.jpg        card thumbnail for the portfolio (232x142 aspect); copy it by hand
+  ciai-thumb.jpg        card thumbnail for the portfolio (232x142 aspect); copy it by hand
 
 The compare-widget images under docs/static/img/compare/ come from
 tests/viz/build_compare_widget_assets.py.
@@ -52,16 +52,16 @@ FONT_BOLD = font_manager.findfont(font_manager.FontProperties(family='DejaVu San
 BG, FG, GRID = '#ffffff', '#1f2937', '#e5e7eb'
 SKY, SLATE, AMBER = '#1d4ed8', '#6b7280', '#b45309'
 
-# Chapter 5, tab:mid — held-out MIDIntrinsics split, 30 scenes. Brackets are the same
+# Chapter 5, tab:mid - held-out MIDIntrinsics split, 30 scenes. Brackets are the same
 # 95% percentile-bootstrap intervals (over scenes) the thesis table reports; Chroma_fid
 # carries no interval there, so none is fabricated here either.
 #   name: (Cast_rel, [lo, hi], Chroma_err, [lo, hi], Chroma_fid)
 
 # Straight copies, resized for the web. (source, output name, max width)
 COPIES = [
-    (THESIS / 'formulation/formulation.jpg', 'cari-ambiguity.jpg', 1500),
+    (THESIS / 'formulation/formulation.jpg', 'ciai-ambiguity.jpg', 1500),
     (ROOT / 'presentation/assets/generated/all_models_light_matrix/'
-     'all_models_everett_lobby3.jpg',                     'cari-qualitative.jpg', 1900),
+     'all_models_everett_lobby3.jpg',                     'ciai-qualitative.jpg', 1900),
 ]
 
 # The three limitation crops, in the order they are discussed on the page.
@@ -78,8 +78,8 @@ def _resize(src: Path, dst: Path, max_width: int, quality: int = 88):
 def build_teaser(out: Path, max_width: int = 1700):
     """Hero image: input vs. recovered albedo across four lamp settings.
 
-    The source grid (from build_mid_diversity_scenes.py) has a fifth column —
-    GT albedo over a Turbo colormap of cross-light variation — that carries no
+    The source grid (from build_mid_diversity_scenes.py) has a fifth column  - 
+    GT albedo over a Turbo colormap of cross-light variation - that carries no
     colorbar, scale, or clip threshold, and the page never explains it. Rather
     than caption a diagnostic we can't calibrate for a reader, drop that column:
     the self-consistency claim ("same four albedo panels") stands on its own
@@ -90,7 +90,7 @@ def build_teaser(out: Path, max_width: int = 1700):
     im = im.crop((0, 0, 2144, im.height))
     if im.width > max_width:
         im = im.resize((max_width, round(im.height * max_width / im.width)), Image.LANCZOS)
-    im.save(out / 'cari-teaser.jpg', quality=88, optimize=True)
+    im.save(out / 'ciai-teaser.jpg', quality=88, optimize=True)
     return im.size
 
 
@@ -119,19 +119,19 @@ def build_pairs(out: Path, src: Path | None = None, max_width: int = 1400):
     im = Image.open(src).convert('RGB')
     if im.width > max_width:
         im = im.resize((max_width, round(im.height * max_width / im.width)), Image.LANCZOS)
-    relabel_pairs(im).save(out / 'cari-pairs.jpg', quality=88, optimize=True)
+    relabel_pairs(im).save(out / 'ciai-pairs.jpg', quality=88, optimize=True)
     return im.size
 
 
 def build_mechanism(out: Path, tile_w: int = 300):
     """Training-time diagram: one MID pair, shared model, two albedos tied by L_inv and two
-    shadings tied by L_expl. Thumbnails are the V17 model's own outputs, so the two albedos
+    shadings tied by L_expl. Thumbnails are our model's own outputs, so the two albedos
     agree only approximately -- in lightness more than in colour, which is the honest picture.
     """
     names = ['I1', 'I2', 'A1', 'A2', 'S1', 'S2']
     tiles = {}
     for n in names:
-        path = THESIS / 'arch' / f'cari_{n}.png'
+        path = THESIS / 'arch' / f'ciai_{n}.png'
         if not path.exists():
             raise SystemExit(f'missing thumbnail: {path}')
         t = Image.open(path).convert('RGB')
@@ -200,7 +200,7 @@ def build_mechanism(out: Path, tile_w: int = 300):
     d.text((x_sh + tile_w // 2 + 14, mid_y - 12), 'L_expl:', fill=red, font=fb, anchor='lm')
     d.text((x_sh + tile_w // 2 + 14, mid_y + 14), 'lum(S1/S2) = lum(I1/I2)', fill=red, font=f, anchor='lm')
 
-    c.save(out / 'cari-mechanism.jpg', quality=90, optimize=True)
+    c.save(out / 'ciai-mechanism.jpg', quality=90, optimize=True)
     return c.size
 
 
@@ -251,7 +251,7 @@ def build_thumb(out: Path, width: int = 700, scene: str = 'everett_lobby3',
         d.rounded_rectangle((box_[0] - 10, box_[1] - 7, box_[2] + 10, box_[3] + 7),
                             radius=8, fill=(17, 24, 39))
         d.text((x, y), label, fill=(255, 255, 255), font=font, anchor=anchor)
-    im.save(out / 'cari-thumb.jpg', quality=90, optimize=True)
+    im.save(out / 'ciai-thumb.jpg', quality=90, optimize=True)
     return im.size
 
 
@@ -271,12 +271,12 @@ def main():
     if missing:
         raise SystemExit('missing source figures:\n  ' + '\n  '.join(str(p) for p in missing))
 
-    print(f'  {"cari-teaser.jpg":26s} {build_teaser(args.out)}')
+    print(f'  {"ciai-teaser.jpg":26s} {build_teaser(args.out)}')
     for src, name, width in COPIES:
         print(f'  {name:26s} {_resize(src, args.out / name, width)}')
-    print(f'  {"cari-pairs.jpg":26s} {build_pairs(args.out)}')
-    print(f'  {"cari-mechanism.jpg":26s} {build_mechanism(args.out)}')
-    print(f'  {"cari-thumb.jpg":26s} {build_thumb(args.out)}')
+    print(f'  {"ciai-pairs.jpg":26s} {build_pairs(args.out)}')
+    print(f'  {"ciai-mechanism.jpg":26s} {build_mechanism(args.out)}')
+    print(f'  {"ciai-thumb.jpg":26s} {build_thumb(args.out)}')
     print(f'\nwrote {len(COPIES) + 4} figures to {args.out}')
 
 

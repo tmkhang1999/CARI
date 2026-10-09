@@ -2,15 +2,15 @@
 """Merge two or more completed 4-benchmark result sets (MID/MAW/ARAP/IIW JSONs) into
 one combined results directory + summary.md, without re-running any evaluator.
 
-Designed to combine the outputs of eval_all_models_4benchmarks_full.py (our v17
-checkpoints, e.g. Table A's v17_41-44) with eval_sota_4benchmarks_full.py (the four
+Designed to combine the outputs of eval_all_models_4benchmarks_full.py (our
+checkpoints, e.g. the four ablation rows) with eval_sota_4benchmarks_full.py (the four
 external SOTA methods), which both write identically-shaped JSONs under
 <out>/results/eval_{mid_constancy,maw,arap_constancy,iiw}_results.json:
   - MID:  {'split': ..., 'results': [ {label, ...}, ... ]}   -> lists are concatenated
   - MAW/ARAP/IIW: {label: {...}, ...}                        -> dicts are merged
 
 A later source overwrites an earlier source's entry for the same label (last-wins),
-so duplicate labels across sources are a silent overwrite, not an error — pass
+so duplicate labels across sources are a silent overwrite, not an error - pass
 sources in the order you want to win.
 """
 from __future__ import annotations

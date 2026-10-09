@@ -1,6 +1,6 @@
-"""Single-image losses of the V17 model, plus the CIAI pair terms it is trained with.
+"""Single-image losses of the RGB-shading model, plus the CIAI pair terms it is trained with.
 
-V17 predicts an albedo A, a three-channel inverse shading pi = 1/(S_d + 1) and an
+The model predicts an albedo A, a three-channel inverse shading pi = 1/(S_d + 1) and an
 analytic residual R = (I - A*S_d)_+. The single-image losses tie these to whatever
 ground truth a dataset provides:
 
@@ -32,6 +32,7 @@ _RETIRED = (
     'lambda_shadow_inv', 'lambda_shadow_explain', 'lambda_shadow_gt_front3d',
     'lambda_ordinal', 'lambda_ordinal_iiw', 'lambda_albedo_init', 'lambda_chroma_field',
     'lambda_chroma_field_pair', 'mat_intensity_weight', 'albedo_msg_target_grad_threshold',
+    'lambda_chr_explain',   # chroma explanation on RGB shading: a post-thesis study, see history
 )
 
 
@@ -82,13 +83,13 @@ def scale_shift_align(pred, target, mask, eps=1e-6):
     return pred * a.view(shape) + b.view(shape)
 
 
-class V17Loss(nn.Module):
+class RGBShadingLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
         active = [k for k in _RETIRED if float(config.get(k, 0.0) or 0.0) != 0.0]
         if active:
             raise ValueError(f'config enables retired loss settings {active}; they were removed '
-                             'from the codebase (see documents/history/DEVELOPMENT_HISTORY.md)')
+                             'from the codebase (see the private development history)')
         if str(config.get('recon_mode', 'diffuse')) != 'diffuse':
             raise ValueError("only recon_mode: diffuse is supported (the residual is analytic)")
         if bool(config.get('albedo_l1', False)):
@@ -115,14 +116,13 @@ class V17Loss(nn.Module):
         # CIAI pair weights; the training step reads them and calls losses/ciai.py.
         self.lambda_alb_invariance = float(config.get('lambda_alb_invariance', 0.0))
         self.lambda_explain = float(config.get('lambda_explain', 0.0))
-        self.lambda_chr_explain = float(config.get('lambda_chr_explain', 0.0))
 
         self.msg_loss = MultiScaleGradientLoss(scales=4)
         self._dssim_win_size = 11
         self._dssim_sigma = 1.5
         self._dssim_win = None
 
-    # ── helpers ────────────────────────────────────────────────────────────────
+    # -- helpers ----------------------------------------------------------------
     @staticmethod
     def _masked_mse(pred, target, mask):
         diff = F.mse_loss(pred, target, reduction='none')
@@ -167,7 +167,7 @@ class V17Loss(nn.Module):
         overshoot = F.relu(a * s_linear - rgb)
         return (overshoot * mask).sum() / (mask.sum() + 1e-7)
 
-    # ── CIAI pair terms (kept as methods so the training step reads one object) ──
+    # -- CIAI pair terms (kept as methods so the training step reads one object) --
     def albedo_invariance(self, a1, a2, mask):
         return ciai.albedo_invariance(a1, a2, mask)
 
@@ -177,7 +177,7 @@ class V17Loss(nn.Module):
     def chroma_explain(self, rgb1, rgb2, s1, s2, mask):
         return ciai.chroma_explain(rgb1, rgb2, s1, s2, mask)
 
-    # ── single-image objective ─────────────────────────────────────────────────
+    # -- single-image objective -------------------------------------------------
     def forward(self, predictions, targets, loss_mask, m_diffuse, m_residual, rgb, use_ssi=True):
         """
         predictions: model outputs ('a_d', 'shading', 'shading_linear', 'residual', tokens)

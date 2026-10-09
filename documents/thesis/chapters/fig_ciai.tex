@@ -1,5 +1,5 @@
-% fig:cari — CIAI training diagram, styled to match fig:architecture.
-% Thumbnails from tests/viz/gen_cari_thumbs.py (documents/thesis/images/arch/cari_*.png).
+% fig:ciai — CIAI training diagram, styled to match fig:architecture.
+% Thumbnails from tests/viz/gen_ciai_thumbs.py (documents/thesis/images/arch/ciai_*.png).
 \begin{figure}[t!]
   \centering
   \resizebox{0.96\textwidth}{!}{%
@@ -16,9 +16,9 @@
     ]
 
     % ── the cross-illuminant input pair (real, pixel-aligned) ───────
-    \node[thumb] (i1) {\includegraphics[width=20mm]{images/arch/cari_I1.png}};
+    \node[thumb] (i1) {\includegraphics[width=20mm]{images/arch/ciai_I1.png}};
     \node[io, above=0.5mm of i1] {$\mathbf{I}_1$ \scriptsize(flash direction a)};
-    \node[thumb, below=12mm of i1] (i2) {\includegraphics[width=20mm]{images/arch/cari_I2.png}};
+    \node[thumb, below=12mm of i1] (i2) {\includegraphics[width=20mm]{images/arch/ciai_I2.png}};
     \node[io, below=0.5mm of i2] {$\mathbf{I}_2$ \scriptsize(flash direction b)};
     \node[dim, below=4mm of i2] {same scene, pixel-aligned,\\raw (\emph{no} white balance)};
 
@@ -26,12 +26,12 @@
     \node[model] (m) at ($(i1)!0.5!(i2) + (30mm,0)$) {Model\\[3pt]\emph{shared}\\\emph{weights}\\[3pt]{\scriptsize two forward}\\{\scriptsize passes}};
 
     % ── predicted albedos (should be identical) + shadings ─────────
-    \node[thumb, right=16mm of m.east |- i1] (a1) {\includegraphics[width=15mm]{images/arch/cari_A1.png}};
-    \node[thumb, right=16mm of m.east |- i2] (a2) {\includegraphics[width=15mm]{images/arch/cari_A2.png}};
+    \node[thumb, right=16mm of m.east |- i1] (a1) {\includegraphics[width=15mm]{images/arch/ciai_A1.png}};
+    \node[thumb, right=16mm of m.east |- i2] (a2) {\includegraphics[width=15mm]{images/arch/ciai_A2.png}};
     \node[io, above=0.5mm of a1] {$\mathbf{A}_1$}; \node[io, below=0.5mm of a2] {$\mathbf{A}_2$};
 
-    \node[thumb, right=26mm of a1] (s1) {\includegraphics[width=15mm]{images/arch/cari_S1.png}};
-    \node[thumb, right=26mm of a2] (s2) {\includegraphics[width=15mm]{images/arch/cari_S2.png}};
+    \node[thumb, right=26mm of a1] (s1) {\includegraphics[width=15mm]{images/arch/ciai_S1.png}};
+    \node[thumb, right=26mm of a2] (s2) {\includegraphics[width=15mm]{images/arch/ciai_S2.png}};
     \node[io, above=0.5mm of s1] {$\mathbf{S}_{d,1}$}; \node[io, below=0.5mm of s2] {$\mathbf{S}_{d,2}$};
 
     % ── flows ──────────────────────────────────────────────────────
@@ -66,5 +66,5 @@
     agree closely in lightness and less in colour, which is what the experiments of
     \chapref{ch:experiments} measure.
   }
-  \label{fig:cari}
+  \label{fig:ciai}
 \end{figure}

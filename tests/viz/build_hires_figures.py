@@ -54,18 +54,18 @@ ARAP = f'{ROOT}/tests/testing_data/ARAP_dataset'
 
 CK = f'{ROOT}/checkpoints'
 ROSTER = [
-    ('Ours',           f'{CK}/v17_44/checkpoint_iter_40000.pth', '17'),
+    ('Ours',           f'{CK}/ciai/checkpoint_iter_40000.pth', 'ours'),
     ('Marigold-App',   f'{CK}/marigold-iid-appearance-v1-1', 'marigold-appearance'),
     ('Marigold-Light', f'{CK}/marigold-iid-lighting-v1-1', 'marigold-lighting'),
     ('CRefNet',        f'{CK}/CRefNet/final_real.pt', 'crefnet'),
     ('Ordinal',        f'{ROOT}/ordinal-hub-weights', 'ordinal'),
 ]
-QUALITATIVE_CKPT = f'{CK}/v17_44/checkpoint_iter_40000.pth'
+QUALITATIVE_CKPT = f'{CK}/ciai/checkpoint_iter_40000.pth'
 TABLE_A = [
-    ('Row 1: no CIAI, no skip',  f'{CK}/v17_41/checkpoint_iter_40000.pth'),
-    ('Row 2: CIAI, no skip',     f'{CK}/v17_42/checkpoint_iter_40000.pth'),
-    ('Row 3: no CIAI, skip',     f'{CK}/v17_43/checkpoint_iter_40000.pth'),
-    ('Row 4: full CIAI (base)',  f'{CK}/v17_44/checkpoint_iter_40000.pth'),
+    ('Row 1: no CIAI, no skip',  f'{CK}/ablation_none/checkpoint_iter_40000.pth'),
+    ('Row 2: CIAI, no skip',     f'{CK}/ablation_ciai/checkpoint_iter_40000.pth'),
+    ('Row 3: no CIAI, skip',     f'{CK}/ablation_colour/checkpoint_iter_40000.pth'),
+    ('Row 4: full CIAI (base)',  f'{CK}/ciai/checkpoint_iter_40000.pth'),
 ]
 
 
@@ -160,7 +160,7 @@ def predictors(spec, infer=1280):
         yield label, AlbedoPredictor(path, ver, 'cuda', infer_max_size=infer)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 def fig_comp_grid(PW=520):
     """SOTA qualitative comparison on an in-the-wild (IIW) photograph."""
     print('comp_grid: SOTA albedo comparison on IIW')
@@ -256,7 +256,7 @@ def fig_maw_ours(PW=820):
     if not rows:
         print('  [skip] no MAW pairs resolved')
         return
-    p = AlbedoPredictor(QUALITATIVE_CKPT, '17', 'cuda', infer_max_size=1792)
+    p = AlbedoPredictor(QUALITATIVE_CKPT, 'ours', 'cuda', infer_max_size=1792)
     albs = [p.albedo(x) for x, _ in rows]
     del p
     torch.cuda.empty_cache()
@@ -304,7 +304,7 @@ def fig_arap_ours(PW=820):
     if not ins:
         print('  [skip] no ARAP scenes resolved')
         return
-    p = AlbedoPredictor(QUALITATIVE_CKPT, '17', 'cuda', infer_max_size=1792)
+    p = AlbedoPredictor(QUALITATIVE_CKPT, 'ours', 'cuda', infer_max_size=1792)
     albs = [p.albedo(x) for x in ins]
     del p
     torch.cuda.empty_cache()
@@ -324,7 +324,7 @@ def fig_arap_model_grid(PW=460):
     gt_raw = load_hdr(f'{ARAP}/{scene}_albedo.hdr')
     gt = norm(gt_raw, scale_of(gt_raw))
 
-    roster = [('Ours', QUALITATIVE_CKPT, '17')] + ROSTER[1:]
+    roster = [('Ours', QUALITATIVE_CKPT, 'ours')] + ROSTER[1:]
     pred_rows = []
     row_labels = []
     for label, predictor in predictors(roster, infer=1792):
@@ -392,7 +392,7 @@ def fig_ablation(PW=440):
     gt = _tonemap_frame(load_hdr(f'{sp}/albedo.exr'))
     preds = {}
     for label, path in TABLE_A:
-        p = AlbedoPredictor(path, '17', 'cuda', infer_max_size=1280)
+        p = AlbedoPredictor(path, 'ours', 'cuda', infer_max_size=1280)
         preds[label] = [p.albedo(x) for x in ins]
         del p
         torch.cuda.empty_cache()
@@ -420,7 +420,7 @@ def fig_maw_resolution(PW=470):
     sizes = [512, 768, 1024, 1280]
     outs = []
     for s in sizes:
-        p = AlbedoPredictor(ROSTER[0][1], '17', 'cuda', infer_max_size=s)
+        p = AlbedoPredictor(ROSTER[0][1], 'ours', 'cuda', infer_max_size=s)
         a = p.albedo(img)
         outs.append(norm(a, scale_of(a)))
         del p

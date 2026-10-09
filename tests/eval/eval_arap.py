@@ -64,15 +64,15 @@ def _ensure_marigold_imported():
     MarigoldIIDPipeline = _MarigoldIIDPipeline
     PILImage = _PILImage
 
-# ── Dataset constants ──────────────────────────────────────────────────────────
+# -- Dataset constants ----------------------------------------------------------
 _ARAP_TYPES_JSON = ROOT_DIR / 'tests/testing_data/ARAP_types.json'
 INPUT_EXTS = ('.exr', '.hdr', '.png', '.jpg', '.jpeg')
 _DERIVED_KEYWORDS = ('_albedo', '_shading', '_normal', '_depth')
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Model loading
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _load_marigold_pipeline(checkpoint, device):
     _ensure_marigold_imported()
@@ -82,7 +82,7 @@ def _load_marigold_pipeline(checkpoint, device):
 
 
 def _load_model_versioned(checkpoint, version, device):
-    """Our checkpoints (V17 or V21), rebuilt from their own config."""
+    """Our checkpoints (RGBShadingNet or TriFactorNet), rebuilt from their own config."""
     model, _ = load_model(checkpoint, device)
     return model
 
@@ -99,9 +99,9 @@ def _is_ordinal_version(version):
     return version in ('ordinal', 'ordinal-rendered-only')
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Input preparation
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _white_balance_gt(rgb, albedo_gt, eps=1e-3, percentile=99.0, target=0.8):
     """TRUE white balance for the standard (Ordinal Shading) ARAP protocol.
@@ -109,7 +109,7 @@ def _white_balance_gt(rgb, albedo_gt, eps=1e-3, percentile=99.0, target=0.8):
     THE BUG THIS REPLACES (found 2026-07-14): the `--white_balance` path previously called
     `_hdr_norm`, which multiplies all three channels by ONE scalar. That is EXPOSURE
     normalisation. It leaves r/g and b/g *identically unchanged*, so it removes no coloured
-    illuminant whatsoever — despite the call site claiming it "desaturates the illuminant".
+    illuminant whatsoever - despite the call site claiming it "desaturates the illuminant".
     Every published-comparison ARAP number produced through that path was therefore computed
     on a raw coloured input and is NOT comparable to Ordinal Shading's reported scores.
 
@@ -175,9 +175,9 @@ def _prepare_input_rgb(rgb_linear, is_hdr, version):
     return np.power(np.clip(rgb_linear, 0.0, 1.0), 0.45454545454545453)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Inference
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _run_marigold_inference(pipe, rgb_linear, is_hdr, max_size=None):
     """
@@ -198,7 +198,7 @@ def _run_marigold_inference(pipe, rgb_linear, is_hdr, max_size=None):
     kwargs = {'processing_res': int(max_size)} if max_size is not None else {}
     pipe_out = pipe(pil_img, **kwargs)
 
-    # Albedo — v1-1: colour space lives on pipe.target_properties, not the entry.
+    # Albedo - v1-1: colour space lives on pipe.target_properties, not the entry.
     albedo_hwc = marigold_albedo_hwc_linear(pipe, pipe_out, target='albedo')
 
     # Shading (or pseudo-shading from appearance). target_names is on the output object.
@@ -264,9 +264,9 @@ def _run_own_model_inference(model, version, rgb_linear, is_hdr, img_path,
     return pred_ad, pred_sd, rgb_tm_orig
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Dataset helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _is_derived(stem):
     return any(kw in stem for kw in _DERIVED_KEYWORDS)
@@ -297,7 +297,7 @@ def get_arap_cases(dataset_dir):
 
 
 def _load_scene_domains():
-    """Load ARAP_types.json → {scene_name: 'indoor'|'outdoor'}."""
+    """Load ARAP_types.json -> {scene_name: 'indoor'|'outdoor'}."""
     try:
         with open(_ARAP_TYPES_JSON) as f:
             data = json.load(f)
@@ -320,7 +320,7 @@ def filter_cases_by_domain(cases, scene_filter):
         return cases
     name2dom = _load_scene_domains()
     if not name2dom:
-        print(f'  WARN: ARAP_types.json missing/empty — --scene_filter {scene_filter} ignored.')
+        print(f'  WARN: ARAP_types.json missing/empty - --scene_filter {scene_filter} ignored.')
         return cases
     kept = [c for c in cases if name2dom.get(c[0], '').lower() == scene_filter.lower()]
     n_scenes = len(set(c[0] for c in kept))
@@ -346,7 +346,7 @@ def load_gt(dataset_dir, base_name, input_stem, ext):
         other = _find_file(dataset_dir, f'{base_name}_albedo', INPUT_EXTS)
         if other:
             print(f"  WARN: GT '{stem}_albedo' has no '{ext}' file; using '{base_name}_albedo' "
-                  f"(input is '{input_stem}' — GT/input dynamic range may differ).")
+                  f"(input is '{input_stem}' - GT/input dynamic range may differ).")
             return other
         return None
 
@@ -362,7 +362,7 @@ def load_gt(dataset_dir, base_name, input_stem, ext):
 
 
 def align_scale(pred, gt, mask):
-    """Least-squares scalar c s.t. c*pred ≈ gt over mask."""
+    """Least-squares scalar c s.t. c*pred ~ gt over mask."""
     p_flat = pred.reshape(-1)[mask.reshape(-1) > 0]
     t_flat = gt.reshape(-1)[mask.reshape(-1) > 0]
     c = float(np.sum(p_flat * t_flat)) / (float(np.sum(p_flat * p_flat)) + 1e-6)
@@ -379,8 +379,8 @@ def _cd_iid_rmse(pred_t, gt_t, mask_t):
 
 # NOTE (2026-07-11): a least-squares single-scalar si-RMSE was tried here to match the Grosse/
 # Ordinal convention exactly, but ARAP GT albedo is stored as TINY-valued HDR (alley: max 0.0056),
-# so least-squares absorbs the whole pred↔GT scale gap and chrislib's plain rmse_error then reports
-# RMSE in those tiny absolute units → collapses to ~0.0015, scale-DEPENDENT on the arbitrary HDR
+# so least-squares absorbs the whole pred<->GT scale gap and chrislib's plain rmse_error then reports
+# RMSE in those tiny absolute units -> collapses to ~0.0015, scale-DEPENDENT on the arbitrary HDR
 # range. The mean-normalized _masked_scale_invariant_rmse is invariant to that GT scale and already
 # lands in the published ballpark (~0.29 vs their 0.25), so it is the robust choice here.
 #
@@ -481,9 +481,9 @@ def compute_diffuse_recon(pred_ad, pred_sd, albedo_gt, shading_gt):
     return float(np.mean(np.abs(_tm(pred_diffuse) - _tm(gt_diffuse))))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Visualization helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _tonemap_shading(img, scale=None):
     """Tonemap shading for display. If `scale` is given (a shared 90th-pct), use it so
@@ -535,7 +535,7 @@ def _display_input(img):
 
 
 def _cov_heat(cov_pix, mask):
-    """Auto-ranged CoV heatmap. Real albedo CoV is ~0.02–0.1, so clip(0,1) made the map
+    """Auto-ranged CoV heatmap. Real albedo CoV is ~0.02-0.1, so clip(0,1) made the map
     almost uniformly blue. Scale to the masked 95th percentile so flicker is visible,
     and leave masked-out pixels black."""
     vals = cov_pix[mask > 0]
@@ -563,7 +563,7 @@ def _annotate(img, text, pos=(3, 22)):
 
 
 def _scale_align_np(pred, gt, mask):
-    """Least-squares single scalar mapping pred→gt over masked pixels (same as the
+    """Least-squares single scalar mapping pred->gt over masked pixels (same as the
     metric's align_scale, in numpy). So the displayed pred matches the si-RMSE column."""
     m = (mask > 0).reshape(-1)
     if pred.ndim == 2:
@@ -617,9 +617,9 @@ def _make_contact_row(input_vis, a_gt, a_pred, s_gt, s_pred,
     return np.vstack([row, strip])
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Constancy helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _group_cases(cases):
     """Group (base, stem, ext) into {base: [(stem, ext), ...]} keeping multi-light scenes."""
@@ -686,9 +686,9 @@ def _illuminant_color_spread(frames, degenerate_ratio=0.15):
     return rgs, bgs, spread, is_degen
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Constancy evaluation (thesis primary)
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def eval_arap_constancy(args):
     """Cross-illumination constancy: C_arap, Cast_RMS, coloured/direction/degenerate breakdown."""
@@ -778,7 +778,7 @@ def eval_arap_constancy(args):
             # Standard-protocol white balance (Ordinal/CD-IID): reconstruct the scene under an
             # achromatic illuminant via I_wb = A* * luminance(I / A*). This ACTUALLY removes the
             # coloured illuminant; the previous `_hdr_norm` call here did not (it is a single
-            # scalar multiply and leaves chromaticity untouched — see _white_balance_gt).
+            # scalar multiply and leaves chromaticity untouched - see _white_balance_gt).
             # Off by default (thesis = raw coloured input, which exercises constancy).
             # NOTE: applied to LDR frames too. The old `and is_hdr` guard silently skipped every
             # .jpg/.png scene, so those were scored on raw input even with --white_balance set.
@@ -833,7 +833,7 @@ def eval_arap_constancy(args):
         if len(preds) < 2:
             continue
 
-        # ── C_arap: cross-light CoV of albedo luminance ────────────────
+        # -- C_arap: cross-light CoV of albedo luminance ----------------
         H, W = ref_hw
         stack = np.stack(preds, axis=0).astype(np.float32)  # (N, H, W, 3)
         gmean = stack.mean(axis=0)  # (H, W, 3)
@@ -856,7 +856,7 @@ def eval_arap_constancy(args):
         C_g = float(cov_pix[mask].mean())
         per_group_C.append(C_g)
 
-        # ── Cast: chroma drift ─────────────────────────────────────────
+        # -- Cast: chroma drift -----------------------------------------
         cov_dir = float(np.std(rg_vals) + np.std(bg_vals)) if len(rg_vals) >= 2 else 0.0
         rg = [float(preds[k][mask, 0].mean() / (preds[k][mask, 1].mean() + 1e-6))
               for k in range(len(preds))]
@@ -868,7 +868,7 @@ def eval_arap_constancy(args):
         per_group_cast.append(cast)
         per_group_spread.append(spread)
 
-        # ── Degeneracy guard: cast is an ABSOLUTE chroma variance, so a model that
+        # -- Degeneracy guard: cast is an ABSOLUTE chroma variance, so a model that
         # predicts flat grey albedo scores a perfect 0. Cast is therefore only
         # meaningful read against chroma fidelity vs the GT albedo (1.0 = faithful).
         # ARAP's GT albedo is mixed-scale (.hdr files peak near 0.005, .jpg near 255)
@@ -896,7 +896,7 @@ def eval_arap_constancy(args):
         per_group_degen.append(is_degen)
         per_group_base.append(base)
 
-        # ── GT accuracy ────────────────────────────────────────────────
+        # -- GT accuracy ------------------------------------------------
         t_mask = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0).unsqueeze(0)
         a_gt_t = torch.from_numpy(albedo_gt.astype(np.float32)).permute(2, 0, 1).unsqueeze(0)
         for p in preds:
@@ -913,7 +913,7 @@ def eval_arap_constancy(args):
             except Exception:
                 pass
 
-        # ── Visualization ──────────────────────────────────────────────
+        # -- Visualization ----------------------------------------------
         if args.save_dir:
             disp = inputs_tm[0] if inputs_tm else gmean
             preds_al = [_scale_align_np(p, albedo_gt, mask.astype(np.float32)) for p in preds]
@@ -954,7 +954,7 @@ def eval_arap_constancy(args):
             safe = base.lstrip('_').replace('/', '_')
             cv2.imwrite(os.path.join(args.save_dir, f'{safe}.png'), row)
 
-    # ── Sheet ───────────────────────────────────────────────────────────
+    # -- Sheet -----------------------------------------------------------
     if args.save_dir and per_group_rows:
         # Scale each row to the same width so the sheet has no black dead space.
         wmax = max(r.shape[1] for r in per_group_rows)
@@ -967,7 +967,7 @@ def eval_arap_constancy(args):
         sheet_path = os.path.join(args.save_dir, f'{label}_constancy_sheet.jpg')
         cv2.imwrite(sheet_path, sheet, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-    # ── Summary ─────────────────────────────────────────────────────────
+    # -- Summary ---------------------------------------------------------
     C_arap = float(np.nanmean(per_group_C)) if per_group_C else float('nan')
     Cast_RMS = float(np.nanmean(per_group_cast)) if per_group_cast else float('nan')
     a_rmse = float(np.nanmean(all_a_rmse)) if all_a_rmse else float('nan')
@@ -982,7 +982,7 @@ def eval_arap_constancy(args):
     print(f'Groups evaluated : {len(per_group_C)}')
     print(f'C_arap (cross-light CoV)   : {C_arap:.4f}   [LOWER = more invariant]')
     print(f'Cast_RMS (chroma drift)    : {Cast_RMS:.4f}   [LOWER = less cast leak]')
-    print(f'  Sat_ratio (pred/GT sat)  : {Sat_ratio:.4f}   [DEGENERACY GUARD — 1.0 = faithful, '
+    print(f'  Sat_ratio (pred/GT sat)  : {Sat_ratio:.4f}   [DEGENERACY GUARD - 1.0 = faithful, '
           f'<1 = colour collapsed; Cast_RMS is trivially won by a flat grey albedo, so it is '
           f'only meaningful read together with this]')
     print(f'  Chroma_err vs GT         : {Chroma_err:.4f}   [LOWER = truer albedo hue]')
@@ -992,7 +992,7 @@ def eval_arap_constancy(args):
 
     # Colored vs direction breakdown
     thr = getattr(args, 'color_spread_thr', 0.15)
-    print(f'  ── colored-illuminant breakdown (spread thr={thr}) ──')
+    print(f'  -- colored-illuminant breakdown (spread thr={thr}) --')
     colored_sel = [not d and s >= thr for d, s in zip(per_group_degen, per_group_spread)]
     direction_sel = [not d and s < thr for d, s in zip(per_group_degen, per_group_spread)]
     degen_sel = per_group_degen
@@ -1010,7 +1010,7 @@ def eval_arap_constancy(args):
     b_n, b_carap, b_cast = _bin(degen_sel)
 
     print(f'  COLORED   (light color varies) n={c_n}: C_arap={c_carap:.4f}  '
-          f'Cast_RMS={c_cast:.4f}   ← thesis axis')
+          f'Cast_RMS={c_cast:.4f}   <- thesis axis')
     print(f'  DIRECTION (intensity/dir only) n={d_n}: C_arap={d_carap:.4f}  Cast_RMS={d_cast:.4f}')
     print(f'  DEGENERATE (unobservable chan) n={b_n}: C_arap={b_carap:.4f}   (reported, excluded from above)')
     if per_group_degen:
@@ -1061,22 +1061,22 @@ def eval_arap_constancy(args):
         os.makedirs(os.path.dirname(json_path), exist_ok=True)
         with open(json_path, 'w') as f:
             json.dump(data, f, indent=2)
-        print(f'→ appended to {json_path}  (key: {json_key}')
+        print(f'-> appended to {json_path}  (key: {json_key}')
 
     return summary
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Full eval (per-image metrics + contact sheets)
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def eval_arap(args):
     device = resolve_device(args.device, getattr(args, 'cuda_index', None))
 
     print('\n=============================================')
-    mode = 'WHITE-BALANCED input (Ordinal Shading protocol — illuminant cast removed)' \
+    mode = 'WHITE-BALANCED input (Ordinal Shading protocol - illuminant cast removed)' \
            if getattr(args, 'white_balance', False) else \
-           'RAW colored input (default — exercises cross-illumination constancy)'
+           'RAW colored input (default - exercises cross-illumination constancy)'
     print(f'Evaluating: {args.checkpoint}')
     print(f'Input mode: {mode}')
     print('=============================================')
@@ -1088,7 +1088,7 @@ def eval_arap(args):
     is_ordinal = _is_ordinal_version(version_arg)
     if is_marigold:
         if version_arg == 'marigold-appearance':
-            print('Note: appearance model — pseudo shading I/A will be used.')
+            print('Note: appearance model - pseudo shading I/A will be used.')
         pipe = _load_marigold_pipeline(args.checkpoint, device)
         print(f'Loaded Marigold {version_arg} from {args.checkpoint}')
         model = pipe
@@ -1111,8 +1111,8 @@ def eval_arap(args):
     else:
         model = _load_model_versioned(args.checkpoint, version_arg, device)
         inferred_version = version_arg
-        version_int = int(version_arg) if str(version_arg).isdigit() else 17
-        print(f'Loaded V{inferred_version} model from {args.checkpoint}')
+        version_int = None
+        print(f'Loaded our model from {args.checkpoint}')
 
     dataset_dir = args.dataset_dir
     cases = get_arap_cases(dataset_dir)
@@ -1228,7 +1228,7 @@ def eval_arap(args):
         # 4 unscaled), so it keeps a median 1.5% of the frame on the /179 group against
         # ~99% on the others -- a 68x coverage spread, with 6 scenes fully empty. That
         # biases every masked metric here (LMSE, RMSE, si-RMSE, SSIM), not just SSIM.
-        # See documents/history/DEVELOPMENT_HISTORY.md, section 5 (ARAP encodings).
+        # See the private development history, section 5 (ARAP encodings).
         #
         # --canonical_mask canonicalises the GT to a [0,1] reflectance range and
         # thresholds relative to canonical white, making coverage encoding-invariant.
@@ -1325,7 +1325,7 @@ def eval_arap(args):
         sheet = np.vstack(padded)
         sheet_path = os.path.join(save_dir, f'{Path(args.checkpoint).name}_arap_sheet.jpg')
         cv2.imwrite(sheet_path, sheet, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        print(f'Contact sheet saved → {sheet_path}')
+        print(f'Contact sheet saved -> {sheet_path}')
 
     if N == 0:
         print('No images evaluated.')
@@ -1355,9 +1355,9 @@ def eval_arap(args):
               f'  total {sum(all_infer_ms)/1000.0:.1f} s)')
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # CLI
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -1376,7 +1376,7 @@ if __name__ == '__main__':
     parser.add_argument('--color_spread_thr', type=float, default=0.15)
     parser.add_argument('--max_vis', type=int, default=12,
                         help='Save contact rows for at most this many cases/groups '
-                             '(ALL cases are still scored — this only caps visualization '
+                             '(ALL cases are still scored - this only caps visualization '
                              'output to keep sheets readable and fast). Default 12.')
     parser.add_argument('--white_balance', action='store_true')
     parser.add_argument('--ordinal_si_rmse', action='store_true',
@@ -1393,7 +1393,7 @@ if __name__ == '__main__':
                              'absolute alb_lum>0.004 threshold, which is encoding-'
                              'dependent and keeps a median 1.5%% of the frame on the 40 '
                              '/179-encoded scenes vs ~99%% elsewhere (6 fully empty). '
-                             'See documents/history/DEVELOPMENT_HISTORY.md, section 5.')
+                             'See the private development history, section 5.')
     parser.add_argument('--mask_frac', type=float, default=0.02,
                         help='Mask threshold as a fraction of canonical white, '
                              'used with --canonical_mask.')

@@ -1,7 +1,7 @@
 # Stage A: phases 1-2 only (Hypersim, then + InteriorVerse). No pairs are seen.
-# The 19k checkpoint of this run is the shared starting point of Table A and Study 1;
+# The 19k checkpoint of this run is the shared starting point of the ablation;
 # stop the run there.
-extends: '17'
+extends: rgb_shading
 train:
   extend_iterations: 40000
   checkpoint_interval_iters: 1000

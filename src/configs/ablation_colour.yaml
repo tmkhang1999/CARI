@@ -1,5 +1,5 @@
-# Table A, row 3: colour path on, CIAI off. Resumes the 19k Stage-A checkpoint.
-extends: 17
+# Ablation, row 3: colour path on, CIAI off. Resumes the 19k Stage-A checkpoint.
+extends: rgb_shading
 train:
   skip_optimizer: false
 loss:

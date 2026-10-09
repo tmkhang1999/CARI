@@ -1,4 +1,4 @@
-"""V21 tri-factor intrinsic decomposition model.
+"""TriFactorNet: the next model, I = A * (S_lum * C) + R.
 
 The three trainable decoders have explicit ownership:
   luminance head -> scalar shading intensity S_lum,
@@ -7,7 +7,7 @@ The three trainable decoders have explicit ownership:
 
 The physical image formation is I = A_d * (S_lum * C) + R. Residual R is
 signed and analytic; it is not a fourth decoder. This module is isolated from
-V17 so prior ablation checkpoints and behavior remain unchanged.
+RGBShadingNet so the ablation checkpoints and behavior remain unchanged.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import torch.nn as nn
 
 from .decoders.dpt_decoder import DPTTrunk
 from .encoders.dino_encoder import DINOv2Encoder
-from .v17 import DecodeHead
+from .rgb_shading_net import DecodeHead
 
 
 def luminance(rgb: torch.Tensor) -> torch.Tensor:
@@ -45,7 +45,7 @@ def chroma_from_uv(uv: torch.Tensor) -> torch.Tensor:
     return chroma / luminance(chroma).clamp_min(1e-4)
 
 
-class IntrinsicDecompositionV21(nn.Module):
+class TriFactorNet(nn.Module):
     def __init__(self, config: dict):
         super().__init__()
         self.log_shading_limit = float(config.get("log_shading_limit", 6.0))

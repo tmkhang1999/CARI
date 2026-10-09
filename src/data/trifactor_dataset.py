@@ -1,4 +1,4 @@
-"""Data for V21 training: the 3D-Front-IID v2 loader and one collatable target schema.
+"""Data for training the trifactor model: the 3D-Front-IID v2 loader and one collatable target schema.
 
 Every sample carries the second illumination (`rgb2`), the pixels valid in both frames,
 and `pair_gap`, the illuminant chromaticity gap of the pair (-1 when unknown), which gates
@@ -157,8 +157,8 @@ class Front3DV2Dataset(Dataset):
         return output
 
 
-class V21SampleAdapter(Dataset):
-    """Convert every legacy IID dataset to one collatable V21 target schema."""
+class TriFactorSampleAdapter(Dataset):
+    """Convert every legacy IID dataset to one collatable trifactor target schema."""
 
     def __init__(self, dataset: Dataset, source_id: int) -> None:
         self.dataset = dataset
@@ -215,7 +215,7 @@ class V21SampleAdapter(Dataset):
         }
 
 
-def build_v21_datasets(config: dict, split: str = "train") -> dict[str, Dataset]:
+def build_trifactor_datasets(config: dict, split: str = "train") -> dict[str, Dataset]:
     """Instantiate only datasets with a positive configured sampling weight."""
     data = config["data"]
     train = config["train"]
@@ -240,7 +240,7 @@ def build_v21_datasets(config: dict, split: str = "train") -> dict[str, Dataset]
             load_geometry=False,
             load_normals=False,
         )
-        datasets["hypersim"] = V21SampleAdapter(base, source_id)
+        datasets["hypersim"] = TriFactorSampleAdapter(base, source_id)
         source_id += 1
         if split == "val":
             return datasets
@@ -252,7 +252,7 @@ def build_v21_datasets(config: dict, split: str = "train") -> dict[str, Dataset]
             root_dir=data["interiorverse_root"], split=split, input_size=input_size,
             crop_mode_train="hybrid", crop_mode_val="center"
         )
-        datasets["interiorverse"] = V21SampleAdapter(base, source_id)
+        datasets["interiorverse"] = TriFactorSampleAdapter(base, source_id)
         source_id += 1
 
     if weights.get("midintrinsic", 0) > 0:
@@ -263,16 +263,16 @@ def build_v21_datasets(config: dict, split: str = "train") -> dict[str, Dataset]
             crop_mode_train="hybrid", crop_mode_val="center",
             use_paired=split == "train", pair_mode="raw", raw_color_pair=True,
         )
-        datasets["midintrinsic"] = V21SampleAdapter(base, source_id)
+        datasets["midintrinsic"] = TriFactorSampleAdapter(base, source_id)
         source_id += 1
 
     if weights.get("front3d_v2", 0) > 0:
         base = Front3DV2Dataset(
             root_dir=data["front3d_v2_root"], split=split, input_size=input_size
         )
-        datasets["front3d_v2"] = V21SampleAdapter(base, source_id)
+        datasets["front3d_v2"] = TriFactorSampleAdapter(base, source_id)
 
     empty = [name for name, dataset in datasets.items() if len(dataset) == 0]
     if empty:
-        raise RuntimeError(f"V21 datasets are empty: {empty}")
+        raise RuntimeError(f"trifactor datasets are empty: {empty}")
     return datasets

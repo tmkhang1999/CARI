@@ -250,8 +250,8 @@ predicted albedo side by side.
     be distinguished by eye from one that has simply had its colour removed. The diffusion
     baselines whiten these interiors considerably more aggressively than we do, and on this
     evidence alone one might read that as a better decomposition. The MID pseudo-GT
-    calibration in \tabref{tab:mid} shows the ambiguity: Marigold-App and CRefNet retain
-    $72.8\%$ and $48.4\%$ of the reference chroma spread, against our $94.1\%$.
+    calibration in \tabref{tab:mid} shows the ambiguity: Marigold-App and CRefNet have a
+    chroma error of $0.195$ and $0.201$ against the pseudo-ground truth, against our $0.129$.
     This figure shows method behaviour; it cannot establish correctness on IIW.
   }
   \label{fig:comp_grid}
@@ -386,8 +386,8 @@ an accuracy number. The external accuracy measure is MAW (\secref{sec:maw_result
 CIEDE2000 error against physically measured albedo, comparable with published tables.
 It is not sufficient here on its own, for two reasons. It scores different photographs,
 one illumination each, so it cannot tell whether the very frames on which stability was
-measured were washed out; and it does not reliably register desaturation. CRefNet, which
-keeps less than half of the reference chroma spread on MID, scores a MAW $\Delta E$ of
+measured were washed out; and it does not reliably register desaturation. CRefNet, whose albedo
+is visibly pale on MID, scores a MAW $\Delta E$ of
 $3.970$, better than our model's $4.155$, although MAW does separate our own
 desaturated ablation row from its colour-preserving counterpart ($4.631$ against $4.155$).
 We therefore add an in-domain accuracy measure on the same MID frames, the mean
@@ -414,28 +414,6 @@ MID's capture stack, and both our model and CD-IID train on MIDIntrinsics.
   \label{fig:metric_card_chromaerr}
 \end{figure}
 
-For diagnosis only, we also quote the ratio of the between-material chroma spread of a
-prediction to that of the reference,
-\begin{equation}
-  \text{spread ratio} \;=\; \frac{S(A)}{S(A^{*})} ,
-  \label{eq:chromafid}
-\end{equation}
-computed as the ratio of aggregate spreads over the test split. It is not an accuracy
-measure (a permutation of hues preserving the spread would score $1$), but it makes
-desaturation visible as a value well below $1$ (\figref{fig:metric_card_spread}).
-
-\begin{figure}[t!]
-  \centering
-  \includegraphics[width=0.72\textwidth]{images/losses/metric_card_spread.png}
-  \caption[Spread ratio: materials keep different colours.]{%
-    The spread ratio compares the chroma spread of the predicted materials with that of the
-    reference. A faithful prediction keeps different materials at different colours (ratio
-    near $1$); a desaturated one collapses them towards grey (ratio well below $1$), which
-    would also make it look stable.
-  }
-  \label{fig:metric_card_spread}
-\end{figure}
-
 $C_{\text{mat}}$ and $\text{Cast}_{\text{rel}}$ are lower-is-better and both vanish for
 a perfectly illuminant-invariant prediction. They are reported separately, rather than
 combined, because they can move in opposite directions: $C_{\text{mat}}$ is a lightness
@@ -460,26 +438,25 @@ locally evaluated models under one pipeline and makes no zero-shot claim.
     error against the pseudo-ground truth. Lower is better for all three. Red, orange,
     and yellow mark first, second, and third numerical rank; the bootstrap intervals and
     the paired tests of \tabref{tab:mid_paired}, not the colour fill, decide whether a
-    difference is supported. The spread ratio (\eqnref{eq:chromafid}) is a desaturation
-    diagnostic and is not ranked. These are our own measures, so no published method
+    difference is supported. These are our own measures, so no published method
     reports comparable values; every row is evaluated locally under one pipeline.
   }
   \label{tab:mid}
   \centering
   \small
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{@{}lcccc@{}}
+  \begin{tabular}{@{}lccc@{}}
     \toprule
     Model & $C_{\text{mat}}$ $\downarrow$ & $\text{Chroma}_{\text{err}}$ $\downarrow$
-          & $\text{Cast}_{\text{rel}}$ $\downarrow$ & Spread ratio (diag.) \\
+          & $\text{Cast}_{\text{rel}}$ $\downarrow$ \\
     \midrule
-    Ours                                       & \rankthree{0.157\,{\scriptsize[.141,.174]}} & \ranktwo{0.129\,{\scriptsize[.109,.150]}} & 0.425\,{\scriptsize[.360,.491]} & 0.999 \\
-    CD-IID \mycite{careaga24cdiid}             & 0.190\,{\scriptsize[.172,.210]} & \rankone{0.090\,{\scriptsize[.073,.110]}} & \rankone{0.306\,{\scriptsize[.262,.355]}} & 0.944 \\
-    RGB$\rightarrow$X \mycite{zeng24rgbx}      & \rankone{0.128\,{\scriptsize[.115,.141]}} & 0.203\,{\scriptsize[.170,.239]} & \ranktwo{0.338\,{\scriptsize[.273,.409]}} & 0.907 \\
-    Marigold-App \mycite{marigoldiid24}        & 0.193\,{\scriptsize[.173,.214]} & 0.195\,{\scriptsize[.152,.245]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} & 0.728 \\
-    Marigold-Light \mycite{marigoldiid24}      & 0.546\,{\scriptsize[.462,.645]} & 0.154\,{\scriptsize[.124,.187]} & 0.392\,{\scriptsize[.333,.459]} & 1.148 \\
-    CRefNet \mycite{luo23crefnet}              & \ranktwo{0.151\,{\scriptsize[.138,.164]}} & 0.201\,{\scriptsize[.165,.241]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} & 0.484 \\
-    Ordinal Shading \mycite{careaga23ordinal}  & 0.252\,{\scriptsize[.229,.279]} & \rankthree{0.148\,{\scriptsize[.130,.166]}} & 0.549\,{\scriptsize[.463,.637]} & 0.924 \\
+    Ours                                       & \rankthree{0.157\,{\scriptsize[.141,.174]}} & \ranktwo{0.129\,{\scriptsize[.109,.150]}} & 0.425\,{\scriptsize[.360,.491]} \\
+    CD-IID \mycite{careaga24cdiid}             & 0.190\,{\scriptsize[.172,.210]} & \rankone{0.090\,{\scriptsize[.073,.110]}} & \rankone{0.306\,{\scriptsize[.262,.355]}} \\
+    RGB$\rightarrow$X \mycite{zeng24rgbx}      & \rankone{0.128\,{\scriptsize[.115,.141]}} & 0.203\,{\scriptsize[.170,.239]} & \ranktwo{0.338\,{\scriptsize[.273,.409]}} \\
+    Marigold-App \mycite{marigoldiid24}        & 0.193\,{\scriptsize[.173,.214]} & 0.195\,{\scriptsize[.152,.245]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} \\
+    Marigold-Light \mycite{marigoldiid24}      & 0.546\,{\scriptsize[.462,.645]} & 0.154\,{\scriptsize[.124,.187]} & 0.392\,{\scriptsize[.333,.459]} \\
+    CRefNet \mycite{luo23crefnet}              & \ranktwo{0.151\,{\scriptsize[.138,.164]}} & 0.201\,{\scriptsize[.165,.241]} & \rankthree{0.355\,{\scriptsize[.309,.406]}} \\
+    Ordinal Shading \mycite{careaga23ordinal}  & 0.252\,{\scriptsize[.229,.279]} & \rankthree{0.148\,{\scriptsize[.130,.166]}} & 0.549\,{\scriptsize[.463,.637]} \\
     \bottomrule
   \end{tabular}}
 \end{table}
@@ -493,8 +470,7 @@ significant for four of the five. CD-IID leads the column at $0.306$.
 
 It does not lead chroma accuracy either. Its $\text{Chroma}_{\text{err}}$ of $0.129$ is second
 to CD-IID's $0.090$, and that gap is significant ($+0.039\,[+0.022, +0.057]$). CD-IID reaches
-better accuracy \emph{and} better hue stability while keeping its colour (spread ratio
-$0.944$), so low hue drift is not only reachable by desaturating.
+better accuracy \emph{and} better hue stability while keeping its colour, so low hue drift is not only reachable by desaturating.
 
 On lightness, our model is significantly more stable than CD-IID, both Marigold variants and
 Ordinal Shading, level with CRefNet ($+0.007\,[-0.004, +0.019]$), and significantly less stable
@@ -532,10 +508,10 @@ rests.
 \end{table}
 
 Reading stability and accuracy together separates three behaviours among the seven rows.
-CRefNet is \emph{stable but colourless}: a low $\text{Cast}_{\text{rel}}$ next to a spread
-ratio of $0.484$. RGB$\rightarrow$X is \emph{colourful but miscalibrated}: it keeps most of
-the spread ($0.907$) but on the wrong hues, with the worst $\text{Chroma}_{\text{err}}$ in the
-table ($0.203$). CD-IID is good on both. No single number captures all three, which is why
+CRefNet is \emph{stable but pale}: a low $\text{Cast}_{\text{rel}}$ next to a high
+$\text{Chroma}_{\text{err}}$ ($0.201$) and a visibly washed-out albedo (\figref{fig:comp_grid}).
+RGB$\rightarrow$X is \emph{colourful but miscalibrated}: it keeps strong colours but on the
+wrong hues, with the worst $\text{Chroma}_{\text{err}}$ in the table ($0.203$). CD-IID is good on both. No single number captures all three, which is why
 we never report stability without accuracy.
 
 Our model trains $18.5$M parameters against CD-IID's $442.8$M --- every stage of which is
@@ -544,11 +520,6 @@ $0.254$\,s and $0.8$--$1.0$\,s (\tabref{tab:methods}). The saving is in weights 
 optimised, not in deployed size: the frozen backbone leaves us at $322.9$M total, only
 $1.4\times$ below CD-IID.
 
-\figref{fig:chroma_fidelity} shows the desaturation failure directly. Beside the pseudo-GT
-albedo, our own colour-path-off configuration and CRefNet are visibly drained of colour,
-while our model follows the reference more closely; these are also the two predictions that
-the pooled score of \eqnref{eq:castrms} would have ranked best.
-
 \input{./chapters/fig_tradeoff}
 
 \figref{fig:tradeoff} plots hue stability against pseudo-GT chroma error for the roster.
@@ -556,25 +527,6 @@ Lower is better on both axes. CRefNet and Marigold-App drift less than our model
 substantially higher chroma error, and the colour-path-off ablation sits in the same
 high-error region; CD-IID is best on both axes.
 
-\begin{figure}[t!]
-  \centering
-  \includegraphics[width=\textwidth]{images/chroma_fidelity/chroma_fidelity.jpg}
-  \caption[MID chroma calibration and spread-collapse diagnostic.]{%
-    Chroma diagnostics on two distinct MIDIntrinsics test scenes and illuminant
-    conditions (one row each). From left: the input, pseudo-GT albedo (red
-    border), and four predictions. Albedo is defined only up to a global scale,
-    so every panel is independently scale-normalised for display; no colour correction is applied,
-    so the differences in saturation are differences in the predictions themselves.
-    Values below each column are measured over the full 30-scene test split:
-    $\text{Chroma}_{\text{err}}$ is the pseudo-GT calibration guard and the aggregate
-    spread ratio diagnoses collapse. The colour-path-off row and CRefNet both retain
-    $48.4\%$ of pseudo-GT chroma spread and have error 0.201. The ``Ours'' column of this
-    figure was rendered with a later checkpoint trained for 20k further steps with additional
-    regularisers (printed values 0.121 and $94.1\%$); the reported model retains $99.9\%$ with
-    error 0.129. The figure will be regenerated with the reported model.
-  }
-  \label{fig:chroma_fidelity}
-\end{figure}
 
 \figref{fig:mid_constancy} shows a qualitative example.
 Each column is a different flash direction for the same scene, and the variation map
@@ -1089,31 +1041,29 @@ All rows are single training runs, so small differences should not be read as ef
     (\secref{sec:arap_results});
     Part~2a measured-albedo accuracy, the
     GT-achromatized ARAP guard and ancillary IIW ordering; Part~2b raw-input ARAP accuracy.
-    Lower is better everywhere except ARAP SSIM, and the aggregate spread ratio, whose
-    target is $1.000$. Best per column is \textbf{bold}.
+    Lower is better everywhere except ARAP SSIM. Best per column is \textbf{bold}.
     \figref{fig:ablation} shows the corresponding albedo and variation maps.
   }
   \label{tab:ablation}
   \centering
   \textbf{\small Part 1: Raw-input constancy (self-consistency across illuminants)}\\[2pt]
   \resizebox{\textwidth}{!}{%
-  \begin{tabular}{@{}lllcccccc@{}}
+  \begin{tabular}{@{}lllccccc@{}}
     \toprule
-    & & & \multicolumn{4}{c}{MID (30 scenes)} & ARAP all & ARAP indoor \\
-    \cmidrule(lr){4-7}\cmidrule(lr){8-8}\cmidrule(l){9-9}
+    & & & \multicolumn{3}{c}{MID (30 scenes)} & ARAP all & ARAP indoor \\
+    \cmidrule(lr){4-6}\cmidrule(lr){7-7}\cmidrule(l){8-8}
     Row & Cross-illumination & Colour path
         & $C_{\text{mat}}$ $\downarrow$ & $\text{Cast}_{\text{rel}}$ $\downarrow$
-        & $\text{Chroma}_{\text{err}}$ $\downarrow$ & Spread ratio ($\to 1$)
+        & $\text{Chroma}_{\text{err}}$ $\downarrow$
         & $C_{\text{arap}}$ $\downarrow$ & $C_{\text{arap}}$ $\downarrow$ \\
     \midrule
-    1 & off & off & 0.250 & 0.477 & 0.186 & 0.512 & 0.164 & 0.122 \\
-    2 & on  & off & 0.180 & 0.447 & 0.201 & 0.484 & \textbf{0.145} & \textbf{0.108} \\
-    3 & off & on  & 0.259 & 0.444 & \textbf{0.124} & 0.925 & 0.155 & 0.117 \\
-    4 & on  & on  & \textbf{0.157} & \textbf{0.425} & 0.129 & \textbf{0.999} & 0.154 & 0.119 \\
+    1 & off & off & 0.250 & 0.477 & 0.186 & 0.164 & 0.122 \\
+    2 & on  & off & 0.180 & 0.447 & 0.201 & \textbf{0.145} & \textbf{0.108} \\
+    3 & off & on  & 0.259 & 0.444 & \textbf{0.124} & 0.155 & 0.117 \\
+    4 & on  & on  & \textbf{0.157} & \textbf{0.425} & 0.129 & 0.154 & 0.119 \\
     \bottomrule
   \end{tabular}}\\[3pt]
-  {\footnotesize MID spread ratios use the ratio of aggregate predicted and pseudo-GT
-  spreads, not the biased mean of per-scene ratios. The pooled ARAP
+  {\footnotesize The pooled ARAP
   $\text{Cast}_{\text{RMS}}$ columns are omitted for the reason given under
   \tabref{tab:arap_constancy}: an absolute chroma variance is minimised as effectively by a
   colourless albedo as by an invariant one. The MID fidelity metrics cannot replace them on
@@ -1181,9 +1131,9 @@ external accuracy guards.
 
 \paragraph{The colour path}
 The colour path is a design choice of the base model, not part of CIAI. The rows without it
-keep about half of the pseudo-GT chroma spread whether CIAI is off (Row~1, $0.512$) or on
-(Row~2, $0.484$); the rows with it keep $0.925$ and $0.999$, and have lower
-$\text{Chroma}_{\text{err}}$ and better MAW colour, Row~3 obtaining the best $\Delta E$
+come out visibly pale (\figref{fig:ablation}) and have a higher $\text{Chroma}_{\text{err}}$
+whether CIAI is off (Row~1, $0.186$) or on (Row~2, $0.201$); the rows with it reach $0.124$ and
+$0.129$ and have better MAW colour, Row~3 obtaining the best $\Delta E$
 ($4.115$) and intensity score ($0.395$). This is a descriptive comparison: the bundle
 changes chroma supervision, head parameters, optimiser state and effective learning-rate
 history at once, so it does not isolate the skip from the chroma loss. Row~4 is the most
@@ -1206,7 +1156,7 @@ values, but they should be confirmed once ARAP is regenerated.
 
 \paragraph{Why Row 4 is our model}
 Row~4 is the complete CIAI configuration: the most stable of the four rows on both MID
-measures, the full pseudo-GT chroma spread (ratio $0.999$), and the lowest raw-input ARAP
+measures, and the lowest raw-input ARAP
 error with the colour path. Its weaknesses, a slightly higher $\text{Chroma}_{\text{err}}$ than
 Row~3 (0.129 against 0.124) and a worse MAW score (4.155 against 4.115 $\Delta E$, 0.504 against
 0.395 intensity), are reported in \tabref{tab:ablation} and in \secref{sec:maw_results}.
@@ -1244,7 +1194,7 @@ Row~3 (0.129 against 0.124) and a worse MAW score (4.155 against 4.115 $\Delta E
 
 The results so far share a pattern: CIAI improves lightness stability substantially and hue
 stability barely. This is expected for two reasons. First, $\mathcal{L}_{\text{expl}}$ uses
-luminance only (\secref{sec:cari}), so nothing in CIAI states where a change in illuminant
+luminance only (\secref{sec:ciai}), so nothing in CIAI states where a change in illuminant
 colour must go. Second, MID's illumination changes little in colour. This section measures
 the second point and checks whether our hue drift follows the illuminant colour.
 
@@ -1310,19 +1260,10 @@ the bottom one; a ratio of $1$ means the drift does not follow illuminant colour
   \end{tabular}
 \end{table}
 
-\tabref{tab:colour_strat} gives two readings. Our model's hue drift rises by $43\%$ on the
-scenes where the illuminant colour moves most, as much as CRefNet's, whose grey shading
-cannot represent a coloured light at all; CIAI's small hue gain in the ablation
-(\secref{sec:ablation}) has not removed this dependence. And CD-IID, the one method with a dedicated shading-chroma stage, shows no dependence on
-illuminant colour ($1.02$) while keeping its albedo colour (spread ratio $0.944$). MID's
-narrow colour range makes this a low-powered test, but the contrast is large and
-consistent.
-
 \tabref{tab:colour_strat} shows that our model's hue drift rises by $43\%$ on the scenes where
 the illuminant colour moves most, as much as CRefNet's, whose grey shading cannot represent a
 coloured light at all; CIAI's small hue gain in the ablation (\secref{sec:ablation}) has not
 removed this dependence. CD-IID, the one method with a dedicated shading-chroma stage, shows
-no dependence on illuminant colour ($1.02$) while keeping its albedo colour (spread ratio
-$0.944$). MID's narrow colour range makes this a low-powered test, but it agrees with the
+no dependence on illuminant colour ($1.02$) while keeping its albedo colour. MID's narrow colour range makes this a low-powered test, but it agrees with the
 ablation. Colour stability therefore needs a model that predicts the shading colour
 separately, which is the plan of \chapref{ch:conclusion}.

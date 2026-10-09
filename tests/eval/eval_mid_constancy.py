@@ -4,7 +4,7 @@ Metrics (lower = more invariant):
   C_mat       : within-material CoV of albedo luminance across lighting conditions
   R_cast_rg   : std of R/G ratio across lightings (per-material, scene-averaged)
   R_cast_bg   : std of B/G ratio across lightings (per-material, scene-averaged)
-  Cast_RMS    : sqrt(R_cast_rg^2 + R_cast_bg^2) — combined chroma cast
+  Cast_RMS    : sqrt(R_cast_rg^2 + R_cast_bg^2) - combined chroma cast
   M_albedo    : scale-invariant log-MSE vs GT albedo (in-domain models only)
   sat_bin_mae : per-saturation-quartile albedo MAE (in-domain only)
 """
@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
-from src.models import IntrinsicDecompositionV17
+from src.models import RGBShadingNet
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
 
 _MARIGOLD_PATH = ROOT / 'documents/references/marigold'
@@ -96,19 +96,17 @@ def _ensure_rgbx_imported():
     _load_rgbx, _run_rgbx = load_rgbx, run_rgbx
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Model loading
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
-def load_v17(ckpt_path, device):
-    """Load a V17 or V20 checkpoint with shape-filtered state dict."""
+def load_ours(ckpt_path, device):
+    """Load one of our RGB-shading checkpoints with a shape-filtered state dict."""
     state = torch.load(ckpt_path, map_location='cpu')
     cfg = state.get('config', {})
     model_cfg = cfg.get('model', {})
-    version_value = float(model_cfg.get('version', 17))
-    version = int(version_value)
 
-    model = IntrinsicDecompositionV17(model_cfg).to(device)
+    model = RGBShadingNet(model_cfg).to(device)
 
     ms = state.get('model_state_dict', state.get('model', {}))
     own = model.state_dict()
@@ -131,12 +129,12 @@ def _load_marigold(ckpt_path, device):
     return pipe
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Predictor wrapper
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 class AlbedoPredictor:
-    """Unified interface for V17, V20, Marigold, CRefNet, and Ordinal Shading models."""
+    """Unified interface for our model and the external baselines."""
 
     def __init__(self, ckpt_path: str, version, device, infer_max_size=None):
         self.version = version
@@ -169,16 +167,16 @@ class AlbedoPredictor:
             _ensure_rgbx_imported()
             self.model = _load_rgbx(device)
         else:
-            self.model = load_v17(ckpt_path, device)
+            self.model = load_ours(ckpt_path, device)
             self.pipe = None
 
     def albedo(self, rgb_tm: np.ndarray) -> np.ndarray:
         """rgb_tm: (H,W,3) tonemapped [0,1] LINEAR. Returns (H,W,3) albedo [0,1]."""
         if self.is_marigold:
-            # Encode linear → sRGB for Marigold input
+            # Encode linear -> sRGB for Marigold input
             # BUG FIX (2026-07-13): processing_res was never passed, so Marigold
             # ignored --infer-max-size and processed at its own internal default
-            # (768) regardless of our requested cap, unlike CRefNet/Ordinal/v17
+            # (768) regardless of our requested cap, unlike CRefNet/Ordinal/ours
             # below, which all honour self.infer_max_size. match_input_res=True
             # (the pipeline default) still returns at native (H,W).
             from marigold_adapter import marigold_albedo_hwc_linear
@@ -219,25 +217,25 @@ class AlbedoPredictor:
             return a
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Frame utilities
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _raw_frame(scene_path, idx):
     """Load one raw EXR frame WITHOUT white-balancing, returned as RGB float32.
     The model was trained with mid_raw_color_pair=true (raw pairs), so eval must also
     use raw frames.  WB erases the colored-illuminant signal the model was trained to see.
-    Returns RGB (matches the training dataset loader which also flips BGR→RGB)."""
+    Returns RGB (matches the training dataset loader which also flips BGR->RGB)."""
     img_p = os.path.join(scene_path, f'dir_{idx}_mip2.exr')
     img = cv2.imread(img_p, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
     if img is None:
         raise FileNotFoundError(f'Missing EXR: {img_p}')
-    return img[:, :, ::-1].astype(np.float32)  # BGR→RGB
+    return img[:, :, ::-1].astype(np.float32)  # BGR->RGB
 
 
 def _wb_frame(scene_path, idx):
     """Load and white-balance one raw EXR frame using its gray probe.
-    DEPRECATED for V17/V20 eval — use _raw_frame instead."""
+    DEPRECATED for our model - use _raw_frame instead."""
     img_p = os.path.join(scene_path, f'dir_{idx}_mip2.exr')
     prb_p = os.path.join(scene_path, 'probes', f'dir_{idx}_gray256.exr')
 
@@ -265,7 +263,7 @@ def _tonemap_frame(rgb_linear):
 
 
 def _hdr_valid(rgb, lo_pct, hi_pct):
-    """(H,W) float32 {0,1} — exclude specular tail + deep shadow in linear HDR."""
+    """(H,W) float32 {0,1} - exclude specular tail + deep shadow in linear HDR."""
     lum = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
     lum = np.clip(lum, 0.0, None)
     pos = lum > 0.005
@@ -275,7 +273,7 @@ def _hdr_valid(rgb, lo_pct, hi_pct):
 
 
 def _run_inference(model, rgb_tm, device):
-    """Run V17/V20 on a tonemapped [0,1] HWC RGB.  Returns dict of CHW tensors on CPU."""
+    """Run our model on a tonemapped [0,1] HWC RGB.  Returns dict of CHW tensors on CPU."""
     t = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float().to(device)
     with torch.no_grad():
         out = model(t)
@@ -283,7 +281,7 @@ def _run_inference(model, rgb_tm, device):
 
 
 def _lmse(pred, gt, mask):
-    """Scale-invariant log-MSE: regress log(pred)*s ≈ log(gt), return residual MSE."""
+    """Scale-invariant log-MSE: regress log(pred)*s ~ log(gt), return residual MSE."""
     eps = 0.0001
     p = np.log(np.clip(pred, eps, None))
     g = np.log(np.clip(gt, eps, None))
@@ -296,9 +294,9 @@ def _lmse(pred, gt, mask):
     return float(np.mean((s * p_m - g_m) ** 2))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Per-scene evaluation
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def eval_scene(scene_path, predictor, device, skip_list=()):
     """Evaluate one MID scene. Returns metrics dict or None if insufficient data."""
@@ -306,7 +304,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
                          cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
     if alb_raw is None:
         return None
-    alb_raw = alb_raw[..., ::-1].copy().astype(np.float32)  # BGR→RGB
+    alb_raw = alb_raw[..., ::-1].copy().astype(np.float32)  # BGR->RGB
     alb_tm = _tonemap_frame(alb_raw)
 
     seg_path = os.path.join(scene_path, 'materials_mip2.png')
@@ -350,7 +348,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
     albedo_stack = np.stack(albedo_preds, axis=0)   # (N, H, W, 3)
     valid_stack = np.stack(valid_masks, axis=0)       # (N, H, W)
 
-    # ── C_mat: within-material CoV of luminance across lightings ──────
+    # -- C_mat: within-material CoV of luminance across lightings ------
     C_mat_vals = []
     rg_vals = []
     bg_vals = []
@@ -360,7 +358,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
     # and takes one std, so it sums the across-illuminant drift we mean to measure with
     # the between-material chroma spread of the scene. That second term shrinks when a
     # model collapses distinct materials toward a common hue, so the pooled metric pays
-    # models for destroying colour (v17_42 scores best on it while being visibly
+    # models for destroying colour (ablation row 2 scores best on it while being visibly
     # colour-collapsed). Decompose instead, and anchor fidelity on the GT albedo.
     within_rms = []          # per-material chroma drift ACROSS ILLUMINANTS  <- the claim
     mat_rg, mat_bg = [], []  # per-material illuminant-averaged chroma       -> between
@@ -425,7 +423,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
     R_cast_bg = float(np.std(bg_vals)) if len(bg_vals) >= 2 else float('nan')
     R_cast_rms = float(np.sqrt(np.var(rg_vals) + np.var(bg_vals))) if len(rg_vals) >= 2 else float('nan')
 
-    # ── Corrected constancy + the fidelity guard it must be read with ──────────
+    # -- Corrected constancy + the fidelity guard it must be read with ----------
     # Cast_within alone is still trivially won by a constant (grey) predictor, so it is
     # NOT reported on its own: Chroma_fid / Sat_ratio (both 1.0 = faithful to GT) expose
     # that degenerate direction, and Cast_rel divides the drift by the model's own chroma
@@ -445,7 +443,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
     Sat_gt = float(np.mean(sat_gt_vals)) if sat_gt_vals else _nan
     Sat_ratio = (Sat_pred / Sat_gt if Sat_gt and Sat_gt > 1e-6 else _nan)
 
-    # ── M_albedo: scale-invariant log-MSE vs GT ──────────────────────
+    # -- M_albedo: scale-invariant log-MSE vs GT ----------------------
     lmse_vals = []
     vm_all = (valid_stack.mean(axis=0) > 0.5)
     mean_pred = albedo_stack.mean(axis=0)   # (H, W, 3)
@@ -455,7 +453,7 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
 
     valid_frac = float(vm_all.mean())
 
-    # ── sat_bin_mae: albedo MAE per saturation quartile ───────────────
+    # -- sat_bin_mae: albedo MAE per saturation quartile ---------------
     gt_alb = alb_tm
     max_rgb = gt_alb.max(axis=-1)
     gt_sat = (max_rgb - gt_alb.min(axis=-1)) / (max_rgb + 1e-6)
@@ -496,9 +494,9 @@ def eval_scene(scene_path, predictor, device, skip_list=()):
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Visualization helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _gamma_u8(img):
     g = np.power(np.clip(np.nan_to_num(img, 0.0), 0.0, 1.0), 0.45454545454545453)
@@ -542,7 +540,7 @@ def make_mid_constancy_row(scene_path, predictor, device, light_idxs=None, tile_
         except Exception:
             continue
         rgb_hdrs.append(rgb_hdr)
-        rgb_tm = _tonemap_frame(rgb_hdr)           # model input: p90→0.8 (training-matched)
+        rgb_tm = _tonemap_frame(rgb_hdr)           # model input: p90->0.8 (training-matched)
         a = predictor.albedo(rgb_tm)
         if a.shape[:2] != (H, W):
             a = cv2.resize(a, (W, H), interpolation=cv2.INTER_LINEAR)
@@ -663,12 +661,12 @@ def save_mid_constancy_sheet(scenes, predictor, device, out_path, max_scenes=40,
         out_file = _mode_out_path(out_path, mode)
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
         cv2.imwrite(out_file, sheet, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        print(f'  MID constancy sheet ({len(rows)} scenes, mode={mode}) → {out_file}')
+        print(f'  MID constancy sheet ({len(rows)} scenes, mode={mode}) -> {out_file}')
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Aggregation
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def run_eval(ckpt_path, label, scenes, device, version, infer_max_size=None):
     print('\n' + '=' * 60)
@@ -681,8 +679,8 @@ def run_eval(ckpt_path, label, scenes, device, version, infer_max_size=None):
     predictor = AlbedoPredictor(ckpt_path, version, device, infer_max_size=infer_max_size)
 
     if predictor.is_external:
-        print('  [external/zero-shot] → constancy + cast ONLY; LMSE/sat-bins BLANKED '
-              '(MID albedo is pseudo-GT, in-domain for CIAI — §6.0).')
+        print('  [external/zero-shot] -> constancy + cast ONLY; LMSE/sat-bins BLANKED '
+              '(MID albedo is pseudo-GT, in-domain for CIAI - Sec. 6.0).')
 
     all_cmat, all_rg, all_bg, all_rms, all_lmse, all_sat_bins, all_valid = [], [], [], [], [], [], []
     _EXTRA = ('Cast_within', 'Cast_between', 'Cast_rel', 'GT_between',
@@ -735,10 +733,10 @@ def run_eval(ckpt_path, label, scenes, device, version, infer_max_size=None):
     for k in _EXTRA:
         agg[k] = float(np.nanmean(extra[k])) if extra[k] else float('nan')
 
-    # ── PER-SCENE RETENTION (added 2026-07-14) ────────────────────────────────────────────
+    # -- PER-SCENE RETENTION (added 2026-07-14) --------------------------------------------
     # Previously only np.nanmean survived, which (a) hid that the reported Chroma_fid of
-    # 1.008 is a MEAN OF RATIOS — the ratio of aggregates is 0.941, and by Jensen the mean is
-    # inflated by outlier scenes — and (b) made paired bootstrap CIs impossible, so small
+    # 1.008 is a MEAN OF RATIOS - the ratio of aggregates is 0.941, and by Jensen the mean is
+    # inflated by outlier scenes - and (b) made paired bootstrap CIs impossible, so small
     # deltas were being ranked as wins without any test. Keep the per-scene vectors so both
     # can be computed downstream. `scenes` is aligned index-for-index with every list here.
     agg['per_scene'] = {
@@ -755,14 +753,14 @@ def run_eval(ckpt_path, label, scenes, device, version, infer_max_size=None):
     return agg
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Table printing
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def print_table(results):
     def _c(v, w, p=4):
         if not isinstance(v, float) or np.isnan(v):
-            return f'{"—":>{w}}'
+            return f'{" - ":>{w}}'
         return f'{v:>{w}.{p}f}'
 
     print('\n' + '=' * 90)
@@ -788,12 +786,12 @@ def print_table(results):
               f'{_c(sat[3] if len(sat) > 3 else float("nan"), 8, 5)}')
 
     if any(r.get('is_external') for r in results):
-        print('\n  * external/zero-shot — LMSE & SAT bins omitted (MID albedo is pseudo-GT, '
-              'in-domain for CIAI). Compare these rows on C_mat & Cast_RMS only (§6.0).')
+        print('\n  * external/zero-shot - LMSE & SAT bins omitted (MID albedo is pseudo-GT, '
+              'in-domain for CIAI). Compare these rows on C_mat & Cast_RMS only (Sec. 6.0).')
 
-    # ── Corrected cast: the pooled Cast_RMS above conflates across-illuminant drift with
+    # -- Corrected cast: the pooled Cast_RMS above conflates across-illuminant drift with
     # between-material chroma spread, and so rewards models that collapse material colour.
-    # Read Cast_rel (drift ÷ the model's own chroma magnitude) TOGETHER WITH Chroma_fid /
+    # Read Cast_rel (drift / the model's own chroma magnitude) TOGETHER WITH Chroma_fid /
     # Sat_ratio: invariance alone is trivially won by a flat grey predictor.
     print('\n' + '=' * 100)
     print('CORRECTED CAST DECOMPOSITION   (Chroma_fid & Sat_ratio: 1.000 = faithful to GT albedo)')
@@ -812,13 +810,13 @@ def print_table(results):
               f'{_c(r.get("Sat_ratio"), 9)}')
     print('-' * 100)
     print('  within   = per-material chroma drift ACROSS ILLUMINANTS (absolute; scales with chroma)')
-    print('  Cast_rel = within / between — scale-normalised invariance   [LOWER = better]')
-    print('  Chroma_fid = between / GT_between — material chroma retained [1.0 = faithful, <1 = collapsed]')
+    print('  Cast_rel = within / between - scale-normalised invariance   [LOWER = better]')
+    print('  Chroma_fid = between / GT_between - material chroma retained [1.0 = faithful, <1 = collapsed]')
 
     if len(results) >= 2:
         ours = results[0]
         base = results[-1]
-        print(f'\n  Δ ({ours.get("label", "ours")} − {base.get("label", "base")}'
+        print(f'\n  Delta  ({ours.get("label", "ours")} - {base.get("label", "base")}'
               ', negative = improved):')
         for key in ['C_mat', 'R_cast_rg', 'R_cast_bg', 'R_cast_rms', 'M_albedo']:
             o = ours.get(key, float('nan'))
@@ -829,32 +827,31 @@ def print_table(results):
                 continue
             delta = o - b
             pct = delta / (abs(b) + 1e-9) * 100.0
-            sign = '✓ improved' if delta < 0 else '✗ worsened'
+            sign = '[ok] improved' if delta < 0 else '[x] worsened'
             print(f'    {key:>12s}: {delta:+.4f}  ({pct:+.1f}%, {sign})')
 
         bin_labels = ['SAT q0-25', 'q25-50', 'q50-75', 'q75-100']
         o_sat = ours.get('sat_bin_mae', [])
         b_sat = base.get('sat_bin_mae', [])
         if o_sat and b_sat:
-            print('    SAT-binned MAE Δ:')
+            print('    SAT-binned MAE Delta :')
             for lab, db, dr in zip(bin_labels, b_sat, o_sat):
                 if isinstance(db, float) and isinstance(dr, float):
                     if not (np.isnan(db) or np.isnan(dr)):
                         d = dr - db
-                        sign = '✓' if d < 0 else '✗'
+                        sign = '[ok]' if d < 0 else '[x]'
                         print(f'      {lab:>18s}: {d:+.5f} {sign}')
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # CLI
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpts', nargs='+',
-                        help='N-way: space-separated "label=path" pairs (first = baseline).')
-    parser.add_argument('--ckpt19k', default='checkpoints/checkpoint_v17_iter_19000.pth')
-    parser.add_argument('--ckpt30k', default='checkpoints/v17_row2/checkpoint_iter_30000.pth')
+                        help='space-separated "label=path[=type]" pairs (first = baseline); '
+                             'default: the reported model at checkpoints/ciai/')
     parser.add_argument('--mid-root', default=str(ROOT.parent / 'datasets' / 'MIDIntrinsics'))
     parser.add_argument('--split', default='test')
     parser.add_argument('--max-scenes', type=int, default=None)
@@ -907,7 +904,7 @@ def main():
             return 'crefnet'
         if 'ordinal' in low:
             return 'ordinal'
-        return '17'
+        return 'ours'
 
     ckpt_specs = []
     if args.ckpts:
@@ -927,8 +924,7 @@ def main():
             ckpt_specs.append((label, _abs(path), version))
     else:
         for label, path, version in [
-            ('V17 19k (pre-CIAI baseline)', args.ckpt19k, '17'),
-            ('V17 30k (+CIAI P3 11k iters)', args.ckpt30k, '17'),
+            ('Ours', 'checkpoints/ciai/checkpoint_iter_40000.pth', 'ours'),
         ]:
             rpath = _abs(path)
             if not os.path.exists(rpath):
@@ -963,7 +959,7 @@ def main():
         torch.cuda.empty_cache()
 
     if not results:
-        print('No results — check checkpoint paths.')
+        print('No results - check checkpoint paths.')
         return
 
     print_table(results)
@@ -989,7 +985,7 @@ def main():
         }
         with open(save_path, 'w') as f:
             json.dump(payload, f, indent=2)
-        print(f'\nResults saved → {save_path}')
+        print(f'\nResults saved -> {save_path}')
 
 
 if __name__ == '__main__':

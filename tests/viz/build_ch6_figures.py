@@ -2,7 +2,7 @@
 """Chapter 6 qualitative figures and an optional transfer diagnostic.
 
 Two qualitative editing demonstrations plus an optional transfer diagnostic.
-The editing figures use the base CIAI model (v17_44 at 40k), the model reported throughout.
+The editing figures use the CIAI model (ciai.yaml, 40k), the model reported throughout.
 
   Optional: cross-illuminant relighting transfer
          I_hat(a->b) = A(I_a) * S_d(I_b) + R(I_b)  ~=  I_b
@@ -39,7 +39,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
-from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame, _hdr_valid  # noqa: E402
+from eval_mid_constancy import load_ours, _raw_frame, _tonemap_frame, _hdr_valid  # noqa: E402
 
 MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
 from matplotlib import font_manager as _fm
@@ -47,13 +47,13 @@ FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
 FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 
 MODELS = [
-    ('Ours (base CIAI)',     f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth'),
-    ('Ours, colour skip OFF', f'{ROOT}/checkpoints/v17_42/checkpoint_iter_40000.pth'),
-    ('No CIAI',              f'{ROOT}/checkpoints/v17_41/checkpoint_iter_40000.pth'),
+    ('Ours (base CIAI)',     f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth'),
+    ('Ours, colour skip OFF', f'{ROOT}/checkpoints/ablation_ciai/checkpoint_iter_40000.pth'),
+    ('No CIAI',              f'{ROOT}/checkpoints/ablation_none/checkpoint_iter_40000.pth'),
 ]
 
 BENCHMARK_CKPT = MODELS[0][1]
-APPLICATION_CKPT = f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth'
+APPLICATION_CKPT = f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth'
 
 
 def _fnt(sz, bold=False):
@@ -134,7 +134,7 @@ def score_transfer(models, n_scenes=20, cap=1024, dev='cuda'):
     scenes = sorted(d for d in os.listdir(MID) if os.path.isdir(os.path.join(MID, d)))[:n_scenes]
     out = {}
     for label, ckpt in models:
-        m = load_v17(ckpt, dev)
+        m = load_ours(ckpt, dev)
         psnrs = []
         for sc in scenes:
             sp = os.path.join(MID, sc)
@@ -179,7 +179,7 @@ def fig_relight(model, scene, ia, ib, outdir, cap=1024, PW=470):
             ('A(I_a)  albedo from a', da['a'], True),
             ('Frame b (light source)', tb, False),
             ('S_d(I_b)  shading from b', db['s'], True),
-            ('Recomposed  A(I_a)·S_d(I_b)+R(I_b)', rec, False),
+            ('Recomposed  A(I_a)*S_d(I_b)+R(I_b)', rec, False),
             ('Real photo  I_b', tb, False),
             ('|error|', err_v, False)]
     gap, head = 5, 40
@@ -262,8 +262,8 @@ def fig_edits(model, img_path, outdir, cap=1024, PW=640):
     Ht = 2 * (head + PH + rowgap) + 10
     canvas = Image.new('RGB', (Wt, Ht), (255, 255, 255))
     d = ImageDraw.Draw(canvas)
-    y = strip(glare, 'Residual-space suppression:  A ⊙ S_d + α·R', 6, canvas, d)
-    strip(edits, 'Factor-space illumination edit:  A ⊙ f(S_d) + R', y, canvas, d)
+    y = strip(glare, 'Residual-space suppression:  A * S_d + alpha*R', 6, canvas, d)
+    strip(edits, 'Factor-space illumination edit:  A * f(S_d) + R', y, canvas, d)
     p = os.path.join(outdir, 'ch6_edits.jpg')
     canvas.save(p, quality=94)
     print('wrote', p)
@@ -337,10 +337,10 @@ def main():
     ia, ib = idxs[0], idxs[len(idxs) // 2]
     print(f'figures on scene={scene}  pair=({ia},{ib})')
 
-    application_model = load_v17(args.application_ckpt, 'cuda')
+    application_model = load_ours(args.application_ckpt, 'cuda')
     fig_edits(application_model, args.real, args.out, cap=args.application_cap)
     if args.score_transfer:
-        benchmark_model = load_v17(BENCHMARK_CKPT, 'cuda')
+        benchmark_model = load_ours(BENCHMARK_CKPT, 'cuda')
         fig_relight(benchmark_model, scene, ia, ib, args.out)
         del benchmark_model
         torch.cuda.empty_cache()

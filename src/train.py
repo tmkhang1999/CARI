@@ -1,12 +1,14 @@
-"""Train the V17 model with Cross-Illumination Albedo Invariance (CIAI).
+"""Train the RGB-shading model with Cross-Illumination Albedo Invariance (CIAI).
 
-    bash scripts/train.sh --version 17_44 --cuda 0          # base CIAI model (Table A, row 4)
-    python src/train_v17.py --version 17_62 --seed 43       # one Study-1 replicate
+    bash scripts/train.sh --config ciai --cuda 0             # the reported model (ablation row 4)
+    python src/train.py --config ciai --seed 43              # another seed of the same config
+
+--config takes a name under src/configs (ciai, stage_a, ablation_*) or a path to a .yaml
+file; checkpoints and logs go to checkpoints/<name>/ and logs/<name>/.
 
 Training follows the curriculum in the config: phase 1 Hypersim, phase 2 + InteriorVerse
-(supervised only), phase 3 adds MID cross-illumination pairs (and, in the 3D-Front colour
-study, rendered pairs). Each step runs the model on the primary frame for the
-single-image losses (losses/v17_loss.py) and, for paired rows, a second time on the pair
+(supervised only), phase 3 adds MID cross-illumination pairs. Each step runs the model on the primary frame for the
+single-image losses (losses/rgb_shading_loss.py) and, for paired rows, a second time on the pair
 frame for the CIAI terms (losses/ciai.py). Validation runs on the Hypersim val split.
 """
 
@@ -34,12 +36,11 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from models import IntrinsicDecompositionV17
-from losses.v17_loss import V17Loss
+from models import RGBShadingNet, model_arch
+from losses.rgb_shading_loss import RGBShadingLoss
 from metrics import (_compute_lmse, _masked_scale_invariant_rmse,
                      _compute_shading_ssim, _compute_ssim_bounded)
 from data.hypersim_dataset import get_hypersim_loader
-from src.data.front3d_dataset import Front3DDataset
 
 
 TB_TAGS = {
@@ -61,9 +62,8 @@ TB_TAGS = {
     # flat-zero curve is the first sign that pairs are not reaching the loss.
     'loss_alb_invariance': '1. Losses/CIAI_L_inv',
     'loss_explain': '1. Losses/CIAI_L_explain',
-    'loss_chr_explain': '1. Losses/CIAI_L_chr_explain',
-    # Unweighted chroma residual, measured without gradient when the chroma term is off,
-    # so rows with and without it can be compared on the same quantity.
+    # Unweighted chroma residual of the shading, measured without gradient: how much of the
+    # colour change between the two frames the RGB shading does not explain.
     'diag_chr_explain': '1. Losses/CIAI_chr_residual_diag',
 }
 
@@ -152,12 +152,13 @@ def compute_targets(predictions, batch):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train V17 with CIAI')
-    parser.add_argument('--config', type=str, default=None)
-    parser.add_argument('--version', type=str, default='17_44',
-                        help='config name under src/configs, e.g. 17_44 for v17_44.yaml')
+    parser = argparse.ArgumentParser(description='Train the RGB-shading model with CIAI')
+    parser.add_argument('--config', type=str, default='ciai',
+                        help='config name under src/configs (e.g. ciai) or a path to a .yaml file')
+    parser.add_argument('--run-name', type=str, default=None,
+                        help='checkpoint/log directory name (default: the config name)')
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint path or "latest"')
-    parser.add_argument('--auto-resume', action='store_true', help='Resume from latest checkpoint in version checkpoint dir')
+    parser.add_argument('--auto-resume', action='store_true', help='Resume from the latest checkpoint in this run directory')
     parser.add_argument('--reset-lr', action='store_true', help='Override checkpoint LR with value from config')
     parser.add_argument('--skip-optimizer', action='store_true', help='Resume from checkpoint but skip loading optimizer state')
     parser.add_argument('--seed', type=int, default=None,
@@ -178,11 +179,11 @@ def _deep_merge(base, override):
 
 
 def _resolve_config_path(ref):
+    """A config name under src/configs, or a path to a .yaml file."""
     ref = str(ref)
-    path = SRC_DIR / 'configs' / f'v{ref}.yaml'
-    if not path.exists():
-        path = SRC_DIR / 'configs' / f'{ref}.yaml'
-    return path
+    if ref.endswith(('.yaml', '.yml')):
+        return Path(ref)
+    return SRC_DIR / 'configs' / f'{ref}.yaml'
 
 
 def _load_config_with_parents(config_path, seen=None):
@@ -213,21 +214,21 @@ def _load_config_with_parents(config_path, seen=None):
     return _deep_merge(parent_cfg, override), chain + [path.name]
 
 
-def load_config(config_path=None, version=None):
+def load_config(config=None):
+    """base.yaml merged with a config (a name under src/configs or a path) and its parents."""
     base_path = SRC_DIR / 'configs' / 'base.yaml'
     with open(base_path, 'r') as f:
-        config = yaml.safe_load(f)
-
-    if config_path is None and version is not None:
-        config_path = str(SRC_DIR / 'configs' / f'v{version}.yaml')
-
-    if config_path is not None and os.path.exists(config_path):
-        override, chain = _load_config_with_parents(config_path)
-        config = _deep_merge(config, override)
-        print('Config: base.yaml <- ' + ' <- '.join(chain))
-    else:
-        print("Config: base.yaml only")
-    return config
+        merged = yaml.safe_load(f)
+    if config is None:
+        print('Config: base.yaml only')
+        return merged
+    config_path = _resolve_config_path(config)
+    if not config_path.exists():
+        names = sorted(p.stem for p in (SRC_DIR / 'configs').glob('*.yaml'))
+        raise FileNotFoundError(f'config not found: {config_path} (available: {names})')
+    override, chain = _load_config_with_parents(config_path)
+    print('Config: base.yaml <- ' + ' <- '.join(chain))
+    return _deep_merge(merged, override)
 
 
 def save_checkpoint(model, optimizer, losses, config, filename, global_step):
@@ -375,7 +376,7 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
             preds = model(x)
             return {k: (v.float() if isinstance(v, torch.Tensor) else v) for k, v in preds.items()}
 
-    # ── 1. Primary frame: single-image losses ──────────────────────────────────────
+    # -- 1. Primary frame: single-image losses --------------------------------------
     predictions = _forward(rgb)
     targets = compute_targets(predictions, batch)
     losses = criterion(
@@ -384,13 +385,12 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
         use_ssi=(global_step >= ssi_warmup_iters),
     )
 
-    # ── 2. CIAI: second forward on the pair frame, paired rows only ─────────────────
+    # -- 2. CIAI: second forward on the pair frame, paired rows only -----------------
     lam_inv = criterion.lambda_alb_invariance
     lam_explain = criterion.lambda_explain
-    lam_chr_explain = criterion.lambda_chr_explain
     rgb2 = batch.get('rgb2', None)
     m_invariant = batch.get('m_invariant', None)
-    if (lam_inv > 0 or lam_explain > 0 or lam_chr_explain > 0)             and rgb2 is not None and m_invariant is not None:
+    if (lam_inv > 0 or lam_explain > 0)             and rgb2 is not None and m_invariant is not None:
         m_invariant = m_invariant.float().to(device, non_blocking=True)
         if m_invariant.sum() > 0:
             rgb2 = rgb2.to(device, non_blocking=True)
@@ -406,15 +406,10 @@ def train_one_step(model, batch, criterion, device, global_step, ssi_warmup_iter
                 losses['loss_explain'] = lam_explain * criterion.luminance_explain(
                     rgb, rgb2, s1, s2, cr_mask)
                 losses['loss_total'] = losses['loss_total'] + losses['loss_explain']
-            if lam_chr_explain > 0:
-                losses['loss_chr_explain'] = lam_chr_explain * criterion.chroma_explain(
-                    rgb, rgb2, s1, s2, cr_mask)
-                losses['loss_total'] = losses['loss_total'] + losses['loss_chr_explain']
-            else:
-                # Diagnostic only: the unexplained chroma residual, without gradient.
-                with torch.no_grad():
-                    losses['diag_chr_explain'] = criterion.chroma_explain(
-                        rgb, rgb2, s1.detach(), s2.detach(), cr_mask)
+            # Diagnostic only: the unexplained chroma residual, without gradient.
+            with torch.no_grad():
+                losses['diag_chr_explain'] = criterion.chroma_explain(
+                    rgb, rgb2, s1.detach(), s2.detach(), cr_mask)
 
     _backward(losses['loss_total'], scaler, grad_accum_steps)
     return {k: (v.detach() if torch.is_tensor(v) else v) for k, v in losses.items()}
@@ -520,72 +515,6 @@ def _log_val_examples(writer, global_step, rgb, predictions, targets, max_items=
         writer.add_image(tag, strip, global_step)
 
 
-_FRONT3D_VAL_CACHE = {}  # (root, size) -> (dataset, fixed view indices), scanned once per process
-
-
-def _get_front3d_val_probe_set(root_dir, input_size, n_views=8):
-    """A fixed subset of the 3D-Front-IID held-out rooms, so checkpoints are compared on the
-    same views. Returns None when the split is unavailable, so training is never blocked."""
-    key = (root_dir, input_size)
-    if key not in _FRONT3D_VAL_CACHE:
-        try:
-            ds = Front3DDataset(root_dir=root_dir, split='val', input_size=input_size)
-        except Exception as exc:
-            print(f'[warn] front3d val probe: dataset init failed ({exc}); skipping.')
-            _FRONT3D_VAL_CACHE[key] = None
-            return None
-        if len(ds) == 0:
-            _FRONT3D_VAL_CACHE[key] = None
-        else:
-            _FRONT3D_VAL_CACHE[key] = (ds, list(range(min(n_views, len(ds)))))
-    return _FRONT3D_VAL_CACHE[key]
-
-
-@torch.no_grad()
-def _run_front3d_val_probe(model, device, config, global_step, writer):
-    """On 3D-Front held-out rooms, log albedo accuracy (alb_si_rmse) and the cross-illumination
-    albedo gap (inv_gap: mean |A(I1) - A(I2)| on pixels valid in both frames). Runs only when
-    3D-Front is in the training mix; failures are logged and skipped."""
-    try:
-        front3d_weight = float(config.get('train', {}).get('sampling_weights_phase3', {}).get('front3d', 0.0))
-        if front3d_weight <= 0:
-            return
-        root_dir = config.get('data', {}).get('front3d_root', '../datasets/front3d_iid')
-        input_size = int(config.get('train', {}).get('input_size', 384))
-        probe = _get_front3d_val_probe_set(root_dir, input_size, n_views=8)
-        if probe is None:
-            return
-        ds, idx = probe
-
-        was_training = model.training
-        model.eval()
-
-        def _fwd(x):
-            with autocast(device_type='cuda', dtype=torch.float16):
-                return model(x)['a_d'].float()
-
-        si_rmses, inv_gaps = [], []
-        for i in idx:
-            b = ds[i]
-            rgb = b['rgb'].unsqueeze(0).to(device, non_blocking=True)
-            rgb2 = b['rgb2'].unsqueeze(0).to(device, non_blocking=True)
-            alb_gt = b['albedo_scaled'].unsqueeze(0).to(device, non_blocking=True)
-            mask = b['loss_mask'].unsqueeze(0).to(device, non_blocking=True)
-            pair_valid = b['pair_valid'].unsqueeze(0).to(device, non_blocking=True)
-            a1, a2 = _fwd(rgb), _fwd(rgb2)
-            si_rmses.append(_masked_scale_invariant_rmse(a1, alb_gt, mask).item())
-            pv = (mask & pair_valid).float().expand_as(a1)
-            inv_gaps.append(((a1 - a2).abs() * pv).sum().item() / (pv.sum().item() + 1e-6))
-
-        if was_training:
-            model.train()
-        if si_rmses:
-            writer.add_scalar('2. Val/3. Front3D/alb_si_rmse', sum(si_rmses) / len(si_rmses), global_step)
-            writer.add_scalar('2. Val/3. Front3D/inv_gap', sum(inv_gaps) / len(inv_gaps), global_step)
-    except Exception as exc:
-        print(f'[warn] front3d val probe failed at step {global_step} ({exc}); skipping this step.')
-
-
 def validate(model, dataloader, criterion, device, global_step, writer,
              val_example_images=2, val_example_indices=None, max_val_batches=None,
              compute_val_losses=True, example_root='3. Examples', config=None):
@@ -671,19 +600,17 @@ def validate(model, dataloader, criterion, device, global_step, writer,
     for k, v in total_metric.items():
         writer.add_scalar(f'2. Val/2. Metrics/{k}', float(v), global_step)
 
-    if config is not None:
-        _run_front3d_val_probe(model, device, config, global_step, writer)
     return val_out
 
 
 def build_model(config):
-    """Build the V17 model from config['model'] (+ train.input_size)."""
-    version = float(config['model'].get('version', 17))
-    if version != 17.0:
-        raise ValueError(f'train_v17.py builds the V17 model only; got model.version={version}. '
-                         'Use src/train_v21.py for V21.')
+    """Build the RGB-shading model from config['model'] (+ train.input_size)."""
+    arch = model_arch(config['model'])
+    if arch != 'rgb_shading':
+        raise ValueError(f'train.py builds the RGB-shading model only; got model.arch={arch!r}. '
+                         'Use src/train_trifactor.py for the trifactor model.')
     m = config['model']
-    return IntrinsicDecompositionV17({
+    return RGBShadingNet({
         'dpt_feat_ch': int(m.get('dpt_feat_ch', 256)),
         'dpt_fusion_ch': int(m.get('dpt_fusion_ch', 128)),
         'dpt_out_ch': int(m.get('dpt_out_ch', 128)),
@@ -730,7 +657,7 @@ def build_optimizer(model, train_cfg, model_cfg):
 
 def main():
     args = parse_args()
-    config = load_config(args.config, args.version)
+    config = load_config(args.config)
     print(yaml.dump(config, default_flow_style=False))
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
@@ -757,15 +684,15 @@ def main():
     print(f"Seed: {seed if seed is not None else 'UNSEEDED (nondeterministic run)'} | "
           f"deterministic kernels: {deterministic}")
 
-    path_version = args.version if args.version is not None else config['model']['version']
-    ckpt_dir = os.path.join(config['paths']['checkpoint_dir'], f'v{path_version}')
-    log_dir = os.path.join(config['paths']['log_dir'], f'v{path_version}')
+    run_name = args.run_name or Path(str(args.config)).stem
+    ckpt_dir = os.path.join(config['paths']['checkpoint_dir'], run_name)
+    log_dir = os.path.join(config['paths']['log_dir'], run_name)
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
     writer = SummaryWriter(log_dir=log_dir)
     model = build_model(config).to(device)
-    criterion = V17Loss(config['loss']).to(device)
+    criterion = RGBShadingLoss(config['loss']).to(device)
     optimizer = build_optimizer(model, config['train'], config['model'])
 
     data_cfg = config['data']
@@ -781,7 +708,6 @@ def main():
                 'hypersim': hypersim_root,
                 'midintrinsic': data_cfg.get('midintrinsic_root', '../datasets/MIDIntrinsics'),
                 'interiorverse': data_cfg.get('interiorverse_root', '../datasets/InteriorVerse'),
-                'front3d': data_cfg.get('front3d_root', '../datasets/front3d_iid'),
             },
             batch_size=int(config['train']['batch_size']),
             split='train',
@@ -793,7 +719,6 @@ def main():
             strict_split=strict_split,
             use_mid_paired=bool(data_cfg.get('use_mid_paired', False)),
             mid_raw_color_pair=bool(data_cfg.get('mid_raw_color_pair', False)),
-            front3d_cache_max_items=int(data_cfg.get('front3d_cache_max_items', 128)),
         )
 
     def infinite_loader(dl):

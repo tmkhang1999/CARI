@@ -1,0 +1,5 @@
+# Ablation, row 4: CIAI and colour path on. This is the CIAI model ("Ours")
+# reported throughout (checkpoint at 40k). Resumes the 19k Stage-A checkpoint.
+extends: rgb_shading
+train:
+  skip_optimizer: false

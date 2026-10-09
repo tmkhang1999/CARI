@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Train a model from src/configs.
 #
-#   bash scripts/train.sh --version 17_44 --cuda 0          # base CIAI model (V17)
-#   bash scripts/train.sh --version 17_62 --cuda 0 --seed 43
-#   bash scripts/train.sh --version 17_44 --auto-resume
-#   bash scripts/train.sh --version 21 --cuda 0             # next model (V21)
+#   bash scripts/train.sh --config stage_a --cuda 0         # Stage A (stop at 19k)
+#   bash scripts/train.sh --config ciai --cuda 0 --skip-optimizer   # the reported model
+#   bash scripts/train.sh --config ciai --auto-resume
+#   bash scripts/train.sh --config trifactor --cuda 0       # next model
 #
-# --version 17_xx runs src/train_v17.py with src/configs/v17_xx.yaml; --version 21 runs
-# src/train_v21.py with src/configs/v21.yaml. Unknown flags are passed through.
-# ──────────────────────────────────────────────────────────────────────────────
+# --config NAME uses src/configs/NAME.yaml. "trifactor" runs src/train_trifactor.py, every
+# other config runs src/train.py. Unknown flags are passed through.
+# ------------------------------------------------------------------------------
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-VERSION=17_44
+CONFIG_NAME=ciai
 RUN_DEVICE="cuda"          # forwarded as --device
 CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
@@ -32,9 +32,9 @@ require_value() {
 # Parse script-owned flags; pass unknown flags through unchanged.
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version)
+        --config)
             require_value "$1" "${2:-}"
-            VERSION="$2"
+            CONFIG_NAME="$2"
             shift 2
             ;;
         --cuda|--gpus|--cuda-visible-devices)
@@ -68,21 +68,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-VERSION="${VERSION//./_}"
-if [[ "${VERSION}" == 17_* ]]; then
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v17.py"
-elif [[ "${VERSION}" == 21* ]]; then
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v21.py"
-else
-    echo "ERROR: unsupported version '${VERSION}'. Use 17_xx (V17 configs) or 21 (V21)."
+CONFIG="${ROOT_DIR}/src/configs/${CONFIG_NAME}.yaml"
+if [[ ! -f "$CONFIG" || "$CONFIG_NAME" == "base" ]]; then
+    echo "ERROR: config not found or not runnable: $CONFIG"
+    echo "Available configs: $(ls ${ROOT_DIR}/src/configs/*.yaml | xargs -n1 basename | sed 's/.yaml//' | grep -v '^base$' | tr '\n' ' ')"
     exit 1
 fi
-CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-
-if [[ ! -f "$CONFIG" ]]; then
-    echo "ERROR: Config not found: $CONFIG"
-    echo "Available configs: $(ls ${ROOT_DIR}/src/configs/v*.yaml 2>/dev/null | xargs -I{} basename {})"
-    exit 1
+if [[ "$CONFIG_NAME" == "trifactor" ]]; then
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_trifactor.py"
+    CONFIG_ARG="$CONFIG"
+else
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
+    CONFIG_ARG="$CONFIG_NAME"     # train.py names the run directory after the config
 fi
 
 # Respect explicit CUDA selection unless running on CPU.
@@ -99,7 +96,7 @@ if [[ "$AUTO_RESUME" -eq 1 && -n "$RESUME_MODE" ]]; then
 fi
 
 echo "========================================"
-echo "  Version ${VERSION}  |  ${TRAIN_SCRIPT##*/}"
+echo "  Config ${CONFIG_NAME}  |  ${TRAIN_SCRIPT##*/}"
 echo "  Config:  ${CONFIG}"
 echo "  Device:  ${RUN_DEVICE}"
 if [[ -n "$CUDA_IDS" ]]; then
@@ -116,8 +113,7 @@ echo "========================================"
 
 CMD=(
     python "${TRAIN_SCRIPT}"
-    --version "${VERSION}"
-    --config "${CONFIG}"
+    --config "${CONFIG_ARG}"
     --device "${RUN_DEVICE}"
 )
 

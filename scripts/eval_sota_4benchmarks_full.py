@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Full four-model SOTA evaluation on MID, MAW, ARAP, and IIW.
 
-Runs the four external methods reported in the thesis — Marigold-App,
-Marigold-Light, CRefNet, and Ordinal Shading — locally under our exact pipeline
+Runs the four external methods reported in the thesis - Marigold-App,
+Marigold-Light, CRefNet, and Ordinal Shading - locally under our exact pipeline
 (same output-space normalisation, splits, and per-benchmark inference
 resolution), producing the same JSON/summary artifacts as
-``eval_all_models_4benchmarks_full.py`` does for our v17 checkpoints.
+``eval_all_models_4benchmarks_full.py`` does for our checkpoints.
 
 Each method is loaded through the shared adapters that eval_maw/eval_arap
 already use (Marigold pipeline, ``crefnet_adapter``, ``ordinal_adapter``);
@@ -149,7 +149,7 @@ def run_model(spec: dict, gpu: int, args: argparse.Namespace, work_root: Path) -
     result_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # MID — LABEL=PATH=KIND; MID's constancy metrics are GT-free, so external models score fine.
+    # MID - LABEL=PATH=KIND; MID's constancy metrics are GT-free, so external models score fine.
     mid_json = result_dir / 'mid.json'
     if args.auto_resume and stage_has_label(mid_json, label, mid=True):
         print(f'[{label}] resume: MID already complete', flush=True)
@@ -161,7 +161,7 @@ def run_model(spec: dict, gpu: int, args: argparse.Namespace, work_root: Path) -
             '--save-json', mid_json,
         ], logs_dir / 'mid.log', gpu, args)
 
-    # MAW — LABEL=PATH=KIND (TYPE dispatch already native to eval_maw).
+    # MAW - LABEL=PATH=KIND (TYPE dispatch already native to eval_maw).
     maw_json = result_dir / 'maw.json'
     if args.auto_resume and stage_has_label(maw_json, label):
         print(f'[{label}] resume: MAW already complete', flush=True)
@@ -176,7 +176,7 @@ def run_model(spec: dict, gpu: int, args: argparse.Namespace, work_root: Path) -
             maw_cmd.append('--amp')
         run_logged_with_retry(maw_cmd, logs_dir / 'maw.log', gpu, args)
 
-    # ARAP — raw-colored = thesis constancy axis (C_arap/Cast_RMS); white-balanced = standard
+    # ARAP - raw-colored = thesis constancy axis (C_arap/Cast_RMS); white-balanced = standard
     # SOTA protocol (LMSE/si-RMSE/SSIM comparable to Ordinal/CD-IID). External kind passed via
     # --model_version. '__wb' marks the white-balanced (standard) rows.
     arap_json = result_dir / 'arap.json'
@@ -201,7 +201,7 @@ def run_model(spec: dict, gpu: int, args: argparse.Namespace, work_root: Path) -
             arap_cmd.append('--white_balance')
         run_logged_with_retry(arap_cmd, logs_dir / f'arap_{result_label}.log', gpu, args)
 
-    # IIW — external kind via --model_version; eval_iiw bypasses _build_model for external models.
+    # IIW - external kind via --model_version; eval_iiw bypasses _build_model for external models.
     iiw_json = result_dir / 'iiw.json'
     if args.auto_resume and stage_has_label(iiw_json, label):
         print(f'[{label}] resume: IIW already complete', flush=True)
@@ -276,7 +276,7 @@ def main() -> None:
                         help='Retries per failed child evaluator when --auto-resume is enabled.')
     parser.add_argument('--retry-delay-sec', type=int, default=60,
                         help='Delay between child-evaluator retries.')
-    # Per-dataset inference resolution — see README.md#evaluation.
+    # Per-dataset inference resolution - see README.md#evaluation.
     parser.add_argument('--infer-max-size', type=int, default=1280,
                         help='Long-side cap for MID and IIW (default 1280, the comparable protocol).')
     parser.add_argument('--arap-infer-size', type=int, default=1280,

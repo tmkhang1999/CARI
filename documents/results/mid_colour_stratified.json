@@ -263,7 +263,7 @@
    "high_over_low": 1.4220395289298515,
    "pearson_r": 0.38673721257206556
   },
-  "Ours (base CARI)": {
+  "Ours (CIAI)": {
    "tercile_means": [
     0.3683343,
     0.3786098,

@@ -34,7 +34,7 @@ class InteriorVerseDataset(Dataset):
         skipped_empty = 0
 
         # Data is split across parts: 120_part and 85.
-        # For training, load ALL three split dirs (train/val/test) — IV's val/test exist
+        # For training, load ALL three split dirs (train/val/test) - IV's val/test exist
         # only as the original dataset's convention; our real benchmarks are IIW/ARAP/SAW/MID,
         # so no held-out IV data is needed. For non-train splits, load only the named dir.
         splits_to_load = ['train', 'val', 'test'] if split == 'train' else [split]

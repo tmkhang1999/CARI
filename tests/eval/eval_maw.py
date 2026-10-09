@@ -1,10 +1,10 @@
 """MAW 1 / MAW 2.0-GLOW albedo chromaticity + intensity eval.
 
 Metrics:
-  chromaticity_deltae  : weighted-mean ΔE in CIE Lab (lower = better colour)
+  chromaticity_deltae  : weighted-mean Delta E in CIE Lab (lower = better colour)
   intensity_si_mse     : scale-invariant MSE of intensity (lower = better)
 
-CD-IID MAW1 reference:  chromaticity ΔE ≈ 3.37,  intensity ×100 ≈ 0.54
+CD-IID MAW1 reference:  chromaticity Delta E ~ 3.37,  intensity x100 ~ 0.54
 """
 import argparse
 import csv
@@ -27,7 +27,7 @@ MAW_CODE = ROOT_DIR / 'tests/testing_data/MAW/code'
 sys.path.insert(0, str(MAW_CODE))
 from numerical_albedo import AlbedoEvaluator  # noqa: E402
 
-from src.models import IntrinsicDecompositionV17
+from src.models import RGBShadingNet
 from src.data.shared_transforms import tonemap_linear
 from crefnet_adapter import load_crefnet, run_crefnet
 from ordinal_adapter import load_ordinal, run_ordinal
@@ -54,19 +54,17 @@ DEFAULT_MAW2 = str(ROOT_DIR / 'tests/testing_data/MAW/glow_maw2_measurements_rel
 MAW2_SPLITS = ['_outdoor_glow', '_indoor_glow', '_other_glow']
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Model loading
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
-def _load_model_v17(checkpoint, device):
-    """Load V17 or V20 checkpoint. Filters by shape to allow partial loads."""
+def _load_ours(checkpoint, device):
+    """Load one of our RGB-shading checkpoints. Filters by shape to allow partial loads."""
     ckpt = torch.load(checkpoint, map_location='cpu')
     cfg = ckpt.get('config', {})
     model_cfg = cfg.get('model', {})
-    version_value = float(model_cfg.get('version', 17))
-    version = int(version_value)
 
-    model = IntrinsicDecompositionV17(model_cfg).to(device)
+    model = RGBShadingNet(model_cfg).to(device)
 
     sd = ckpt.get('model_state_dict', ckpt.get('model', {}))
     own = model.state_dict()
@@ -98,12 +96,12 @@ def _resolve_device(device_str, cuda_index):
     return 'cpu'
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Image utilities
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _load_image_linear(path):
-    """sRGB PNG → linear float32 (H,W,3) [0,1]."""
+    """sRGB PNG -> linear float32 (H,W,3) [0,1]."""
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise FileNotFoundError(str(path))
@@ -153,11 +151,11 @@ def _resize_for_infer(rgb, max_size=1280, min_size=1024):
     return cv2.resize(rgb, (nw, nh), interpolation=cv2.INTER_LINEAR)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Inference
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
-def _run_v17(model, rgb_linear, device, ldr_tonemap=False, max_size=1280, min_size=1024,
+def _run_ours(model, rgb_linear, device, ldr_tonemap=False, max_size=1280, min_size=1024,
              amp=False):
     """Returns predicted albedo (H,W,3) float32 [0,1]."""
     H, W = rgb_linear.shape[:2]
@@ -196,7 +194,7 @@ def _run_marigold(pipe, rgb_linear, max_size=None):
 
     BUG FIX (2026-07-13): previously called `pipe(pil_img)` with no resolution
     cap, so Marigold processed MAW's native 5472x3648 (20MP) DSLR frames while
-    every other model in this harness (v17, CRefNet, Ordinal) was capped to
+    every other model in this harness (ours, CRefNet, Ordinal) was capped to
     `--infer-max-size`. That was a ~40x-more-pixels outlier and broke the "same
     resolution for every locally-run method" protocol this benchmark states.
     `processing_res` routes the SAME cap into Marigold's own internal resize;
@@ -227,13 +225,13 @@ def _infer(model, ckpt_type, rgb_linear, device, ldr_tonemap=False,
     if ckpt_type in ('ordinal', 'ordinal-rendered-only'):
         albedo, _ = run_ordinal(model, rgb_linear, max_size, device)
         return albedo
-    return _run_v17(model, rgb_linear, device, ldr_tonemap,
+    return _run_ours(model, rgb_linear, device, ldr_tonemap,
                     max_size=max_size, min_size=min_size, amp=amp)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # MAW evaluation helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _evaluate_pair(ev_chroma, ev_intensity, color_lib_path, mask_path, pred_png_path):
     """Return (chroma_score, intensity_score) for one image, or (None, None) on error."""
@@ -271,7 +269,7 @@ def _make_contact_sheet(input_path, pred_rgb_u8, gt_albedo_path, label, target_h
 
 
 def _parse_meta_csv(meta_csv):
-    """Parse tab-separated MAW meta.csv → list of row dicts.
+    """Parse tab-separated MAW meta.csv -> list of row dicts.
     CSV has NO header row; columns are: color_lib, mask, scene, name, gt_albedo, iiw."""
     COLS = ['color_lib', 'mask', 'scene', 'name', 'gt_albedo', 'iiw']
     rows = []
@@ -423,7 +421,7 @@ def _eval_maw2(label, model, ckpt_type, maw2_root, glow_images_root, pred_dir, v
         n = len([x for x in chroma if not np.isnan(x)])
         mean_c = float(np.nanmean(chroma)) if chroma else float('nan')
         mean_i = float(np.nanmean(intensity)) if intensity else float('nan')
-        print(f'  MAW2 {label} / {split}: n={n}  ΔE={mean_c:.4f}  chromaticity_deltae={mean_c:.4f}')
+        print(f'  MAW2 {label} / {split}: n={n}  Delta E={mean_c:.4f}  chromaticity_deltae={mean_c:.4f}')
         split_results[split.lstrip('_')] = {
             'per_si': chroma, 'deltae': chroma, 'si': intensity, 'mean': intensity,
         }
@@ -433,9 +431,9 @@ def _eval_maw2(label, model, ckpt_type, maw2_root, glow_images_root, pred_dir, v
     return split_results
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # CLI
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -466,7 +464,7 @@ def main():
                              'this substring (e.g. _DSC4366).')
     parser.add_argument('--amp', action='store_true',
                         help='Run our-model inference under torch.autocast(fp16). No effect '
-                             'on Marigold. Off by default — verify metric parity before use.')
+                             'on Marigold. Off by default - verify metric parity before use.')
     args = parser.parse_args()
 
     device = _resolve_device(args.device, args.cuda_index)
@@ -495,7 +493,7 @@ def main():
         parts = spec.split('=')
         label = parts[0]
         ckpt_path = parts[1] if len(parts) > 1 else parts[0]
-        ckpt_type = parts[2] if len(parts) > 2 else '17'
+        ckpt_type = parts[2] if len(parts) > 2 else 'ours'
 
         is_marigold = ckpt_type in ('marigold-appearance', 'marigold-lighting')
         is_crefnet = ckpt_type in ('crefnet', 'crefnet-e')
@@ -507,7 +505,7 @@ def main():
         elif is_ordinal:
             model = load_ordinal(device, variant=ckpt_type)
         else:
-            model = _load_model_v17(ckpt_path, device)
+            model = _load_ours(ckpt_path, device)
 
         chroma, intensity = [], []
 
@@ -534,8 +532,8 @@ def main():
         mean_c = float(np.mean(chroma)) if chroma else float('nan')
         mean_i = float(np.mean(intensity)) if intensity else float('nan')
         print(f'  n={n}')
-        print(f'  chromaticity_ΔE={mean_c:.4f}')
-        print(f'  intensity_SI-MSE(×100)={mean_i * 100.0:.4f}')
+        print(f'  chromaticity_Delta E={mean_c:.4f}')
+        print(f'  intensity_SI-MSE(x100)={mean_i * 100.0:.4f}')
 
         # MAW1 is the canonical benchmark key used by the cross-benchmark summary.
         lbl = label if args.dataset == 'maw1' else f'{label}_{args.dataset}'
@@ -549,7 +547,7 @@ def main():
         _flush_json()
 
     print('\n' + '=' * 70)
-    print(f'{"Method":<20}  {"Dataset":<6}  {"Chroma ΔE":>12}  {"Intensity ×100":>16}')
+    print(f'{"Method":<20}  {"Dataset":<6}  {"Chroma Delta E":>12}  {"Intensity x100":>16}')
     print('-' * 70)
     for lbl, r in results.items():
         print(f'{r.get("label", lbl):<20}  {r.get("dataset", ""):<6}  '
@@ -557,11 +555,11 @@ def main():
               f'{r.get("intensity_si_mse", float("nan")) * 100.0:>16.4f}')
     print('=' * 70)
     print('Lower = better for both metrics  |  values match paper tables.')
-    print('CD-IID MAW1 reference:  chromaticity ΔE ≈ 3.37,  intensity ×100 ≈ 0.54')
+    print('CD-IID MAW1 reference:  chromaticity Delta E ~ 3.37,  intensity x100 ~ 0.54')
 
     if args.save_json:
         _flush_json()
-        print(f'\nSaved → {args.save_json}')
+        print(f'\nSaved -> {args.save_json}')
 
     if use_tmp and tmp_ctx is not None:
         tmp_ctx.cleanup()

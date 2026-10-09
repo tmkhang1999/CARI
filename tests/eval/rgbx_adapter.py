@@ -1,4 +1,4 @@
-"""RGB->X adapter — Zeng et al., "RGB<->X: Image Decomposition and Synthesis Using
+"""RGB->X adapter - Zeng et al., "RGB<->X: Image Decomposition and Synthesis Using
 Material- and Lighting-aware Diffusion Models" (SIGGRAPH 2024).
 
 Why this baseline: our two diffusion comparisons are both Marigold variants, so they
@@ -6,19 +6,19 @@ share a backbone, a training recipe and a failure mode. RGB->X is an independent
 diffusion decomposer, which tests whether our colour-constancy result holds against
 the diffusion family generally rather than against Marigold specifically.
 
-Weights: `zheng95z/rgb-to-x` on HuggingFace. The pipeline class is NOT in diffusers —
+Weights: `zheng95z/rgb-to-x` on HuggingFace. The pipeline class is NOT in diffusers  - 
 it is `StableDiffusionAOVMatEstPipeline`, defined in the authors' repo, so that repo
 must be on disk; set RGBX_REPO or clone it next to this project (see _import_pipeline).
 
 The model is prompt-conditioned: one full denoising run per requested channel, chosen
 by an "AOV" prompt string. We request albedo only, so a decomposition costs one
-diffusion run at the configured step count — by far the slowest adapter here.
+diffusion run at the configured step count - by far the slowest adapter here.
 
-    COLOUR SPACES — both verified by reading the authors' code, not assumed
+    COLOUR SPACES - both verified by reading the authors' code, not assumed
 INPUT is LINEAR. Their demo loads PNGs with `load_ldr_image(..., from_srgb=True)`,
 which does `image ** 2.2` (rgb2x/load_image.py:86-88) before the tensor reaches the
 pipeline. Our harness already hands us display-linear, so it is passed through
-unchanged — gamma-encoding it first would be a double transform.
+unchanged - gamma-encoding it first would be a double transform.
 
 OUTPUT is GAMMA-ENCODED. `VaeImageProcessorAOV.postprocess` applies
 `image = torch.pow(image, 1.0 / 2.2)` under `do_gamma_correction: bool = True`
@@ -143,7 +143,7 @@ def run_rgbx(pipe, rgb_display_linear: np.ndarray, max_size: int, device,
     """Predict albedo.
 
     Args:
-        rgb_display_linear: display-space LINEAR [0,1] HWC float array — the same
+        rgb_display_linear: display-space LINEAR [0,1] HWC float array - the same
             convention every other adapter in this harness takes, and already the
             space RGB->X wants, so it is passed through unchanged.
 

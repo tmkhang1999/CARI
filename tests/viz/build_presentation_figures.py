@@ -2,15 +2,14 @@
 """Figures reused from the defence presentation, plus one crop of the project-page teaser.
 
 Only slide images that contain no prediction of our own model are taken from the deck: the
-deck's "Ours" panels came from later checkpoints (v17_34 is visibly over-smoothed), so they
+deck's "Ours" panels came from later checkpoints (one of them is visibly over-smoothed), so they
 are not reused. The one figure that shows our model is cropped from the page teaser, which
-was rendered with v17_29.
+was rendered with a later checkpoint of the same model.
 
 Outputs:
-  docs/static/img/ciai-metrics.jpg            four metric diagrams (slides 24-25), 2 x 2
+  docs/static/img/ciai-metrics.jpg            the three MID metric diagrams (slides 24-25), one row
   docs/static/img/ciai-baselines.jpg          CRefNet and Marigold-App under two lights (slide 6)
   docs/static/img/ciai-limit-reflective.jpg   mirror sphere: input and our albedo, four lights
-  documents/thesis/images/losses/metric_card_spread.png    the spread-ratio diagram
   documents/thesis/images/limits/reflective.jpg             same crop as the page
 
 Run:
@@ -38,11 +37,12 @@ METRIC_CARDS = [
     ('image68.png', 'C_mat', 'lightness stability'),
     ('image69.png', 'Cast_rel', 'hue stability'),
     ('image70.png', 'Chroma_err', 'colour accuracy'),
-    ('image71.png', 'Spread ratio', 'colour kept, not collapsed'),
 ]
+# The deck's fourth card (image71, chroma spread) is left out on purpose: the spread ratio is
+# not one of the reported metrics.
 BASELINES = 'image26.jpg'
 
-# Teaser layout (docs/static/img/cari-teaser.jpg, 1700 x 497): four panels per row.
+# Teaser layout (docs/static/img/ciai-teaser.jpg, 1700 x 497): four panels per row.
 TEASER_COLS = [(287, 637), (642, 992), (996, 1346), (1351, 1700)]
 TEASER_ROWS = [(26, 260), (264, 497)]
 SPHERE = (0.0, 0.62, 0.30, 1.0)   # mirror sphere, as fractions of a panel (x0, y0, x1, y1)
@@ -71,20 +71,17 @@ def build_metrics(pptx: Path):
     cards = [c.resize((w, round(c.height * w / c.width)), Image.LANCZOS) for c in cards]
     head, gap = 54, 30
     cell_h = head + max(c.height for c in cards)
-    canvas = Image.new('RGB', (2 * w + gap, 2 * cell_h + gap), 'white')
+    n = len(cards)
+    canvas = Image.new('RGB', (n * w + (n - 1) * gap, cell_h), 'white')
     d = ImageDraw.Draw(canvas)
     fb, fr = ImageFont.truetype(FONT_BOLD, 26), ImageFont.truetype(FONT, 22)
     for k, (c, (_, name, role)) in enumerate(zip(cards, METRIC_CARDS)):
-        x, y = (k % 2) * (w + gap), (k // 2) * (cell_h + gap)
+        x, y = k * (w + gap), 0
         d.text((x + 12, y + head // 2), name, fill=INK, font=fb, anchor='lm')
         d.text((x + 12 + d.textlength(name, font=fb) + 14, y + head // 2), role,
                fill=MUTE, font=fr, anchor='lm')
         canvas.paste(c, (x, y + head))
-    save(canvas, WEB / 'ciai-metrics.jpg', max_width=1400)
-    spread = read_media(pptx, METRIC_CARDS[3][0])
-    dst = THESIS / 'losses/metric_card_spread.png'
-    spread.save(dst)
-    print(f'  {dst.relative_to(ROOT)}  {spread.size}')
+    save(canvas, WEB / 'ciai-metrics.jpg', max_width=1600)
 
 
 def build_baselines(pptx: Path):
@@ -92,7 +89,7 @@ def build_baselines(pptx: Path):
 
 
 def build_reflective():
-    src = WEB / 'cari-teaser.jpg'
+    src = WEB / 'ciai-teaser.jpg'
     if not src.exists():
         raise SystemExit(f'missing {src}; build it with tests/viz/build_web_figures.py')
     teaser = Image.open(src).convert('RGB')

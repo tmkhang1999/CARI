@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.3+-EE4C2C.svg)](https://pytorch.org)
 
-<img src="documents/thesis/images/readme/cari-teaser.jpg" width="100%" alt="Top: one MID scene lit by a flash bounced in four directions. Bottom: the albedo predicted from each photograph separately."/>
+<img src="documents/thesis/images/readme/ciai-teaser.jpg" width="100%" alt="Top: one MID scene lit by a flash bounced in four directions. Bottom: the albedo predicted from each photograph separately."/>
 
 </div>
 
@@ -25,7 +25,8 @@ Our question is whether paired photographs, used only in training, can make the 
 
 In a matched ablation, CIAI lowers the lightness variation of a material across lighting by **28% and 39%**. In addition, it lowers the albedo error by 7-14% on ARAP renderings that keep their original coloured light, although ARAP is never used in training. However, it improves colour much less (hue drift -4 to -6%), because the explanation loss uses luminance only.
 
-**Contributions**
+## Contributions
+
 1. A paired training strategy on real photographs: MID pairs with pseudo-ground-truth albedo, added as a second training stage.
 2. A matched ablation showing the effect on lightness stability and on albedo accuracy.
 3. An evaluation that reports every stability score next to an accuracy score, because a grey, constant albedo is perfectly stable.
@@ -33,7 +34,7 @@ In a matched ablation, CIAI lowers the lightness variation of a material across 
 ## Method
 
 <div align="center">
-<img src="documents/thesis/images/readme/cari-mechanism.jpg" width="90%" alt="Two photographs of one scene pass through a shared model; the two albedos are tied by L_inv and the two shadings by L_expl."/>
+<img src="documents/thesis/images/readme/ciai-mechanism.jpg" width="90%" alt="Two photographs of one scene pass through a shared model; the two albedos are tied by L_inv and the two shadings by L_expl."/>
 </div>
 
 **Figure 2.** CIAI is used in training only. Two flash directions of one scene share one model.
@@ -76,6 +77,27 @@ All numbers use the 30 held-out MID scenes with raw input. The ablation starts f
 2. **CIAI improves accuracy where the input carries its lighting.** On raw ARAP, albedo LMSE drops by 14% and 7%.
 3. **CIAI does not improve measured colour.** MAW &Delta;E does not improve, and CD-IID is better on all colour measures.
 
+## Limitations
+
+- **Colour is not learned.** The explanation loss uses luminance only, and the flash in MID is white, so the light colour changes only slightly between frames (median chromaticity gap 0.030). Therefore, hue drift still grows with the light colour, as in a grey-shading model.
+- **ARAP numbers are provisional.** ARAP stores its ground-truth albedo in three encodings, and the current mask does not handle all of them. They will be regenerated with `tests/eval/arap_preprocess.py`.
+- **Figures and weights.** Some qualitative figures were made with a later checkpoint of the same model, and pretrained weights are not in this repository (about 1.4 GB each). Please open an issue if you would like access.
+
+## Next steps
+
+The next stage targets colour, which the current model does not learn. It is planned and not trained yet.
+
+<div align="center">
+<img src="documents/thesis/images/readme/ciai-pipeline.jpg" width="100%" alt="Planned pipeline: two photographs of one view under different light colours go through a shared model with three outputs (albedo, grey shading, shading chroma), tied by three losses."/>
+</div>
+
+**Figure 3.** Planned pipeline. The output panels are ground-truth targets from a rendered 3D-Front scene (S = I / A), not predictions.
+
+1. **Cross-architecture test.** Train with and without CIAI on a CNN, a fine-tuned ViT and a single-step diffusion model, with the same data and three seeds.
+2. **Model.** Split the shading into a grey part and a chroma part, I = A * (S<sub>lum</sub> * C) + R (`src/models/trifactor_net.py`).
+3. **Loss.** Add a chroma explanation loss on C, used only on pairs whose light colour really changes (`src/losses/trifactor_loss.py`).
+4. **Data.** Rendered coloured-light pairs from 3D-FRONT with exact albedo (`scripts/render_3dfront_dataset_v2.py`, needs Blender 4.2), and real coloured-light pairs such as LSMI.
+
 ## Quick start
 
 ```bash
@@ -86,7 +108,7 @@ python tests/smoke_test.py          # one training step per config on random dat
 
 # Decompose one photograph (--device also accepts mps or cpu)
 python tests/infer/infer_wild.py --image your_photo.jpg \
-    --checkpoint checkpoints/v17_44/checkpoint_iter_40000.pth --device cuda --max_size 1280
+    --checkpoint checkpoints/ciai/checkpoint_iter_40000.pth --device cuda --max_size 1280
 ```
 
 ## Training
@@ -94,41 +116,24 @@ python tests/infer/infer_wild.py --image your_photo.jpg \
 Place the datasets next to this repository: `datasets/hypersim/`, `datasets/MIDIntrinsics/{train,test}/` and `datasets/IndoorInverseRendering/interiorverse/` ([Hypersim](https://github.com/apple/ml-hypersim), [MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics), [InteriorVerse](https://interiorverse.github.io/)).
 
 ```bash
-bash scripts/train.sh --version 17_60 --cuda 0                    # Stage A, stop at 19k
-bash scripts/train.sh --version 17_44 --cuda 0 --skip-optimizer   # Stage B (CIAI) from the 19k checkpoint
+bash scripts/train.sh --config stage_a --cuda 0                  # Stage A, stop at 19k
+bash scripts/train.sh --config ciai --cuda 0 --skip-optimizer   # Stage B (CIAI) from the 19k checkpoint
 ```
 
-`v17_41` to `v17_44` are the four ablation rows, and `v17_44` is the reported model. Training needs a GPU with at least 12 GB, because each step runs two forward passes. The CIAI losses are in `src/losses/ciai.py` and take plain tensors, so any model that outputs an albedo and a shading can use them.
+`ablation_none`, `ablation_ciai`, `ablation_colour` and `ciai` are the four ablation rows, and `ciai` is the reported model. Training needs a GPU with at least 12 GB, because each step runs two forward passes. The CIAI losses are in `src/losses/ciai.py` and take plain tensors, so any model that outputs an albedo and a shading can use them.
 
 ## Evaluation
 
 ```bash
-CKPT=checkpoints/v17_44/checkpoint_iter_40000.pth
+CKPT=checkpoints/ciai/checkpoint_iter_40000.pth
 python tests/eval/eval_mid_constancy.py --ckpts $CKPT --mid-root ../datasets/MIDIntrinsics --split test --save-json
 python tests/eval/eval_maw.py --ckpts $CKPT --save-json
 python tests/eval/eval_arap.py --checkpoint $CKPT --constancy
 ```
 
-## Limitations
+## Related work
 
-- **Colour is not learned.** The explanation loss uses luminance only, and the flash in MID is white, so the light colour changes only slightly between frames (median chromaticity gap 0.030). Therefore, hue drift still grows with the light colour, as in a grey-shading model.
-- **ARAP numbers are provisional.** ARAP stores its ground-truth albedo in three encodings, and the current mask does not handle all of them. They will be regenerated with `tests/eval/arap_preprocess.py`.
-- **Figures and weights.** Some qualitative figures were made with a later checkpoint of the same model, and pretrained weights are not in this repository (about 1.4 GB each). Please open an issue if you would like access.
-
-## Roadmap
-
-The next stage targets colour. It is planned and not trained yet.
-
-<div align="center">
-<img src="documents/thesis/images/readme/ciai-pipeline.jpg" width="100%" alt="Planned pipeline: two photographs of one view under different light colours go through a shared model with three outputs (albedo, grey shading, shading chroma), tied by three losses."/>
-</div>
-
-**Figure 3.** Planned pipeline. The output panels are ground-truth targets from a rendered 3D-Front scene (S = I / A), not predictions.
-
-1. **Cross-architecture test.** Train with and without CIAI on a CNN, a fine-tuned ViT and a single-step diffusion model, with the same data and three seeds.
-2. **Model.** Split the shading into a grey part and a chroma part, I = A * (S<sub>lum</sub> * C) + R (`src/models/v21_trifactor.py`).
-3. **Loss.** Add a chroma explanation loss on C, used only on pairs whose light colour really changes (`src/losses/v21_loss.py`).
-4. **Data.** Rendered coloured-light pairs from 3D-FRONT with exact albedo (`scripts/render_3dfront_dataset_v2.py`, needs Blender 4.2), and real coloured-light pairs such as LSMI.
+CIAI follows the idea of Siamese representation learning and multi-view consistency in 3D reconstruction: two views of one thing should share one property. Paired-illumination training for IID was proposed before, for example from time-lapse sequences (BigTime, Li and Snavely, 2018) and from multi-illumination pairs (Lettry et al., 2018; Ma et al., 2018; Kinoshita and Kiya, 2021). CIAI differs in that it is a second training stage on top of supervised synthetic training in a modern feed-forward model, it uses raw real photographs with a pseudo-ground-truth albedo, and it reports stability next to accuracy. CD-IID (Careaga and Aksoy, 2024) predicts the shading colour in a separate stage, which is the direction of our next step.
 
 ## Citation
 

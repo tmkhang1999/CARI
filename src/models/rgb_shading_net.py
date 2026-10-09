@@ -1,4 +1,4 @@
-"""V17: frozen DINOv2-L encoder + DPT trunk + albedo and inverse-shading heads.
+"""RGBShadingNet (the reported model): frozen DINOv2-L encoder + DPT trunk + albedo and inverse-shading heads.
 
   I -> DINOv2-L/14 (frozen) -> 4 intermediate maps -> DPT reassemble/fusion + a conv
   detail stem -> shared trunk F. Albedo head -> A in [0,1]^3; shading head -> pi =
@@ -7,7 +7,7 @@
 Colour path (`albedo_rgb_skip`): the gamma-encoded input is concatenated into the albedo
 head at full resolution. Without it the frozen-encoder model keeps only about half of the
 reference chroma spread; with it (plus the chroma-direction loss on albedo) the colour is
-restored. It is also a direct route for illuminant colour into A, which is why the V21
+restored. It is also a direct route for illuminant colour into A, which is why the trifactor
 model feeds the albedo head the input divided by its predicted shading instead.
 """
 
@@ -24,7 +24,7 @@ class DecodeHead(nn.Module):
 
     Two 3x3 convs on the trunk, bilinear upsample to full resolution, then (if skip_ch > 0)
     concatenation of a small conv encoding of the skip image, one 3x3 refine and a 1x1
-    projection. Returns raw logits. Also used by the V21 heads.
+    projection. Returns raw logits. Also used by the trifactor heads.
     """
     def __init__(self, in_ch: int, mid: int = 64, out_ch: int = 3, skip_ch: int = 0,
                  skip_feat: int = 32):
@@ -57,7 +57,7 @@ class DecodeHead(nn.Module):
         return self.out(x)
 
 
-class IntrinsicDecompositionV17(nn.Module):
+class RGBShadingNet(nn.Module):
     def __init__(self, config):
         super().__init__()
         for retired in ('albedo_chroma_skip', 'shading_lum_skip'):

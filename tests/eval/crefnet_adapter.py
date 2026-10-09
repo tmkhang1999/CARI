@@ -1,4 +1,4 @@
-"""CRefNet adapter — shared by eval_arap.py and eval_maw.py.
+"""CRefNet adapter - shared by eval_arap.py and eval_maw.py.
 
 CRefNet (Luo et al. 2023, "Learning Consistent Reflectance Estimation With a
 Decoder-Sharing Transformer") ships as a standalone repo + checkpoint, not a
@@ -8,9 +8,9 @@ eval pipeline, mirroring the existing Marigold adapter pattern.
 
 Verified against documents/references/CRefNet/infer.py + modeling/crefnet_swin_v2.py:
   - Input: sRGB [0,1] CHW tensor (NOT linear, no ImageNet mean/std normalization).
-  - Output ("IID" mode): pred_R is LINEAR reflectance (rgI color_rep — the decoder's
+  - Output ("IID" mode): pred_R is LINEAR reflectance (rgI color_rep - the decoder's
     linear chromaticity*intensity reconstruction is used directly, no output gamma).
-    pred_S is shading (grayscale, repeated to 3ch — s_chs=1 in both released configs).
+    pred_S is shading (grayscale, repeated to 3ch - s_chs=1 in both released configs).
   - Resize: aspect-preserving long-side cap; the cap must be an exact multiple of
     min_input_size = 2**(len(enc_ch_mult)-1) * patch_size * window_size = 4*1*14 = 56
     for BOTH variants (min_input_size depends only on the encoder, not swin depth).
@@ -81,7 +81,7 @@ def run_crefnet(model, rgb_display_srgb_linear: np.ndarray, max_size: int, devic
     """Run CRefNet in IID mode.
 
     Args:
-        rgb_display_srgb_linear: display-space LINEAR [0,1] HWC float array — i.e. the
+        rgb_display_srgb_linear: display-space LINEAR [0,1] HWC float array - i.e. the
             same tonemapped-but-not-yet-gamma-encoded image eval_arap's
             `_external_display_linear` / eval_maw's HDR-norm already produce for Marigold.
             This function applies the sRGB gamma itself (CRefNet expects sRGB input).

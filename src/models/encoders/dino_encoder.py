@@ -5,7 +5,7 @@ patch tokens encode material/texture appearance rather than ImageNet class
 identity, and the augmentation-invariant training objective makes them relatively
 insensitive to illumination: the SAME material under shadow vs. light maps to
 SIMILAR tokens. A DPT decoder reading these features therefore emits consistent
-albedo across a shadow boundary — the structural fix for the shadow leakage a
+albedo across a shadow boundary - the structural fix for the shadow leakage a
 domain-shifted ImageNet backbone cannot provide. (This is the Depth-Anything
 recipe: DINOv2 backbone + DPT head generalizes from synthetic to real.)
 
@@ -23,9 +23,9 @@ class DINOv2Encoder(nn.Module):
     """Frozen DINOv2 ViT returning 4 intermediate feature maps + final tokens.
 
     Returns:
-        feats    : list of 4 (B, embed_dim, Hp, Wp) — shallow→deep ViT layers,
-                   each reshaped to the patch grid (all at the same Hp×Wp).
-        tokens   : (B, N, embed_dim) — last selected layer's tokens (material
+        feats    : list of 4 (B, embed_dim, Hp, Wp) - shallow->deep ViT layers,
+                   each reshaped to the patch grid (all at the same HpxWp).
+        tokens   : (B, N, embed_dim) - last selected layer's tokens (material
                    consistency loss); N = Hp*Wp.
         patch_hw : (Hp, Wp).
     """
@@ -35,7 +35,7 @@ class DINOv2Encoder(nn.Module):
         'base':  'vit_base_patch14_dinov2.lvd142m',    # 768-dim, depth 12
         'large': 'vit_large_patch14_dinov2.lvd142m',   # 1024-dim, depth 24
     }
-    # Layers tapped for the DPT pyramid (shallow→deep), per DPT/Depth-Anything.
+    # Layers tapped for the DPT pyramid (shallow->deep), per DPT/Depth-Anything.
     _DEFAULT_LAYERS = {
         'small': (2, 5, 8, 11),
         'base':  (2, 5, 8, 11),
@@ -64,7 +64,7 @@ class DINOv2Encoder(nn.Module):
         # DINOv2 was pretrained on sRGB internet images with ImageNet-style
         # transforms, so the model input must be GAMMA-ENCODED (sRGB) then
         # ImageNet-normalised. The pipeline feeds LINEAR rgb (physics space), so
-        # we gamma-encode here. (IID physics stays linear — only the backbone
+        # we gamma-encode here. (IID physics stays linear - only the backbone
         # input is converted.) Feeding linear rgb is off-distribution and
         # degrades the very material/invariance features this backbone is for.
         self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
@@ -91,7 +91,7 @@ class DINOv2Encoder(nn.Module):
         img = rgb.clamp(0.0, 1.0)
         if H14 != H or W14 != W:
             img = F.interpolate(img, size=(H14, W14), mode='bilinear', align_corners=False)
-        img = (img + 1e-6).pow(1.0 / 2.2)          # linear → sRGB (backbone distribution)
+        img = (img + 1e-6).pow(1.0 / 2.2)          # linear -> sRGB (backbone distribution)
         x = (img - self.mean) / self.std
 
         feats = self.vit.get_intermediate_layers(

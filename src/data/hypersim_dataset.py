@@ -1,7 +1,7 @@
 """
 Hypersim dataset loader.
 
-Disk layout (unchanged — do NOT reorganise):
+Disk layout (unchanged - do NOT reorganise):
   <root>/
     ai_001_001/images/scene_cam_00_final_hdf5/frame.XXXX.color.hdf5
                                               frame.XXXX.diffuse_reflectance.hdf5
@@ -13,10 +13,10 @@ Disk layout (unchanged — do NOT reorganise):
     ai_001_002/...
     ...
 
-Returns per __getitem__ (raw arrays — scale matching happens in training loop):
-    rgb:           (3, H, W)  float32  tonemapped linear [0,1]   ← encoder input
-    albedo_raw:    (3, H, W)  float32  raw linear HDR albedo     ← for scale_match()
-    albedo_scaled: (3, H, W)  float32  per-sample scaled albedo  ← for masks/metrics
+Returns per __getitem__ (raw arrays - scale matching happens in training loop):
+    rgb:           (3, H, W)  float32  tonemapped linear [0,1]   <- encoder input
+    albedo_raw:    (3, H, W)  float32  raw linear HDR albedo     <- for scale_match()
+    albedo_scaled: (3, H, W)  float32  per-sample scaled albedo  <- for masks/metrics
     illum_raw:     (3, H, W)  float32  linear illumination normalized by RGB percentile scale
     normals:       (3, H, W)  float32  unit vectors
     loss_mask:     (1, H, W)  bool
@@ -24,9 +24,9 @@ Returns per __getitem__ (raw arrays — scale matching happens in training loop)
     M_diffuse:     tensor(1.0)
 
 Dataset mixing: keep each dataset in its own sibling directory.
-  ../datasets/hypersim/      ← this dataset
-  ../datasets/interiornet/   ← future
-  ../datasets/midintrinsic/  ← future
+  ../datasets/hypersim/      <- this dataset
+  ../datasets/interiornet/   <- future
+  ../datasets/midintrinsic/  <- future
 MixedDataloader samples batches from each dataset by probability weight.
 NO need to flatten or merge directories.
 """
@@ -54,9 +54,9 @@ from collections import OrderedDict
 from src.data.shared_transforms import prepare_training_tensors
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _load_hdf5(path: str, retries: int = 0) -> np.ndarray:
     """Load array from HDF5 with optional retry and path-rich errors."""
@@ -121,9 +121,9 @@ def _sanitize_normals(normals: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     return n
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Dataset
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class HypersimDataset(Dataset):
     """
@@ -151,7 +151,7 @@ class HypersimDataset(Dataset):
                      (zero-filled instead), and don't require it to exist.
                      Set False when normal_cam.hdf5 has been pruned from disk
                      to save space. Flip back to True once the files are
-                     restored — no other code change needed to resume using
+                     restored - no other code change needed to resume using
                      surface normals.
     """
 
@@ -194,7 +194,7 @@ class HypersimDataset(Dataset):
         # been pruned from disk to save space; flip back to True (files must
         # be restored) to resume using surface normals. Normals are
         # zero-filled whenever this is False, matching the "file missing"
-        # code path — nothing else needs to change to bring normals back.
+        # code path - nothing else needs to change to bring normals back.
         self.load_normals = bool(load_normals)
 
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
@@ -266,7 +266,7 @@ class HypersimDataset(Dataset):
         print(f"[HypersimDataset] Created fixed scene split at {split_path}")
         return set(train_scenes), set(val_scenes)
 
-    # ── File scanning ─────────────────────────────────────────────────────────
+    # -- File scanning ---------------------------------------------------------
 
     def _build_file_list(self) -> list:
         """
@@ -277,7 +277,7 @@ class HypersimDataset(Dataset):
         normal_cam is optional and tracked independently of semantic (the
         dataset was pruned of normal_cam.hdf5 to save disk; normals are
         zero-filled when absent).
-        render_entity_id is optional — loss_mask is derived from scaled albedo.
+        render_entity_id is optional - loss_mask is derived from scaled albedo.
         Frames where geometry files exist for only a subset of the trajectory
         (incomplete camera, e.g. scene_cam_01 in ai_001_002) are skipped.
         """
@@ -327,7 +327,7 @@ class HypersimDataset(Dataset):
                     if not all(os.path.exists(p) for p in [alb_path, illum_path]):
                         continue
 
-                    # Geometry modalities (tracked independently — normal_cam
+                    # Geometry modalities (tracked independently - normal_cam
                     # was pruned from disk, semantic was not).
                     norm_path = geo_base + '.normal_cam.hdf5'
                     seg_path  = geo_base + '.semantic.hdf5'
@@ -350,7 +350,7 @@ class HypersimDataset(Dataset):
         # Scene-level split is already applied above; do not frame-split again.
         return samples
 
-    # ── Caching ───────────────────────────────────────────────────────────────
+    # -- Caching ---------------------------------------------------------------
 
     def _load_or_cache(self, key: str, path: str) -> np.ndarray:
         if self.cache_max_items <= 0:
@@ -421,7 +421,7 @@ class HypersimDataset(Dataset):
         out['sample_idx'] = torch.tensor(idx, dtype=torch.long)
         return out
 
-    # ── Core ──────────────────────────────────────────────────────────────────
+    # -- Core ------------------------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -459,7 +459,7 @@ class HypersimDataset(Dataset):
         rgb_tm = _tonemap_linear(rgb)
         return torch.from_numpy(rgb_tm).permute(2, 0, 1).float()
 
-    # ── Processing ────────────────────────────────────────────────────────────
+    # -- Processing ------------------------------------------------------------
 
     def _process(
         self,
@@ -490,9 +490,9 @@ class HypersimDataset(Dataset):
         return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Convenience factory
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def get_hypersim_loader(
     root_dir: str,
@@ -541,9 +541,9 @@ def get_hypersim_loader(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Quick smoke test
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 if __name__ == '__main__':
     import sys
@@ -552,7 +552,7 @@ if __name__ == '__main__':
     print(f"Train samples: {len(ds)}")
 
     if len(ds) == 0:
-        print("No samples found — check root_dir path.")
+        print("No samples found - check root_dir path.")
         sys.exit(1)
 
     sample = ds[0]

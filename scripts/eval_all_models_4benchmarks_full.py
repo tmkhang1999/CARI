@@ -22,16 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PY = Path(os.environ.get('IR_PYTHON', sys.executable))
 
 DEFAULT_CKPTS = [
-    # 'v17_41=checkpoints/v17_41/checkpoint_iter_40000.pth',
-    # 'v17_42=checkpoints/v17_42/checkpoint_iter_40000.pth',
-    # 'v17_43=checkpoints/v17_43/checkpoint_iter_40000.pth',
-    # 'v17_44=checkpoints/v17_44/checkpoint_iter_40000.pth',
-
-    'v17_20=checkpoints/v17_20/checkpoint_iter_60000.pth',
-    'v17_23=checkpoints/v17_23/checkpoint_iter_60000.pth',
-    'v17_29=checkpoints/v17_29/checkpoint_iter_60000.pth',
-    'v17_33=checkpoints/v17_33/checkpoint_iter_60000.pth',
-    'v17_34=checkpoints/v17_34/checkpoint_iter_60000.pth',
+    # The four ablation rows; ciai is the reported model.
+    'ablation_none=checkpoints/ablation_none/checkpoint_iter_40000.pth',
+    'ablation_ciai=checkpoints/ablation_ciai/checkpoint_iter_40000.pth',
+    'ablation_colour=checkpoints/ablation_colour/checkpoint_iter_40000.pth',
+    'ciai=checkpoints/ciai/checkpoint_iter_40000.pth',
 ]
 DEFAULT_MID_ROOT = ROOT.parent / 'datasets' / 'MIDIntrinsics'
 DEFAULT_MAW_ROOT = ROOT / 'tests/testing_data/MAW'
@@ -236,7 +231,7 @@ def protocol_manifest(args: argparse.Namespace, specs: list[dict]) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Full four-model evaluation on MID, MAW, ARAP, and IIW.')
-    parser.add_argument('--ckpt', action='append', help='LABEL=PATH. Repeatable; defaults to v17_41/42/43/44.')
+    parser.add_argument('--ckpt', action='append', help='LABEL=PATH. Repeatable; defaults to the four ablation rows.')
     parser.add_argument('--cuda-indices', default='0', help='Comma-separated physical GPU indices; default is one GPU (0).')
     parser.add_argument('--out', default='tests/visualizations/all_models_4bench_full')
     parser.add_argument('--mid-root', default=str(DEFAULT_MID_ROOT))
@@ -251,12 +246,12 @@ def main() -> None:
                         help='Delay between child-evaluator retries.')
     parser.add_argument('--no-comparison-sheets', action='store_true',
                         help='Do not create the four compact post-evaluation comparison sheets.')
-    # Per-dataset inference resolution — see README.md#evaluation.
+    # Per-dataset inference resolution - see README.md#evaluation.
     # MID/IIW/ARAP at 1280 (measured degradation at 512; 1280 vs 1500 measured IDENTICAL on the
-    # full 52-scene ARAP set, <1% on every metric, mixed direction = noise — Ordinal's own "1500"
+    # full 52-scene ARAP set, <1% on every metric, mixed direction = noise - Ordinal's own "1500"
     # is a per-image content-adaptive R_0 CEILING, not a fixed operating resolution, so matching
     # it exactly isn't reproducible or meaningfully more comparable; not worth the ~2x VRAM cost).
-    # MAW at 512 (authors' protocol — their metric code downscales preds to 320x240 regardless).
+    # MAW at 512 (authors' protocol - their metric code downscales preds to 320x240 regardless).
     parser.add_argument('--infer-max-size', type=int, default=1280,
                         help='Long-side cap for MID and IIW (default 1280, the comparable protocol).')
     parser.add_argument('--arap-infer-size', type=int, default=1280,

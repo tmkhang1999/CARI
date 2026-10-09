@@ -9,7 +9,7 @@ os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 import cv2, numpy as np, torch
 sys.path.insert(0, f'{ROOT}/tests/eval')
 os.chdir(f'{ROOT}/tests/eval')
-from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame
+from eval_mid_constancy import load_ours, _raw_frame, _tonemap_frame
 
 DST = f'{ROOT}/documents/thesis/images/arch'
 os.makedirs(DST, exist_ok=True)
@@ -27,7 +27,7 @@ def save(a, name, gamma=True, sz=340):
     print('wrote', name)
 
 dev = 'cpu'
-m = load_v17(f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', dev)
+m = load_ours(f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth', dev)
 sc = 'everett_dining1'
 sp = os.path.join(MID, sc)
 I = _tonemap_frame(_raw_frame(sp, 0))

@@ -5,21 +5,21 @@
 # WHY THE TWO CASES DIFFER
 # ------------------------
 # Stage A (phase 1 + 2) trains on hypersim/interiorverse with no MID pairs, so the
-# cross-render losses never fire. Stage B (phase 3) changes the data mix AND activates
-# L_inv / L_explain / L_chr_explain. Adam's moment estimates carried over from Stage A
+# CIAI pair losses never fire. Stage B (phase 3) changes the data mix AND activates
+# L_inv / L_explain. Adam's moment estimates carried over from Stage A
 # are estimated for a different objective, so the FIRST launch into Stage B passes
 # --skip-optimizer and starts Adam clean.
 #
 # An interruption mid-Stage-B is a different situation: the objective has not changed,
 # and resetting Adam every time the job is killed would repeatedly re-disrupt training.
 # So restarts DO load the run's own optimizer state (no --skip-optimizer), which is why
-# the row configs keep `skip_optimizer: false` -- train_v17.py ORs the CLI flag with
+# the row configs keep `skip_optimizer: false` -- train.py ORs the CLI flag with
 # the config value, so config false + CLI flag on first launch gives exactly this.
 #
 # WHY THIS MATTERS FOR THE ABLATION
 # ---------------------------------
-# The original Table A was invalidated because rows differed in optimizer treatment: a
-# silent fresh-Adam fallback (load_checkpoint in train_v17.py catches a param-group mismatch, warns,
+# An earlier version of the ablation was invalidated because rows differed in optimizer treatment: a
+# silent fresh-Adam fallback (load_checkpoint in train.py catches a param-group mismatch, warns,
 # and continues with a fresh optimizer) gave the colour-ON rows ~1.85x the effective LR
 # of the colour-OFF rows. Every row must therefore take the SAME path. This script makes
 # that path explicit, and greps each launch for the silent-fallback warning so a row that
@@ -27,62 +27,61 @@
 #
 # skip_optimizer does NOT affect the learning rate. A fresh optimizer takes initial_lr
 # from the config and CosineAnnealingLR recomputes the schedule from
-# last_epoch=completed_opt_steps-1 (train_v17.py main); a restart restores the saved
+# last_epoch=completed_opt_steps-1 (train.py main); a restart restores the saved
 # initial_lr. Both give the same LR at the same step. Only Adam's moments differ.
 #
 # HOW TO STOP A RUN  -- READ THIS BEFORE KILLING ANYTHING
 # ------------------------------------------------------
 # This script RESTARTS training whenever the python process exits non-zero. So
-# `pkill -f train_v17.py` does not stop a run -- it triggers a restart 60s later.
+# `pkill -f train.py` does not stop a run -- it triggers a restart 60s later.
 # That already caused one incident: two wrappers thought to be dead relaunched
 # themselves onto both GPUs alongside a new pair of runs, putting two ~11 GiB
 # processes on one 23.6 GiB card and OOM-ing all four.
 #
 # Kill the WRAPPER first, then the python:
-#     pkill -f train_resilient.sh && sleep 3 && pkill -f train_v17.py
+#     pkill -f train_resilient.sh && sleep 3 && pkill -f train.py
 # Or drop a stop file, which makes the wrapper exit cleanly after the current
 # attempt instead of retrying:
-#     touch /tmp/cari_runs/STOP_v17_62_s42
+#     touch /tmp/ciai_runs/STOP_ciai_s42
 # Always confirm BOTH are gone before launching anything new:
 #     ps aux | grep -c '[t]rain_resilient'   # must be 0
-#     ps aux | grep -c '[t]rain_v17.py'      # must be 0
+#     ps aux | grep -c '[t]rain.py'          # must be 0
 #
 # USAGE
-#   INITIAL_RESUME=<fork ckpt> VERSION=17.61 CUDA=0 bash scripts/train_resilient.sh
-#   SEED=42 INITIAL_RESUME=<fork ckpt> VERSION=17.62 CUDA=0 bash scripts/train_resilient.sh
+#   INITIAL_RESUME=<fork ckpt> CONFIG=ciai CUDA=0 bash scripts/train_resilient.sh
+#   SEED=43 INITIAL_RESUME=<fork ckpt> CONFIG=ablation_ciai CUDA=0 bash scripts/train_resilient.sh
 #
 # ENV
-#   VERSION          required, e.g. 17.61 (dots are converted to underscores)
+#   CONFIG           required, a config name under src/configs, e.g. ciai
 #   INITIAL_RESUME   checkpoint the FIRST launch resumes from (the Stage-A fork)
 #   CUDA             GPU index (default 0)
 #   MAX_RETRIES      restart attempts after a non-zero exit (default 20)
 #   SLEEP_SEC        pause between restarts (default 60)
-#   LOG_DIR          where to write the run log (default /tmp/cari_runs)
+#   LOG_DIR          where to write the run log (default /tmp/ciai_runs)
 #   SKIP_INITIAL     set to 0 to NOT pass --skip-optimizer on the first launch
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:?set VERSION, e.g. VERSION=17.61}"
-CFG_TAG="${VERSION//./_}"
+CFG_TAG="${CONFIG:?set CONFIG, e.g. CONFIG=ciai}"
 # SEED selects a replicate. The config is shared across replicates -- only --seed
 # differs -- so the RUN tag carries the seed and each replicate gets its own
 # checkpoint/log directory. Without this, two seeds of one config would write to the
-# same v17_NN/ directory and --auto-resume would silently continue the WRONG run.
+# same checkpoint directory and --auto-resume would silently continue the WRONG run.
 SEED="${SEED:-}"
 if [ -n "$SEED" ]; then TAG="${CFG_TAG}_s${SEED}"; else TAG="$CFG_TAG"; fi
 CUDA="${CUDA:-0}"
 MAX_RETRIES="${MAX_RETRIES:-20}"
 SLEEP_SEC="${SLEEP_SEC:-60}"
-LOG_DIR="${LOG_DIR:-/tmp/cari_runs}"
+LOG_DIR="${LOG_DIR:-/tmp/ciai_runs}"
 SKIP_INITIAL="${SKIP_INITIAL:-1}"
 INITIAL_RESUME="${INITIAL_RESUME:-}"
 
 mkdir -p "$LOG_DIR"
-LOG="$LOG_DIR/train_v${TAG}.log"
+LOG="$LOG_DIR/train_${TAG}.log"
 PY="${PY:-python}"
-CFG="$ROOT/src/configs/v${CFG_TAG}.yaml"
+CFG="$ROOT/src/configs/${CFG_TAG}.yaml"
 [ -f "$CFG" ] || { echo "ERROR: config not found: $CFG"; exit 2; }
 
 # Where the run writes checkpoints (config paths.checkpoint_dir), read here so the
@@ -95,7 +94,7 @@ PYEOF
 )"
 [ -n "$CKPT_DIR" ] || CKPT_DIR="$ROOT/checkpoints"
 
-echo "===== v$TAG | cfg v$CFG_TAG | seed ${SEED:-<unseeded>} | GPU $CUDA | log $LOG ====="
+echo "===== $TAG | cfg $CFG_TAG | seed ${SEED:-<unseeded>} | GPU $CUDA | log $LOG ====="
 
 # PREFLIGHT: can this filesystem actually take a checkpoint?
 #
@@ -124,18 +123,18 @@ while :; do
     # FIRST launch: resume model weights from the Stage-A fork, fresh Adam.
     [ -n "$INITIAL_RESUME" ] || { echo "ERROR: INITIAL_RESUME required for the first launch"; exit 2; }
     [ -f "$INITIAL_RESUME" ] || { echo "ERROR: fork checkpoint missing: $INITIAL_RESUME"; exit 2; }
-    ARGS=(--version "$TAG" --config "$CFG" --device cuda --resume "$INITIAL_RESUME")
+    ARGS=(--config "$CFG_TAG" --run-name "$TAG" --device cuda --resume "$INITIAL_RESUME")
     [ "$SKIP_INITIAL" = "1" ] && ARGS+=(--skip-optimizer)
     [ -n "$SEED" ] && ARGS+=(--seed "$SEED")
     echo "--- launch 0 (fresh Adam=$SKIP_INITIAL) from $INITIAL_RESUME  $(date +%H:%M) ---"
   else
     # RESTART: continue this row, keeping its own optimizer state.
-    ARGS=(--version "$TAG" --config "$CFG" --device cuda --auto-resume)
+    ARGS=(--config "$CFG_TAG" --run-name "$TAG" --device cuda --auto-resume)
     [ -n "$SEED" ] && ARGS+=(--seed "$SEED")
     echo "--- restart $attempt (own optimizer state)  $(date +%H:%M) ---"
   fi
 
-  CUDA_VISIBLE_DEVICES="$CUDA" "$PY" "$ROOT/src/train_v17.py" "${ARGS[@]}" >>"$LOG" 2>&1
+  CUDA_VISIBLE_DEVICES="$CUDA" "$PY" "$ROOT/src/train.py" "${ARGS[@]}" >>"$LOG" 2>&1
   rc=$?
 
   # A quietly-reset optimizer would silently confound this row against the others.
@@ -146,7 +145,7 @@ while :; do
   fi
 
   if [ $rc -eq 0 ]; then
-    echo "===== v$TAG COMPLETE $(date +%H:%M) ====="
+    echo "===== $TAG COMPLETE $(date +%H:%M) ====="
     # Archiving is OPT-IN (ARCHIVE=1), because there is nowhere to put 18 checkpoints.
     # Measured headroom: home ~3 GB, scratchpad ~16 GB total. The study's 18 finals
     # would be ~26 GB, so keeping them all is not an option on this machine.
@@ -155,19 +154,19 @@ while :; do
     # its rows, keep the metrics JSON (kilobytes), and free the checkpoints before the
     # next round. Only the two headline rows are worth archiving for figures, and home
     # has just about room for those.
-    CKPT_SRC="$(ls -1t "$CKPT_DIR/v$TAG"/checkpoint_iter_*.pth 2>/dev/null | head -1)"
+    CKPT_SRC="$(ls -1t "$CKPT_DIR/$TAG"/checkpoint_iter_*.pth 2>/dev/null | head -1)"
     if [ -z "$CKPT_SRC" ]; then
-      echo "!!! no checkpoint found in $CKPT_DIR/v$TAG"
+      echo "!!! no checkpoint found in $CKPT_DIR/$TAG"
     elif [ "${ARCHIVE:-0}" = "1" ]; then
-      mkdir -p "$ROOT/checkpoints/v$TAG"
-      if cp "$CKPT_SRC" "$ROOT/checkpoints/v$TAG/"; then
-        echo "archived $(basename "$CKPT_SRC") -> checkpoints/v$TAG/"
+      mkdir -p "$ROOT/checkpoints/$TAG"
+      if cp "$CKPT_SRC" "$ROOT/checkpoints/$TAG/"; then
+        echo "archived $(basename "$CKPT_SRC") -> checkpoints/$TAG/"
       else
-        echo "!!! ARCHIVE FAILED for v$TAG (quota). Checkpoint is ONLY at $CKPT_SRC"
+        echo "!!! ARCHIVE FAILED for $TAG (quota). Checkpoint is ONLY at $CKPT_SRC"
       fi
     else
       echo "final checkpoint: $CKPT_SRC"
-      echo "  (not archived; set ARCHIVE=1 to copy to checkpoints/v$TAG/ -- home has ~3 GB)"
+      echo "  (not archived; set ARCHIVE=1 to copy to checkpoints/$TAG/ -- home has ~3 GB)"
       echo "  EVALUATE THIS ROW AND FREE IT before launching the next round."
     fi
     break
@@ -175,8 +174,8 @@ while :; do
 
   # Deliberate stop: exit instead of restarting. Without this the only way to stop
   # a run is to kill the wrapper, and killing the python alone RESTARTS it.
-  if [ -f "$LOG_DIR/STOP_v$TAG" ]; then
-    echo "===== v$TAG STOPPED by $LOG_DIR/STOP_v$TAG (rc=$rc) ====="
+  if [ -f "$LOG_DIR/STOP_$TAG" ]; then
+    echo "===== $TAG STOPPED by $LOG_DIR/STOP_$TAG (rc=$rc) ====="
     exit 0
   fi
 
@@ -190,7 +189,7 @@ while :; do
 
   attempt=$((attempt+1))
   if [ "$attempt" -gt "$MAX_RETRIES" ]; then
-    echo "===== v$TAG GAVE UP after $MAX_RETRIES retries (last rc=$rc) ====="
+    echo "===== $TAG GAVE UP after $MAX_RETRIES retries (last rc=$rc) ====="
     exit $rc
   fi
   echo "--- exit $rc; retrying in ${SLEEP_SEC}s ---"

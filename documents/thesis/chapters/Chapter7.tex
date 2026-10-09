@@ -105,7 +105,7 @@ Predict the image as
 with a scalar shading luminance $S_{\text{lum}}$, a unit-luminance shading chroma map
 $\mathbf{C}$ predicted by its own head with a low-frequency and a global component, and
 the albedo $\mathbf{A}$. This follows the separation that makes CD-IID colour-stable, inside
-a single network (\texttt{src/models/v21\_trifactor.py}). The colour path changes accordingly:
+a single network (\texttt{src/models/trifactor\_net.py}). The colour path changes accordingly:
 the albedo head receives the illuminant-corrected image
 $\mathbf{I} / (S_{\text{lum}}\mathbf{C})$ rather than the raw input, so that material colour
 reaches it and illuminant colour does not. A three-row ablation (raw skip, corrected skip,

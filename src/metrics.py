@@ -46,13 +46,13 @@ def _compute_lmse(pred, target, valid_mask, window_size=20, stride=10):
     # chrislib concatenates [R, G, B] into a single 2D array, then calls
     # ssq_error which computes: alpha = sum(correct * estimate * mask) / sum(estimate^2 * mask)
     # This is equivalent to summing over both spatial (K*K) AND channel (C) dims.
-    m_expanded = m_u.expand_as(p_u)    # (B, C, K*K, L) — same mask for all channels
-    num = (t_u * p_u * m_expanded).sum(dim=(1, 2))   # (B, L) — joint over C and K*K
+    m_expanded = m_u.expand_as(p_u)    # (B, C, K*K, L) - same mask for all channels
+    num = (t_u * p_u * m_expanded).sum(dim=(1, 2))   # (B, L) - joint over C and K*K
     den = (p_u ** 2 * m_expanded).sum(dim=(1, 2))     # (B, L)
 
     den_safe = torch.where(den > 1e-5, den, torch.ones_like(den))
     alpha = torch.where(den > 1e-5, num / den_safe, torch.zeros_like(den))
-    alpha = alpha.unsqueeze(1).unsqueeze(2)            # (B, 1, 1, L) — broadcasts over C and K*K
+    alpha = alpha.unsqueeze(1).unsqueeze(2)            # (B, 1, 1, L) - broadcasts over C and K*K
 
     # 5. Compute sum squared error per patch (joint over all channels)
     diff = t_u - alpha * p_u

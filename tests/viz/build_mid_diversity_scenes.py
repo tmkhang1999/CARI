@@ -75,7 +75,7 @@ def build_scene(scene_name, out_name):
     sp = os.path.join(MID, scene_name)
     lights = [0, 6, 12, 18]
     ins = [_tonemap_frame(_raw_frame(sp, i)) for i in lights]
-    label, ckpt, arch = ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17')
+    label, ckpt, arch = ('Ours', f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth', 'ours')
     p = AlbedoPredictor(ckpt, arch, 'cuda', infer_max_size=1280)
     albs = [p.albedo(x) for x in ins]
     del p

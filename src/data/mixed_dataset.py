@@ -60,20 +60,19 @@ def get_mixed_loader(
     strict_split: bool = True,
     use_mid_paired: bool = False,
     mid_raw_color_pair: bool = False,
-    front3d_cache_max_items: int = 0,
 ) -> DataLoader:
     """Training loader that samples each item from one of the datasets by mix_weights.
 
-    Datasets: hypersim, midintrinsic, interiorverse, front3d (3D-Front-IID v1). Only those
-    with a positive weight are instantiated. MID yields cross-illumination pairs when
-    use_mid_paired is True; front3d always yields pairs.
+    Datasets: hypersim, midintrinsic, interiorverse. Only those with a positive weight are
+    instantiated. MID yields cross-illumination pairs when use_mid_paired is True. The
+    trifactor model adds 3D-Front-IID v2 through src/data/trifactor_dataset.py.
     """
     if split != 'train':
         raise ValueError("get_mixed_loader should only be used for training.")
     if mix_weights is None:
         mix_weights = {'hypersim': 0.5, 'midintrinsic': 0.5}
     unknown = [k for k, w in mix_weights.items()
-               if w > 0 and k not in ('hypersim', 'midintrinsic', 'interiorverse', 'front3d')]
+               if w > 0 and k not in ('hypersim', 'midintrinsic', 'interiorverse')]
     if unknown:
         raise ValueError(f'unknown datasets in mix_weights: {unknown}')
 
@@ -113,16 +112,6 @@ def get_mixed_loader(
             split='train',
             input_size=input_size,
             crop_mode_train='hybrid',
-        )
-
-    if mix_weights.get('front3d', 0) > 0:
-        from src.data.front3d_dataset import Front3DDataset
-        datasets['front3d'] = Front3DDataset(
-            root_dir=data_roots.get('front3d', '../datasets/front3d_iid'),
-            split='train',
-            input_size=input_size,
-            crop_mode_train='hybrid',
-            cache_max_items=front3d_cache_max_items,
         )
 
     mixed_dataset = MixedDataset(datasets, mix_weights)

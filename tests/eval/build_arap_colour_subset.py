@@ -7,7 +7,7 @@ Cast_rel / Chroma_fid are reported -- barely varies illuminant colour. Measured 
 its gray probes over 30 test scenes / 9000 illuminant pairs (2026-09-05):
 
     median pairwise chromaticity gap   0.030
-    fraction of pairs >= 0.08          14%          (0.08 = V21's stated minimum
+    fraction of pairs >= 0.08          14%          (0.08 = the trifactor model's minimum
     fraction of pairs >= 0.15           4%           meaningful colour separation)
 
 So the colour axis is scored on a benchmark that hardly exercises it. ARAP's
@@ -180,7 +180,7 @@ def main():
             'front3d_v2_pilot_median_gap': 0.123,
             '_gap_convention': ('rb plane (R/sum,B/sum), MEDIAN over pairs. The 0.2425 in '
                                 'validate_3dfront_v2.py is rg plane + MAX over pairs and is NOT '
-                                'comparable -- see documents/history/DEVELOPMENT_HISTORY.md, section 5.'),
+                                'comparable -- see the private development history, section 5.'),
         },
         'min_gap': args.min_gap,
         'mask_frac': args.mask_frac,

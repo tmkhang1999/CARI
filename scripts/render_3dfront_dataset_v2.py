@@ -12,7 +12,7 @@ variants plus exact diffuse-only and ground-truth albedo passes:
       albedo.png  albedo.exr      (material base color via emission trick)
       meta.json                   (camera, light colors/positions, seeds)
 
-This is intentionally separate from render_3dfront_dataset.py. It preserves the
+This is intentionally separate from the v1 renderer (kept in the private development history). It preserves the
 validated interior-camera sampler but replaces the soft-light distribution with
 six named rigs: neutral soft, two moving hard keys, window/gobo, mixed warm/cool,
 and low-key practical lighting. The diffuse-only pass retains base-color texture
@@ -80,7 +80,7 @@ def parse_args():
     return p.parse_args(argv)
 
 
-# ── scene setup ─────────────────────────────────────────────────────────────
+# -- scene setup -------------------------------------------------------------
 
 def clean_scene():
     bpy.ops.object.select_all(action='SELECT')
@@ -218,7 +218,7 @@ def setup_render(resolution, samples, device):
             d.use = d.type != 'CPU'
 
 
-# ── interior camera sampling ────────────────────────────────────────────────
+# -- interior camera sampling ------------------------------------------------
 
 def look_at(obj, target):
     direction = Vector(target) - obj.location
@@ -367,7 +367,7 @@ def sample_interior_cameras(rng, lo, hi, size, content_names, num_views, tries=1
     return cam, picked
 
 
-# ── randomized colored illuminants (the CIAI axis) ──────────────────────────
+# -- randomized colored illuminants (the CIAI axis) --------------------------
 
 def kelvin_to_rgb(k):
     # Tanner Helland blackbody approximation -> linear RGB.
@@ -406,7 +406,7 @@ def clear_lights():
 
 def clear_rig_geometry():
     for obj in list(bpy.context.scene.objects):
-        if obj.name.startswith('v21_rig_'):
+        if obj.name.startswith('trifactor_rig_'):
             bpy.data.objects.remove(obj, do_unlink=True)
 
 
@@ -471,13 +471,13 @@ def add_window_gobo(rng, light_loc, target, radius, density=10):
     panel_h = max(0.55, rng.uniform(0.55, 0.85) * radius)
     bar = max(0.018, rng.uniform(0.018, 0.032) * radius)
     thick = max(0.018, 0.018 * radius)
-    mat = make_diffuse_material('v21_rig_gobo_black', (0.002, 0.002, 0.002, 1.0))
+    mat = make_diffuse_material('trifactor_rig_gobo_black', (0.002, 0.002, 0.002, 1.0))
     x_offsets = sorted(rng.uniform(-0.44, 0.44) for _ in range(density))
     y_offsets = sorted(rng.uniform(-0.42, 0.42) for _ in range(max(2, density - 2)))
     specs = [(ux * (offset * panel_w), (bar, panel_h, thick)) for offset in x_offsets]
     specs += [(uy * (offset * panel_h), (panel_w, bar, thick)) for offset in y_offsets]
     for i, (offset, dims) in enumerate(specs):
-        obj = add_box(f'v21_rig_gobo_{i}', middle + offset, dims, mat)
+        obj = add_box(f'trifactor_rig_gobo_{i}', middle + offset, dims, mat)
         obj.rotation_euler = quat.to_euler()
         if hasattr(obj, 'visible_camera'):
             obj.visible_camera = False
@@ -579,7 +579,7 @@ def build_lighting_rig(rng, lo, hi, center, size, radius, rig_index):
     }
 
 
-# ── rendering ───────────────────────────────────────────────────────────────
+# -- rendering ---------------------------------------------------------------
 
 def render_once_save_both(out_dir, stem):
     # Render once; write linear EXR and sRGB PNG from the same result.
@@ -619,7 +619,7 @@ def activate_diffuse_only_materials():
         for link in list(surface.links):
             tree.links.remove(link)
         diffuse = tree.nodes.new('ShaderNodeBsdfDiffuse')
-        diffuse.name = 'v21_diffuse_override'
+        diffuse.name = 'trifactor_diffuse_override'
         base = bsdf.inputs['Base Color']
         if base.is_linked:
             tree.links.new(base.links[0].from_socket, diffuse.inputs['Color'])
@@ -935,7 +935,7 @@ def main() -> int:
 
     rooms = find_rooms(glb_root)
     if not rooms:
-        raise FileNotFoundError(f'No *_full.glb under {glb_root} — extract the scene tar first (see docstring)')
+        raise FileNotFoundError(f'No *_full.glb under {glb_root} - extract the scene tar first (see docstring)')
     rooms = rooms[args.start:args.end]
     if args.room_contains:
         rooms = [r for r in rooms if args.room_contains in str(r)]

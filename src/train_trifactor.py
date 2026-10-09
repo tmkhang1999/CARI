@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the isolated V21 tri-factor IID model on one GPU."""
+"""Train the trifactor model (TriFactorNet) on one GPU."""
 
 from __future__ import annotations
 
@@ -20,15 +20,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.mixed_dataset import MixedDataset  # noqa: E402
-from src.data.v21_dataset import build_v21_datasets  # noqa: E402
-from src.losses.v21_loss import V21Loss  # noqa: E402
-from src.models.v21_trifactor import IntrinsicDecompositionV21  # noqa: E402
+from src.data.trifactor_dataset import build_trifactor_datasets  # noqa: E402
+from src.losses.trifactor_loss import TriFactorLoss  # noqa: E402
+from src.models.trifactor_net import TriFactorNet  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=str(ROOT / "src/configs/v21.yaml"))
-    parser.add_argument("--version", default="21")
+    parser.add_argument("--config", default=str(ROOT / "src/configs/trifactor.yaml"))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--resume", nargs="?", const="latest", default=None)
     parser.add_argument("--auto-resume", action="store_true")
@@ -132,13 +131,13 @@ def resume_training(
     if "scaler_state_dict" in checkpoint:
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
     step = int(checkpoint.get("global_step", 0))
-    print(f"Resumed V21 at step {step} from {path}")
+    print(f"Resumed the trifactor model at step {step} from {path}")
     return step
 
 
 def make_loaders(config: dict) -> tuple[DataLoader, DataLoader]:
     train_config = config["train"]
-    datasets = build_v21_datasets(config, "train")
+    datasets = build_trifactor_datasets(config, "train")
     mixed = MixedDataset(datasets, train_config["sampling_weights"])
     workers = int(train_config.get("num_workers", 4))
     generator = torch.Generator().manual_seed(int(train_config.get("seed", 42)))
@@ -154,7 +153,7 @@ def make_loaders(config: dict) -> tuple[DataLoader, DataLoader]:
         worker_init_fn=worker_seed,
         generator=generator,
     )
-    val_dataset = next(iter(build_v21_datasets(config, "val").values()))
+    val_dataset = next(iter(build_trifactor_datasets(config, "val").values()))
     val_loader = DataLoader(
         val_dataset,
         batch_size=1,
@@ -168,7 +167,7 @@ def make_loaders(config: dict) -> tuple[DataLoader, DataLoader]:
 @torch.no_grad()
 def validate(
     model: torch.nn.Module,
-    criterion: V21Loss,
+    criterion: TriFactorLoss,
     loader: DataLoader,
     device: torch.device,
     max_batches: int,
@@ -200,15 +199,15 @@ def main() -> int:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
     amp_enabled = bool(train_config.get("amp", True)) and device.type == "cuda"
-    checkpoint_dir = ROOT / output_config.get("checkpoint_dir", "checkpoints/v21")
-    log_dir = ROOT / output_config.get("log_dir", "logs/v21")
+    checkpoint_dir = ROOT / output_config.get("checkpoint_dir", "checkpoints/trifactor")
+    log_dir = ROOT / output_config.get("log_dir", "logs/trifactor")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     train_loader, val_loader = make_loaders(config)
-    model = IntrinsicDecompositionV21(config["model"]).to(device)
-    criterion = V21Loss(config["loss"]).to(device)
+    model = TriFactorNet(config["model"]).to(device)
+    criterion = TriFactorLoss(config["loss"]).to(device)
     parameters = [parameter for parameter in model.parameters() if not parameter.is_floating_point() or parameter.requires_grad]
     parameters = [parameter for parameter in parameters if parameter.requires_grad]
     optimizer = torch.optim.AdamW(
@@ -225,7 +224,7 @@ def main() -> int:
         else:
             resume_path = find_latest_valid(checkpoint_dir)
             if args.resume and resume_path is None:
-                raise FileNotFoundError(f"No valid V21 checkpoint under {checkpoint_dir}")
+                raise FileNotFoundError(f"No valid trifactor checkpoint under {checkpoint_dir}")
     step = 0
     if resume_path is not None:
         step = resume_training(resume_path, model, optimizer, scaler)
@@ -265,10 +264,10 @@ def main() -> int:
             scaled_total = total / accumulation
 
         if not torch.isfinite(total):
-            raise FloatingPointError(f"Non-finite V21 loss at step {step}: {float(total)}")
+            raise FloatingPointError(f"Non-finite trifactor loss at step {step}: {float(total)}")
         if args.dry_run:
             print(json.dumps({"total": float(total), **{key: float(value) for key, value in losses.items()}}, indent=2))
-            print("V21 dry run passed")
+            print("trifactor dry run passed")
             return 0
 
         scaler.scale(scaled_total).backward()

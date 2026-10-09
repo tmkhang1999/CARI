@@ -1,4 +1,4 @@
-# Shared defaults. Every experiment config extends v17.yaml (or sets its own values),
+# Shared defaults. Every experiment config extends rgb_shading.yaml (or sets its own values),
 # which overrides most of these.
 
 train:
@@ -29,14 +29,13 @@ train:
     midintrinsic: 0.4
 
 model:
-  version: 17
+  arch: rgb_shading
 
 data:
   hypersim_root: '../datasets/hypersim'
   midintrinsic_root: '../datasets/MID'
   # Per-worker decode caches (items). Small on purpose: each is RAM x workers x runs.
   cache_max_items: 64
-  front3d_cache_max_items: 32
   val_cache_max_items: 32
   val_num_workers: 2
   crop_mode_train: 'random'

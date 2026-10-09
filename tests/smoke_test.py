@@ -1,10 +1,11 @@
-"""Smoke test without data or pretrained weights: one training step for every V17 config and
-one V21 loss evaluation, on random tensors with a small, randomly initialised DINOv2.
+"""Smoke test without data or pretrained weights: one training step for every RGB-shading
+config and one trifactor loss evaluation, on random tensors with a small, randomly
+initialised DINOv2.
 
     python tests/smoke_test.py
 
 Checks that each config builds, every loss is finite, the CIAI pair terms fire on paired
-rows, gradients reach the trainable weights, and the V21 chroma term respects its gap gate.
+rows, gradients reach the trainable weights, and the trifactor chroma term respects its gap gate.
 Runs on CPU in about a minute.
 """
 
@@ -20,15 +21,17 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'src'))
 warnings.filterwarnings('ignore')
 
-import train_v17 as tv  # noqa: E402
-from losses.v17_loss import V17Loss  # noqa: E402
-from losses.v21_loss import V21Loss  # noqa: E402
-from models import IntrinsicDecompositionV21  # noqa: E402
+import train as tv  # noqa: E402
+from losses.rgb_shading_loss import RGBShadingLoss  # noqa: E402
+from losses.trifactor_loss import TriFactorLoss  # noqa: E402
+from models import TriFactorNet  # noqa: E402
 
-V17_CONFIGS = sorted(p.stem[1:] for p in (ROOT / 'src/configs').glob('v17_*.yaml'))
+# Every runnable config of the reported model; trifactor.yaml is checked separately.
+RGB_SHADING_CONFIGS = sorted(p.stem for p in (ROOT / 'src/configs').glob('*.yaml')
+                             if p.stem not in ('base', 'rgb_shading', 'trifactor'))
 
 
-def v17_batch(B=3, H=112, W=112):
+def rgb_shading_batch(B=3, H=112, W=112):
     g = torch.Generator().manual_seed(1)
     rgb = torch.rand(B, 3, H, W, generator=g) * 0.8 + 0.05
     albedo = torch.rand(B, 3, H, W, generator=g) * 0.9 + 0.05
@@ -41,28 +44,28 @@ def v17_batch(B=3, H=112, W=112):
     }
 
 
-def check_v17():
-    for ref in V17_CONFIGS:
-        cfg = tv.load_config(None, ref)
+def check_rgb_shading():
+    for ref in RGB_SHADING_CONFIGS:
+        cfg = tv.load_config(ref)
         cfg['model'].update(dino_variant='small', dino_pretrained=False)
         torch.manual_seed(0)
         model = tv.build_model(cfg)
-        criterion = V17Loss(cfg['loss'])
-        losses = tv.train_one_step(model, v17_batch(), criterion, 'cpu', 25000, 3000)
+        criterion = RGBShadingLoss(cfg['loss'])
+        losses = tv.train_one_step(model, rgb_shading_batch(), criterion, 'cpu', 25000, 3000)
         assert all(torch.isfinite(v).all() for v in losses.values()), f'{ref}: non-finite loss'
         if criterion.lambda_alb_invariance > 0:
             assert 'loss_alb_invariance' in losses, f'{ref}: invariance term did not fire'
         grads = [p.grad for p in model.parameters() if p.requires_grad and p.grad is not None]
         assert grads and sum(float(g.abs().sum()) for g in grads) > 0, f'{ref}: no gradient'
-        print(f'  v{ref}: total {float(losses["loss_total"]):.4f}')
+        print(f'  {ref}: total {float(losses["loss_total"]):.4f}')
 
 
-def check_v21():
-    cfg = yaml.safe_load(open(ROOT / 'src/configs/v21.yaml'))
+def check_trifactor():
+    cfg = yaml.safe_load(open(ROOT / 'src/configs/trifactor.yaml'))
     cfg['model'].update(dino_variant='small', dino_pretrained=False)
     torch.manual_seed(0)
-    model = IntrinsicDecompositionV21(cfg['model'])
-    criterion = V21Loss(cfg['loss'])
+    model = TriFactorNet(cfg['model'])
+    criterion = TriFactorLoss(cfg['loss'])
     B, H, W = 3, 112, 112
     g = torch.Generator().manual_seed(1)
     rgb = torch.rand(B, 3, H, W, generator=g) * 0.8 + 0.05
@@ -84,12 +87,12 @@ def check_v21():
         model.zero_grad()
         total, parts = criterion(model(batch['rgb']), batch, model(batch['rgb2']))
         total.backward()
-        assert torch.isfinite(total), 'V21: non-finite loss'
-        assert (float(parts['chr_explain']) > 0) == expect_chroma, 'V21: gap gate misbehaves'
-    print(f'  v21: total {float(total):.4f}, gap gate OK')
+        assert torch.isfinite(total), 'trifactor: non-finite loss'
+        assert (float(parts['chr_explain']) > 0) == expect_chroma, 'trifactor: gap gate misbehaves'
+    print(f'  trifactor: total {float(total):.4f}, gap gate OK')
 
 
 if __name__ == '__main__':
-    check_v17()
-    check_v21()
+    check_rgb_shading()
+    check_trifactor()
     print('smoke test passed')

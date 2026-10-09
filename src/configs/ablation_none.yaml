@@ -1,5 +1,5 @@
-# Table A, row 1: no CIAI, no colour path. Resumes the 19k Stage-A checkpoint.
-extends: 17
+# Ablation, row 1: no CIAI, no colour path. Resumes the 19k Stage-A checkpoint.
+extends: rgb_shading
 model:
   albedo_rgb_skip: false       # colour path off
 loss:

@@ -1,7 +1,7 @@
 """Decompose a photograph with a trained model, and the shared model-loading helpers.
 
     python tests/infer/infer_wild.py --image photo.jpg \
-        --checkpoint checkpoints/v17_44/checkpoint_iter_40000.pth --device cuda
+        --checkpoint checkpoints/ciai/checkpoint_iter_40000.pth --device cuda
 
 Writes outputs/wild_inference.png: input, albedo, shading and residual. The evaluators
 import `load_image`, `resolve_device`, `load_model` and `predict` from here, so every
@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from src.models import IntrinsicDecompositionV17, IntrinsicDecompositionV21
+from src.models import ARCHS, model_arch
 
 
 def load_image(filepath):
@@ -65,7 +65,7 @@ def resolve_device(device: str, cuda_index: int | None = None) -> str:
 
 
 def load_model(checkpoint_path, device):
-    """Build a V17 or V21 model from the checkpoint's own config and load its weights.
+    """Build RGBShadingNet or TriFactorNet from the checkpoint's own config and load its weights.
 
     Keys whose shape does not match are skipped and reported, so a config drift shows up
     as a warning instead of silently evaluating an untrained head.
@@ -75,13 +75,8 @@ def load_model(checkpoint_path, device):
     model_cfg = config.get("model")
     if not model_cfg:
         raise ValueError(f"{checkpoint_path} carries no model config; cannot rebuild the model")
-    version = int(float(model_cfg.get("version", 17)))
-    if version == 17:
-        model = IntrinsicDecompositionV17(model_cfg)
-    elif version == 21:
-        model = IntrinsicDecompositionV21(model_cfg)
-    else:
-        raise ValueError(f"unsupported model version {version} (have 17 and 21)")
+    arch = model_arch(model_cfg)   # also reads checkpoints saved with model.version 17/21
+    model = ARCHS[arch](model_cfg)
 
     weights = state.get('model_state_dict', state.get('model', state))
     own = model.state_dict()
@@ -90,7 +85,7 @@ def load_model(checkpoint_path, device):
     if missing:
         print(f"  [warn] {len(missing)} trainable tensors not in checkpoint: {missing[:5]} ...")
     model.load_state_dict(filtered, strict=False)
-    return model.to(device).eval(), version
+    return model.to(device).eval(), arch
 
 
 def to_model_input(rgb_linear, is_hdr):
@@ -141,8 +136,8 @@ def infer_and_visualize(filepath, checkpoint_path, device="cuda", max_size=1280,
 
     rgb_linear, is_hdr = load_image(filepath)
     rgb_tm = to_model_input(_resize_for_inference(rgb_linear, max_size, min_size), is_hdr)
-    model, version = load_model(checkpoint_path, device)
-    print(f"Running V{version} on {rgb_tm.shape[1]}x{rgb_tm.shape[0]}")
+    model, arch = load_model(checkpoint_path, device)
+    print(f"Running {arch} on {rgb_tm.shape[1]}x{rgb_tm.shape[0]}")
     pred = predict(model, rgb_tm, device)
 
     def gamma(x):
@@ -174,7 +169,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--image", required=True, type=str)
-    parser.add_argument("--checkpoint", default="checkpoints/v17_44/checkpoint_iter_40000.pth", type=str)
+    parser.add_argument("--checkpoint", default="checkpoints/ciai/checkpoint_iter_40000.pth", type=str)
     parser.add_argument("--device", default="cuda", type=str, help="cpu, cuda, cuda:1 or mps")
     parser.add_argument("--cuda", type=int, default=None, help="CUDA index when --device cuda")
     parser.add_argument("--max_size", type=int, default=1280, help="Long-side cap (memory)")

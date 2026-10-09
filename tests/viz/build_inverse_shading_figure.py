@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""fig:inverse_shading — why shading is regressed in the inverse domain.
+"""fig:inverse_shading - why shading is regressed in the inverse domain.
 
 Replaces a low-resolution panel reproduced from the Ordinal Shading paper with one built
 from our own Hypersim data. Emits:
-  * images/inverse_shading/panels.jpg  — Input | Regular S | Log S | Inverse S (high-res)
-  * chapters/data/shading_hist_{regular,log,inverse}.dat — histogram data for pgfplots,
+  * images/inverse_shading/panels.jpg - Input | Regular S | Log S | Inverse S (high-res)
+  * chapters/data/shading_hist_{regular,log,inverse}.dat - histogram data for pgfplots,
     so the three distributions are drawn as VECTOR charts in the document's own fonts
     rather than as a screenshot of somebody else's matplotlib.
 
@@ -68,7 +68,7 @@ def main():
         'inverse': (1.0 / (s + 1.0), 'Inverse shading  $1/(S{+}1)$'),
     }
 
-    # ── histogram data for pgfplots (vector) ──────────────────────────────────
+    # -- histogram data for pgfplots (vector) ----------------------------------
     v = s[valid]
     ranges = {'regular': (0, np.percentile(v, 99.5)),
               'log': (np.percentile(np.log(v + 1e-3), 0.5), np.percentile(np.log(v + 1e-3), 99.5)),
@@ -84,7 +84,7 @@ def main():
                 f.write(f'{0.5 * (edges[i] + edges[i + 1]):.5f} {cnt[i]:.5f}\n')
         print(f'  wrote shading_hist_{k}.dat  range=[{lo:.3f},{hi:.3f}]')
 
-    # ── image panels (raster, high-res) ───────────────────────────────────────
+    # -- image panels (raster, high-res) ---------------------------------------
     PW = 700
     H, W = rgb.shape[:2]
     PH = int(PW * H / W)

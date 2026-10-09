@@ -157,7 +157,7 @@ def prepare_training_tensors(
             ev_c = np.nan_to_num(ev_c, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
             combined = np.concatenate([combined, ev_c[..., None]], axis=-1)  # (size, size, 16)
 
-    # ── Resize ──
+    # -- Resize --
     t_img = torch.from_numpy(combined).permute(2, 0, 1).unsqueeze(0).float()
     t_img = F.interpolate(t_img, size=(input_size, input_size), mode='bilinear', align_corners=False).squeeze(0)
 
@@ -169,7 +169,7 @@ def prepare_training_tensors(
     seg_t = torch.from_numpy(seg_c.astype(np.float32)).unsqueeze(0).unsqueeze(0)
     seg_t = F.interpolate(seg_t, size=(input_size, input_size), mode='nearest').squeeze(0).long()
 
-    # ── Augmentations (Train Only) ──
+    # -- Augmentations (Train Only) --
     # For paired samples, only spatial flips run (they apply uniformly to all
     # channels incl. rgb2); photometric shifts and exposure jitter are skipped
     # because they would alter rgb1 relative to rgb2 and break albedo invariance.

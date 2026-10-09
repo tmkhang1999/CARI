@@ -3,7 +3,7 @@
 of one MID scene per figure. Rows = lights, columns = methods.
 
 Originally built because no deck figure put all the external methods in one
-qualitative panel — only CRefNet + Marigold-App appeared visually (Slides 7, 32)
+qualitative panel - only CRefNet + Marigold-App appeared visually (Slides 7, 32)
 while Marigold-Light and Ordinal Shading lived only in the tables. CD-IID and
 RGB->X were added 2026-09-02 for the same reason and a sharper one: CD-IID beats
 us on both MID colour metrics, so a page that reports that and shows no picture
@@ -30,9 +30,9 @@ FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
 FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 
 # label, ckpt_path, version -- "Ours" pinned to the deck's qualitative-gallery
-# checkpoint convention (v17_44/checkpoint_iter_40000.pth).
+# checkpoint convention (ciai/checkpoint_iter_40000.pth).
 MODELS = [
-    ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17'),
+    ('Ours', f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth', 'ours'),
     ('CRefNet', f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet'),
     ('Marigold-App', f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1', 'marigold-appearance'),
     ('Marigold-Light', f'{ROOT}/checkpoints/marigold-iid-lighting-v1-1', 'marigold-lighting'),

@@ -1,4 +1,4 @@
-# V17 + CIAI: the reported model and training recipe. Experiment configs extend this.
+# RGB-shading model + CIAI: the reported model and training recipe. Experiment configs extend this.
 #
 # Model: frozen DINOv2-L encoder, DPT decoder, albedo head with the colour path (RGB skip),
 # three-channel inverse-shading head, analytic residual.
@@ -7,7 +7,7 @@
 #   phase 2 [15k, 19k)  Hypersim + InteriorVerse      supervised only (19k = shared fork)
 #   phase 3 [19k, 40k)  + MID cross-illumination pairs, CIAI losses on
 model:
-  version: 17
+  arch: rgb_shading
   dino_variant: large        # small | base | large
   dino_pretrained: true
   dpt_feat_ch: 512

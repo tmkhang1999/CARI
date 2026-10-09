@@ -1,11 +1,11 @@
-"""Ordinal Shading adapter — shared by eval_arap.py and eval_maw.py.
+"""Ordinal Shading adapter - shared by eval_arap.py and eval_maw.py.
 
 Ordinal Shading (Careaga & Aksoy 2023, "Intrinsic Decomposition via Ordinal
 Shading") is stage 1 of the CD-IID pipeline (documents/references/Intrinsic
 CD-IID): a grayscale ordinal-shading network + a second network that converts
 the ordinal estimate into real (inverse) shading, from which albedo is derived
 by division. It ships as the `intrinsic` pip package (already installed in
-this env, along with its `altered_midas` and `chrislib` dependencies — see
+this env, along with its `altered_midas` and `chrislib` dependencies - see
 that repo's setup.py) with weights fetched live via torch.hub from GitHub
 releases (verified reachable 2026-07-12; ~484MB combined ord+iid checkpoint).
 
@@ -38,7 +38,7 @@ def _ensure_ordinal_imported():
     _load_models, _run_gray_pipeline, _uninvert = load_models, run_gray_pipeline, uninvert
 
 
-# Weight names accepted by intrinsic.pipeline.load_models (V1 releases only — stage=1
+# Weight names accepted by intrinsic.pipeline.load_models (V1 releases only - stage=1
 # forces the paper's original ordinal + grayscale-albedo networks, no colour/diffuse stages).
 _WEIGHTS = {
     'ordinal': 'paper_weights',
@@ -52,7 +52,7 @@ def load_ordinal(device, variant: str = 'ordinal'):
     if variant not in _WEIGHTS:
         raise ValueError(f"Unknown Ordinal Shading variant {variant!r}; expected one of {list(_WEIGHTS)}")
     models = _load_models(_WEIGHTS[variant], stage=1, device=str(device))
-    print(f'  Loaded Ordinal Shading ({variant}) — stage 1 (ord_model + iid_model)')
+    print(f'  Loaded Ordinal Shading ({variant}) - stage 1 (ord_model + iid_model)')
     return models
 
 
@@ -60,7 +60,7 @@ def run_ordinal(models, rgb_display_linear: np.ndarray, max_size: int, device):
     """Run the stage-1 grayscale pipeline.
 
     Args:
-        rgb_display_linear: display-space LINEAR [0,1] HWC float array — same
+        rgb_display_linear: display-space LINEAR [0,1] HWC float array - same
             convention as crefnet_adapter.run_crefnet's input. This function does
             the sRGB gamma encoding itself (run_gray_pipeline expects sRGB, then
             gamma-decodes internally via **2.2 when linear=False).

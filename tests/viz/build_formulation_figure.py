@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fig:formulation (Ch2) — why a grayscale-shading model must leak illuminant colour.
+"""fig:formulation (Ch2) - why a grayscale-shading model must leak illuminant colour.
 
 Chapter 2 currently argues the thesis premise entirely in prose. The rival works both make
 this point with a figure (CD-IID Figs. 2 and 7), and it is the single idea the whole thesis
@@ -128,13 +128,13 @@ def main():
     os.makedirs(DST, exist_ok=True)
     I, A, S_rgb, A_grey, err_grey, m_grey, m_rgb = load_case(args.scene, args.light)
 
-    print(f'scene={args.scene} light={args.light}: mean albedo chroma error — '
+    print(f'scene={args.scene} light={args.light}: mean albedo chroma error - '
           f'grey shading: {m_grey:.3f}   colour shading: {m_rgb:.3f}')
 
     cells = [
         ('Input  $I$  (coloured light)', nrm(I), None, ''),
         ('True albedo  $A$', nrm(A), 'gt', 'what the paint actually is'),
-        ('Colour shading  $S_{RGB}$', nrm(S_rgb), None, 'the lamp’s hue lives here'),
+        ('Colour shading  $S_{RGB}$', nrm(S_rgb), None, "the lamp's hue lives here"),
         ('Grey-shading albedo  $I/s$', nrm(A_grey), 'bad',
          f'chroma error {m_grey:.2f}: tinted'),
     ]

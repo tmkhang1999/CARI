@@ -43,7 +43,7 @@ SCENES = [
 ]
 
 MODELS = [
-    ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17'),
+    ('Ours', f'{ROOT}/checkpoints/ciai/checkpoint_iter_40000.pth', 'ours'),
     ('CD-IID', '', 'cdiid'),
     ('CRefNet', f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet'),
     ('Marigold-App', f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1', 'marigold-appearance'),

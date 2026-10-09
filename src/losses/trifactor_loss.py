@@ -1,4 +1,4 @@
-"""Losses for the V21 tri-factor model: I = A * (S_lum * C) + R, Y(C) = 1.
+"""Losses for the trifactor model: I = A * (S_lum * C) + R, Y(C) = 1.
 
 Single-image terms supervise the albedo, the shading luminance S_lum and the shading
 chroma C wherever ground truth exists. The pair terms are the CIAI losses of
@@ -122,7 +122,7 @@ def ssim_loss(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
     return (((1.0 - score.clamp(-1.0, 1.0)) * 0.5) * expanded).sum() / expanded.sum().clamp_min(1.0)
 
 
-class V21Loss(nn.Module):
+class TriFactorLoss(nn.Module):
     def __init__(self, config: dict) -> None:
         super().__init__()
         self.weights = {key: float(value) for key, value in config.items() if key.startswith("lambda_")}

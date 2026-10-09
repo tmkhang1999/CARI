@@ -1,4 +1,4 @@
-"""CD-IID adapter — Colorful Diffuse Intrinsic Image Decomposition (Careaga & Aksoy, TOG 2024).
+"""CD-IID adapter - Colorful Diffuse Intrinsic Image Decomposition (Careaga & Aksoy, TOG 2024).
 
 This is the direct rival of this thesis: CD-IID is the one published method that
 explicitly models *coloured* illumination rather than assuming white light, and it
@@ -8,9 +8,9 @@ was wired into our harness; this adapter closes that gap by running the full
 five-stage cascade.
 
 It ships in the same `intrinsic` pip package as ordinal_adapter.py (see that file
-for the install note); the difference is `load_models('v2')` — the 2024 release,
+for the install note); the difference is `load_models('v2')` - the 2024 release,
 whose stage_0..stage_4 checkpoints are fetched via torch.hub from the repo's
-GitHub releases (~1.5 GB total) — instead of the V1 `paper_weights` at stage=1.
+GitHub releases (~1.5 GB total) - instead of the V1 `paper_weights` at stage=1.
 
 Pipeline contract, read off intrinsic/pipeline.py:run_pipeline:
   - Input is sRGB when `linear=False`; the function gamma-decodes internally and
@@ -49,7 +49,7 @@ def load_cdiid(device, variant: str = 'v2'):
     if variant != 'v2':
         raise ValueError(f"Unknown CD-IID variant {variant!r}; only 'v2' is released")
     models = _load_models('v2', stage=4, device=str(device))
-    print('  Loaded CD-IID (v2) — full 5-stage colourful-diffuse cascade')
+    print('  Loaded CD-IID (v2) - full 5-stage colourful-diffuse cascade')
     return models
 
 
@@ -57,7 +57,7 @@ def run_cdiid(models, rgb_display_linear: np.ndarray, max_size: int, device):
     """Run the full colourful-diffuse pipeline.
 
     Args:
-        rgb_display_linear: display-space LINEAR [0,1] HWC float array — the same
+        rgb_display_linear: display-space LINEAR [0,1] HWC float array - the same
             convention as run_ordinal / run_crefnet. Gamma-encoded here because
             run_pipeline expects sRGB and decodes it again internally.
         max_size: long-side cap in pixels, passed through as `resize_conf`.

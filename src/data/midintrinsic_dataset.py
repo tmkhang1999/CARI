@@ -71,14 +71,14 @@ class MIDIntrinsicDataset(Dataset):
         scale = float(np.percentile(img_linear, 99)) + 1e-6
         img_norm = np.clip(img_linear / scale, 0.0, 1.0)
 
-        # Linear → sRGB gamma (skimage rgb2lab expects sRGB)
+        # Linear -> sRGB gamma (skimage rgb2lab expects sRGB)
         img_srgb = np.power(img_norm, 1.0 / 2.2)
 
         img_lab = color.rgb2lab(img_srgb)
-        img_lab[:, :, 1] += np.random.uniform(-20.0, 20.0)  # a: green↔red
-        img_lab[:, :, 2] += np.random.uniform(-20.0, 20.0)  # b: blue↔yellow
+        img_lab[:, :, 1] += np.random.uniform(-20.0, 20.0)  # a: green<->red
+        img_lab[:, :, 2] += np.random.uniform(-20.0, 20.0)  # b: blue<->yellow
 
-        # Lab → sRGB → linear, scale back to HDR
+        # Lab -> sRGB -> linear, scale back to HDR
         img_shifted_srgb = np.clip(color.lab2rgb(img_lab), 0.0, 1.0)
         img_shifted_linear = np.power(img_shifted_srgb, 2.2)
         return img_shifted_linear * scale
@@ -123,9 +123,9 @@ class MIDIntrinsicDataset(Dataset):
 
         Valid where the frame is well-exposed AND not in deep shadow:
           - reject the per-frame specular tail (the flash hotspot MOVES between frames; its
-            energy is non-diffuse → must not enter the albedo-invariance/explain losses),
+            energy is non-diffuse -> must not enter the albedo-invariance/explain losses),
           - reject deep-shadow / near-black pixels where this flash direction gave no signal
-            (there log(I) is sensor noise → the cross-frame ratio is meaningless).
+            (there log(I) is sensor noise -> the cross-frame ratio is meaningless).
         Computed BEFORE tonemapping, on luminance. Returns (H,W) float32 {0,1}.
         """
         rgb = np.clip(rgb, 0.0, None)
@@ -148,7 +148,7 @@ class MIDIntrinsicDataset(Dataset):
         img = cv2.imread(img_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
         if img is None:
             raise OSError(f"Failed to load image: {img_path}")
-        return img[:, :, ::-1].astype(np.float32)  # BGR→RGB, illuminant color INTACT
+        return img[:, :, ::-1].astype(np.float32)  # BGR->RGB, illuminant color INTACT
 
     def _pair_gap(self, scene_path: str, a: int, b: int) -> float:
         """Probe-measured illuminant chromaticity gap between flash directions a and b.
@@ -176,7 +176,7 @@ class MIDIntrinsicDataset(Dataset):
         """Sample 1-3 white-balanced illuminations, blend, and apply a Lab shift.
 
         Each call samples independently, so two calls on the same scene give two
-        different lightings of the SAME albedo — the basis for albedo invariance.
+        different lightings of the SAME albedo - the basis for albedo invariance.
         """
         num_illums = np.random.randint(1, 4) if self.split == 'train' else 1
         sampled_indices = np.random.choice(self.valid_indices, num_illums, replace=False)
@@ -187,7 +187,7 @@ class MIDIntrinsicDataset(Dataset):
             wb_img = self._white_balance(scene_path, img_idx)
             mixed_illum += wb_img * alpha
 
-        # Lab a/b shift — train only, applied before I/A so rgb and shading stay consistent
+        # Lab a/b shift - train only, applied before I/A so rgb and shading stay consistent
         if self.split == 'train':
             mixed_illum = self._lab_shift(mixed_illum)
         return mixed_illum
@@ -247,16 +247,16 @@ class MIDIntrinsicDataset(Dataset):
         )
 
         # Mask out saturated/blown-out pixels so recon loss doesn't chase clipped highlights.
-        # Tonemap maps p90 → 0.8, so pixels at ≥0.99 are in the blown-out tail.
+        # Tonemap maps p90 -> 0.8, so pixels at >=0.99 are in the blown-out tail.
         rgb_max = out['rgb'].amax(dim=0, keepdim=True)  # (1, H, W)
         out['loss_mask'] = out['loss_mask'] & (rgb_max < 0.99)
         # Specular gate (typed-S protection). MID has no shading GT, so the implied
-        # targets (recon → I, R* = 0) would push the NON-clipped specular sheen (glossy
-        # counters, the probe balls' reflections) INTO diffuse shading — contradicting
+        # targets (recon -> I, R* = 0) would push the NON-clipped specular sheen (glossy
+        # counters, the probe balls' reflections) INTO diffuse shading - contradicting
         # Hypersim, where true S_d GT routes speculars into the analytic R. Exclude the
         # per-crop top-3% luminance tail from all per-pixel losses: the sheen stays
         # UNSUPERVISED on MID and the spec/diffuse split semantics are owned by Hypersim.
-        # Deep shadows are deliberately NOT cut here — shadowed-input → full-albedo
+        # Deep shadows are deliberately NOT cut here - shadowed-input -> full-albedo
         # supervision is the shadow-removal signal (pair_valid handles the CIAI ratios).
         lum = 0.299 * out['rgb'][0] + 0.587 * out['rgb'][1] + 0.114 * out['rgb'][2]
         spec_thr = torch.quantile(lum.flatten(), 0.97)
@@ -264,9 +264,9 @@ class MIDIntrinsicDataset(Dataset):
 
         out['M_diffuse'] = torch.tensor(0.0, dtype=torch.float32)  # No diffuse-shading GT; I/A is colorful, not diffuse
         # Residual undershoot gate: enable the residual sparsity term on MID so that
-        # R=(I−A·S)₊ cannot absorb unexplained energy (e.g. unsaturated reds).
-        # Away from flash speculars (which are excluded by the HDR loss_mask), R_star≈0
-        # and both the L1-to-GT and the sparsity penalty push R toward zero — closing
+        # R=(I-A*S)+ cannot absorb unexplained energy (e.g. unsaturated reds).
+        # Away from flash speculars (which are excluded by the HDR loss_mask), R_star~0
+        # and both the L1-to-GT and the sparsity penalty push R toward zero - closing
         # the "dump red into residual" escape route identified in the red-cloth diagnosis.
         # The saturated-pixel guard (sat_ok) and loss_mask already exclude blown highlights.
         out['m_residual'] = torch.tensor(1.0, dtype=torch.float32)

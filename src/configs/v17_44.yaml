@@ -1,5 +1,0 @@
-# Table A, row 4: CIAI and colour path on. This is the base CIAI model ("Ours") reported
-# in the report (checkpoint at 40k). Resumes the 19k Stage-A checkpoint.
-extends: 17
-train:
-  skip_optimizer: false

@@ -68,7 +68,7 @@
     \draw[flow] (shaT.north) -- ++(0,4mm)  -| (R.south);
 
     % ── RGB skip: the only input skip actually enabled (shading has none;
-    % v17.yaml sets shading_lum_skip=false, albedo_chroma_skip=false) ───────
+    % rgb_shading.yaml sets shading_lum_skip=false, albedo_chroma_skip=false) ───────
     \draw[skipC] (imgT.north) |- ([yshift=7mm]ah.north) -| (ah.north)
       node[dim,pos=0.25,above,text=red!55!black]{RGB skip $\mathbf{I}^{1/2.2}$ (3\,ch, colour)};
 
@@ -88,9 +88,9 @@
     \draw[lossflow] (shaT) -- (ls);
     \draw[flow] (R.east) -- (resT.west);
     \draw[lossflow] (resT.east) -- (lr);
-    % CIAI acts on the albedo too (training-only; detailed in fig:cari)
+    % CIAI acts on the albedo too (training-only; detailed in fig:ciai)
     \node[loss, above=4mm of la, draw=red!55!black, fill=red!7] (linv) {$\mathcal{L}_{\text{inv}}$};
-    \node[dim, right=0.5mm of linv, text=red!55!black, align=left]{cross-illumination\\(\figref{fig:cari})};
+    \node[dim, right=0.5mm of linv, text=red!55!black, align=left]{cross-illumination\\(\figref{fig:ciai})};
     \draw[lossflow, dashed] (albT.north) to[bend left=12] (linv.west);
 
     % ── legend (own row, below everything) ──────────────────────────
@@ -129,7 +129,7 @@
     gradient and sign terms), and a sparsity term $\mathcal{L}_{\text{res}}$ that pushes the
     analytic residual toward zero. The cross-illumination invariance loss $\mathcal{L}_{\text{inv}}$
     also constrains the albedo but acts across an illuminant pair at training time only
-    (\figref{fig:cari}). Thumbnails are this model's own outputs on a MID test scene.
+    (\figref{fig:ciai}). Thumbnails are this model's own outputs on a MID test scene.
   }
   \label{fig:architecture}
 \end{figure}

@@ -35,7 +35,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 PER_SCENE = ROOT / 'documents/results/mid_per_scene.json'
 
-OURS = 'Ours (base CARI)'   # key in mid_per_scene.json for the reported model (v17_44)
+OURS = 'Ours (CIAI)'   # key in mid_per_scene.json for the reported model (ciai)
 BASELINES = ['CD-IID', 'RGB-X', 'CRefNet', 'Marigold-App',
              'Marigold-Light', 'Ordinal Shading']
 # All three are lower-is-better, so a negative difference means our model wins.

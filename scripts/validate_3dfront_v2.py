@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate whether a 3D-Front v2 pilot is useful before training V21.
+"""Validate whether a 3D-Front v2 pilot is useful before training the trifactor model.
 
-The thresholds are pre-registered in the V21 design. The hard-edge estimator
+The thresholds are pre-registered in the trifactor design. The hard-edge estimator
 matches scripts/measure_shading_domain_stats.py: |grad log S| > 0.3 after
 resizing the longest side to 512 pixels. A non-zero exit status means the
 renderer distribution should be fixed before scaling the corpus.
@@ -219,7 +219,7 @@ def main() -> int:
     print(json.dumps(summary, indent=2))
     print(f"Report: {report_path}")
     if not summary["passed"] and not args.no_fail:
-        print("FAIL: fix the renderer distribution before training V21.")
+        print("FAIL: fix the renderer distribution before training the trifactor model.")
         return 2
     return 0
 

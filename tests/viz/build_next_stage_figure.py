@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pipeline figure for the planned V21 model: three outputs and three CIAI losses.
+"""Pipeline figure for the planned trifactor model: three outputs and three CIAI losses.
 
 Two pixel-aligned photographs of one 3D-Front-IID view under different illuminants go through
 one shared model. Each pass outputs an albedo A, a grey shading S_lum and a unit-luminance
@@ -40,7 +40,7 @@ FRONT3D_VIEW = 'fc20b1fa-5b64-4821-bbf6-075a7d35741b/LivingRoom-24701/view_01'
 FIGURE_PANELS = {'L0': (49, 906, 306, 1163), 'L2': (683, 906, 941, 1163), 'albedo': (1002, 906, 1259, 1163)}
 
 INK, BLUE, RED, MUTE = (17, 24, 39), (29, 78, 216), (153, 27, 27), (92, 100, 112)
-GAP_THRESHOLD = 0.08   # matches chr_explain_min_gap in src/configs/v21.yaml
+GAP_THRESHOLD = 0.08   # matches chr_explain_min_gap in src/configs/trifactor.yaml
 
 
 def srgb_to_linear(x):
