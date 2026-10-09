@@ -23,6 +23,8 @@ refinement study); re-run their builder before publishing.
 | `fig:maw` | `build_hires_figures.py fig_maw_ours` | v17_44 | regenerate |
 | `fig:maw_resolution` | `build_hires_figures.py fig_maw_resolution` | v17_44 | regenerate |
 | `fig:arap_constancy`, `fig:arap_models` | `build_hires_figures.py fig_arap_ours`, `fig_arap_model_grid` | roster | regenerate (also after the ARAP mask fix) |
+| `fig:metric_card_spread` | `tests/viz/build_presentation_figures.py` (deck diagram) | none | current |
+| `fig:limit_reflective` | `tests/viz/build_presentation_figures.py` (crop of the page teaser) | v17_29 | regenerate |
 | `fig:ablation` | `build_hires_figures.py fig_ablation` | v17_41..44 | current |
 | `fig:chroma_fidelity` | `tests/viz/build_chroma_fidelity_figure.py` | roster | regenerate (caption notes the old values) |
 | `fig:tradeoff` | `chapters/fig_tradeoff.tex` | values from `documents/results/mid_per_scene.json` | current |
@@ -30,7 +32,10 @@ refinement study); re-run their builder before publishing.
 
 Project page figures come from `tests/viz/build_web_figures.py` (teaser, ambiguity, pairs,
 mechanism, qualitative, portfolio thumbnail) and `tests/viz/build_compare_widget_assets.py`
-(compare widget). The teaser, qualitative matrix and compare widget show the v17_29 checkpoint and
+(compare widget). `tests/viz/build_presentation_figures.py` adds the metric diagrams, the
+baseline comparison under two lights and the reflective-surface crop; it reuses only deck images
+without our model's predictions, because the deck's "Ours" panels came from the over-smoothed
+v17_34 checkpoint. The teaser, qualitative matrix and compare widget show the v17_29 checkpoint and
 need the same regeneration. The portfolio card thumbnail is cut from the teaser, so it follows it.
 
 Regeneration needs the MID test split (`../datasets/MIDIntrinsics/test`), the MAW, IIW and ARAP

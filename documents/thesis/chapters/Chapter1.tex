@@ -32,6 +32,8 @@ two layers: an \emph{albedo} $\mathbf{A}$ and a \emph{shading} $S$.
 Here $p$ denotes a pixel, $\Omega$ is the set of all pixels, the albedo encodes
 the true material colour at each pixel, and the shading encodes how bright the
 surface is due to lighting and geometry.
+Throughout this report, ``material colour'' means this diffuse albedo in linear RGB, not the
+spectral reflectance of the surface.
 If we can recover $\mathbf{A}$ reliably, we obtain a lighting-independent
 description of the scene. This separation has practical consequences. An
 interior-design tool can recolour a wall without painting over its shadows; an

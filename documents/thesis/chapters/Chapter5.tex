@@ -422,8 +422,19 @@ prediction to that of the reference,
 \end{equation}
 computed as the ratio of aggregate spreads over the test split. It is not an accuracy
 measure (a permutation of hues preserving the spread would score $1$), but it makes
-desaturation visible as a value well below $1$, which is how the colour-path finding of
-\secref{sec:ablation} was made.
+desaturation visible as a value well below $1$ (\figref{fig:metric_card_spread}).
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.72\textwidth]{images/losses/metric_card_spread.png}
+  \caption[Spread ratio: materials keep different colours.]{%
+    The spread ratio compares the chroma spread of the predicted materials with that of the
+    reference. A faithful prediction keeps different materials at different colours (ratio
+    near $1$); a desaturated one collapses them towards grey (ratio well below $1$), which
+    would also make it look stable.
+  }
+  \label{fig:metric_card_spread}
+\end{figure}
 
 $C_{\text{mat}}$ and $\text{Cast}_{\text{rel}}$ are lower-is-better and both vanish for
 a perfectly illuminant-invariant prediction. They are reported separately, rather than

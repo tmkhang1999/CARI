@@ -21,7 +21,7 @@
 
 Intrinsic image decomposition (IID) splits a photograph into the albedo of each surface and the shading that falls on it. However, a single image cannot tell a dark surface from a dimly lit one, so part of the lighting leaks into the albedo. As a result, the same wall can come out lighter or darker depending on how the room was lit.
 
-The purpose of this project is to reduce this leakage with a training strategy, **Cross-Illumination Albedo Invariance (CIAI)**. Two photographs of one scene under different lighting go through the same network, and their predicted albedos must agree. The pairs are used only in training, so inference is still one image and one forward pass.
+Our question is whether paired photographs, used only in training, can make the albedo stable under changing light while inference stays one image and one pass. To answer it, we propose **Cross-Illumination Albedo Invariance (CIAI)**. Two photographs of one scene under different lighting go through the same network,, and their predicted albedos must agree.
 
 In a matched ablation, CIAI lowers the lightness variation of a material across lighting by **28% and 39%**. In addition, it lowers the albedo error by 7-14% on ARAP renderings that keep their original coloured light, although ARAP is never used in training. However, it improves colour much less (hue drift -4 to -6%), because the explanation loss uses luminance only.
 

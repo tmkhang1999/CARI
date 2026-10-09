@@ -64,7 +64,21 @@ study below, is needed before the strategy can be judged on accuracy.
 \paragraph{Achromatic ambiguity and non-diffuse surfaces}
 Hard cast shadows can still be read as material, and mirrors, glass and glossy plastic are
 unstable across illuminations because an albedo--shading product has no representation for
-them; the residual absorbs only part of their appearance (\figref{fig:mid_constancy}).
+them; the residual absorbs only part of their appearance. \figref{fig:limit_reflective} shows
+the mirror sphere of a MID scene: its reflections move with the flash in the input and, in the
+same way, in our albedo.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.85\textwidth]{images/limits/reflective.jpg}
+  \caption[Reflective surfaces stay unstable.]{%
+    A mirror sphere under four flash directions (top) and our predicted albedo for each
+    (bottom). The reflections change with the light in both rows, because a diffuse
+    albedo--shading product cannot represent a mirror. Rendered with a later checkpoint of the
+    same model (see \secref{sec:exp_setup}).
+  }
+  \label{fig:limit_reflective}
+\end{figure}
 
 
 \section{Future Work}

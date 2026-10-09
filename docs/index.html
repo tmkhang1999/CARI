@@ -965,6 +965,10 @@
         comes out lighter or darker, and sometimes tinted, depending on how the room was lit.
       </p>
       <p class="cari-text">
+        Our question is whether <strong>paired photographs used only in training</strong> can make the
+        recovered albedo stable under changing light, while inference stays one image and one pass.
+      </p>
+      <p class="cari-text">
         We train with <strong>Cross-Illumination Albedo Invariance (CIAI)</strong>. Two photographs of one
         scene under different illumination pass through the same network; their albedos must agree, and
         the shading must explain the brightness change between them. The idea borrows from Siamese
@@ -1050,7 +1054,8 @@
         Write a photograph as material times shading, <strong>I = A ⊙ S<sub>d</sub> + R</strong>. From one
         image, a grey wall in shadow and a dark wall in full light are the same pixels, and a white wall
         under a warm lamp looks like a warm wall under white light. Whatever the model cannot attribute to
-        the light ends up in the albedo.
+        the light ends up in the albedo. Here, "material colour" means the diffuse linear-RGB albedo, not the
+        spectral reflectance.
       </p>
 
       <div class="cari-figure">
@@ -1060,6 +1065,16 @@
           <strong>Why the shading needs colour channels.</strong> Dividing an image by even the correct
           <em>luminance</em> of its shading leaves the light's tint in the albedo. Therefore, our model
           predicts a three-channel shading.
+        </p>
+      </div>
+
+      <div class="cari-figure">
+        <img src="static/img/ciai-baselines.jpg"
+             alt="One MID scene under two lighting conditions, with the albedo predicted by CRefNet and by Marigold-Appearance for each. CRefNet's albedo is pale; Marigold's changes between the two lights.">
+        <p class="fig-caption">
+          <strong>Existing models under two lights.</strong> CRefNet stays similar across the two lights partly
+          because its albedo is pale, and Marigold-App keeps more colour but shifts with the light. A single
+          image does not tell either model which part of the change belongs to the light.
         </p>
       </div>
 
@@ -1120,9 +1135,10 @@
         </div>
       </div>
       <p class="cari-text">
-        The pairs are loaded without per-frame white balance. Besides, the supervised losses on synthetic
-        data keep the albedo tied to a true value, because agreement alone could also be satisfied by the
-        same wrong albedo in both frames.
+        The pairs are loaded without per-frame white balance. Besides, the supervised losses keep the
+        albedo tied to a true value: L<sub>inv</sub> says "agree across lights", and the supervised anchors say
+        what that agreement should look like. Agreement alone could also be satisfied by the same wrong
+        albedo in both frames.
       </p>
       <p class="cari-text">
         The frozen-encoder model also tends to wash out the albedo colour. Therefore, we add a
@@ -1160,6 +1176,16 @@
         A grey, constant albedo is perfectly stable, so a stability score means nothing on its own. We
         report it next to accuracy, measured on the same frames where possible.
       </p>
+
+      <div class="cari-figure">
+        <img src="static/img/ciai-metrics.jpg"
+             alt="Four small diagrams. C_mat: four bars of equal height for a stable material, unequal bars for an unstable one. Cast_rel: chroma points clustered for a stable material, sliding along the lamp colour for a drifting one. Chroma_err: prediction close to the reference colour, or far from it. Spread ratio: different materials keep different colours, or all collapse to grey.">
+        <p class="fig-caption">
+          <strong>What each MID score catches.</strong> The two stability scores (top) ask whether a material
+          stays put across lights; the two fidelity scores (bottom) ask whether that colour is correct and
+          whether different materials keep different colours. A grey albedo passes the top row and fails the bottom.
+        </p>
+      </div>
 
       <div class="metric-grid">
         <div class="metric-card">
@@ -1268,7 +1294,8 @@
         behind RGB&rarr;X. It does not lead on hue: CD-IID, which predicts the shading colour in a dedicated
         stage, is better on hue drift, chroma error and MAW. These methods differ in architecture, data and
         size at once, so the claim about the training strategy rests on the matched ablation below. MID is
-        in CD-IID's and our training data, so neither side is zero-shot on it.
+        in CD-IID's and our training data, so neither side is zero-shot on it. A low drift can also come from
+        a pale albedo, as CRefNet shows in the grid at the top of this page.
       </div>
 
       <h3 class="cari-section-title" style="font-size:1.05rem; margin-top:44px;">What the ablation isolates</h3>
@@ -1276,6 +1303,21 @@
         A 2&times;2 study turns the CIAI losses and the colour path on and off, starting from one shared
         checkpoint with the same data and steps.
       </p>
+      <div class="results-table-wrap">
+        <table class="results-table">
+          <thead>
+            <tr><th></th><th>CIAI off</th><th></th><th>CIAI on</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Colour path off</td><td>Row 1<span class="ci">C<sub>mat</sub> 0.250</span></td><td>&rarr;</td><td>Row 2<span class="ci">C<sub>mat</sub> 0.180</span></td></tr>
+            <tr class="row-ours"><td>Colour path on</td><td>Row 3<span class="ci">C<sub>mat</sub> 0.259</span></td><td>&rarr;</td><td>Row 4 (ours)<span class="ci">C<sub>mat</sub> 0.157</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fig-caption" style="text-align:center;">
+        Reading across a row changes only the CIAI losses, so each arrow is a matched test of CIAI.
+      </p>
+
       <ul class="contrib-list">
         <li><strong>CIAI improves lightness stability.</strong> C<sub>mat</sub> drops from 0.250 to 0.180 with the
           colour path off and from 0.259 to 0.157 with it on (&minus;28% and &minus;39%). Hue drift improves only
@@ -1333,6 +1375,21 @@
         Cast<sub>rel</sub> results above. CD-IID, which predicts the shading colour in a separate stage, does
         not show this trend.
       </p>
+
+      <h3 class="cari-section-title" style="font-size:1.05rem; margin-top:44px;">Other failure cases</h3>
+      <p class="cari-text">
+        Besides colour, two cases stay hard. Firstly, reflective and glossy surfaces are unstable, because an
+        albedo&ndash;shading product cannot represent a mirror: the reflection moves into the albedo as the
+        light moves. Secondly, hard cast shadows can still be read as a material boundary.
+      </p>
+      <div class="cari-figure">
+        <img src="static/img/ciai-limit-reflective.jpg"
+             alt="A mirror sphere under four flash directions (top) and our predicted albedo for each (bottom); the reflections change between the four albedos.">
+        <p class="fig-caption">
+          <strong>Reflective surfaces.</strong> The mirror sphere from the teaser: its reflections change with
+          the light in the input and in our albedo.
+        </p>
+      </div>
     </section>
 
     <div class="cari-divider"></div>
@@ -1398,11 +1455,6 @@
     </section>
 
     <footer class="cari-footer">
-      <p>
-        Limits beyond colour: hard cast shadows can still read as material, and mirrors, glass and glossy
-        surfaces stay unstable because an albedo&ndash;shading product cannot represent them. The report
-        documents both.
-      </p>
       <p>
         The project began as an MSc thesis carried out at the University of Amsterdam and 3DUniversum, within
         the Erasmus Mundus Joint Master in Computational Colour and Spectral Imaging (COSI), hosted by NTNU

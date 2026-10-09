@@ -12,6 +12,10 @@ curated representative renders/photographs, one per dataset, not derived data;
 this script's job is only the composite layout, which is where the "traces to
 a script" guarantee actually applies here.
 
+The source frames are no longer in the repository. If they are missing, the three panels are
+cut out of the existing figure (same layout) and only the labels are redrawn, which keeps
+the figure editable without the original files.
+
 Run:
   python tests/viz/build_dataset_roles_figure.py
 """
@@ -27,20 +31,30 @@ OUT = ROOT / 'documents/thesis/images/data/dataset_roles.jpg'
 PANELS = [
     ('dataset_hypersim.jpg', 'Hypersim', 'supervised albedo + shading'),
     ('dataset_interiorverse.jpg', 'InteriorVerse', 'supervised albedo, added diversity'),
-    ('dataset_mid.jpg', 'MID', 'real cross-render pairs -- the CIAI signal'),
+    ('dataset_mid.jpg', 'MID', 'real cross-illumination pairs -- the CIAI signal'),
 ]
 
 
 def main():
     PW, PH, gap, head = 520, 400, 14, 46
     ims = []
-    for f, _, _ in PANELS:
-        im = Image.open(SRC / f).convert('RGB')
-        s = max(PW / im.width, PH / im.height)
-        im = im.resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
-        x0 = (im.width - PW) // 2
-        y0 = (im.height - PH) // 2
-        ims.append(im.crop((x0, y0, x0 + PW, y0 + PH)))
+    if all((SRC / f).exists() for f, _, _ in PANELS):
+        for f, _, _ in PANELS:
+            im = Image.open(SRC / f).convert('RGB')
+            s = max(PW / im.width, PH / im.height)
+            im = im.resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
+            x0 = (im.width - PW) // 2
+            y0 = (im.height - PH) // 2
+            ims.append(im.crop((x0, y0, x0 + PW, y0 + PH)))
+    else:
+        if not OUT.exists():
+            raise SystemExit(f'no source frames in {SRC} and no existing figure at {OUT}')
+        print(f'source frames missing in {SRC}; reusing the panels of {OUT.name}')
+        old = Image.open(OUT).convert('RGB')
+        # keep the 2 px frame out of the crop so the redraw does not double the border
+        for k in range(len(PANELS)):
+            x = k * (PW + gap)
+            ims.append(old.crop((x + 2, head + 2, x + PW - 2, head + PH - 2)).resize((PW, PH), Image.LANCZOS))
 
     W = len(PANELS) * PW + (len(PANELS) - 1) * gap
     H = head + PH + 34
