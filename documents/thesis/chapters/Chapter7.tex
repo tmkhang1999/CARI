@@ -25,34 +25,30 @@ MAW.
 
 The strategy does not deliver colour stability. Hue drift improves only slightly under
 CIAI, and our model's drift grows with the illuminant colour as much as a grey-shading
-method's. Two follow-up studies bound the reason: a chroma explanation loss on the existing
-shading reduces drift only by reducing the model's own colour, and rendered pairs with
-strong colour changes are learned almost perfectly without transferring to photographs.
-The method that does show colour-independent drift, CD-IID, predicts the shading colour
-in a dedicated stage, which points to a structural rather than a loss-weighting remedy.
+method's, which is what a luminance-only explanation loss and MID's white flash predict. The
+method that does show colour-independent drift, CD-IID, predicts the shading colour in a
+dedicated stage, which suggests a structural remedy: a model that separates shading
+luminance from shading chroma, planned below.
 
-Two findings concern the model and the measurement rather than the strategy. The
-desaturated albedo of the base model is architectural and is fixed by a colour path,
-with or without CIAI. And a stability score computed on predictions alone, such as the
-pooled chroma variance of our early drafts, can be improved by discarding colour; every
-stability result here is therefore reported beside an accuracy result.
+The colour path of the base model is a design choice that restores the albedo colour the
+frozen encoder tends to wash out, and it is separate from CIAI. Every stability result here
+is reported beside an accuracy result, because a grey, constant albedo is perfectly stable.
 
 
 \section{Limitations}
 
 \paragraph{Colour}
-The main limitation is the one this report measures: the trained model does not separate
-illuminant colour from material colour reliably, and MID cannot teach it to. The real
-training pairs vary colour over a median gap of $0.030$, and the stability benchmark
-measures hue drift over the same narrow range, so the colour results are both a modelling
-result and a measurement limit.
+The main limitation is that the trained model does not separate illuminant colour from
+material colour reliably. The explanation loss uses luminance only, and the real training
+pairs vary colour over a median gap of $0.030$; the stability benchmark measures hue drift
+over the same narrow range, so the colour results are both a modelling result and a
+measurement limit.
 
 \paragraph{One architecture, single runs}
 CIAI is presented as a training strategy, but it has been tested on one architecture, a
 frozen-encoder regression model. Whether its lightness gain holds for convolutional,
 fine-tuned transformer or diffusion models is untested. Most comparisons are single
-training runs; the seed spread we measured ($11\%$ in $C_{\text{mat}}$) is smaller than the
-CIAI effect, but it means smaller differences should not be read as effects.
+training runs, so small differences should not be read as effects.
 
 \paragraph{Benchmarks}
 The ARAP results were computed with a mask that fails on ARAP's mixed ground-truth
@@ -103,13 +99,16 @@ no skip, each with the chroma loss on albedo) decides whether the corrected skip
 
 \paragraph{3. Losses matched to the factors}
 Keep $\mathcal{L}_{\text{inv}}$ on the albedo and apply the luminance explanation loss to
-$S_{\text{lum}}$. Add the chroma explanation loss of \eqnref{eq:lchr} on $\mathbf{C}$, where it
-can only be satisfied by moving colour into the chroma factor, and apply it only to pairs
-whose measured illuminant gap exceeds a threshold (for example $0.08$), since on near-neutral
-pairs it fits noise. Supervise $\mathbf{C}$ directly wherever ground truth exists.
+$S_{\text{lum}}$. Add a chroma explanation loss on $\mathbf{C}$. With
+$\mathbf{r} = \log(\mathbf{x}_1+\varepsilon) - \log(\mathbf{x}_2+\varepsilon)$ per channel and
+$c(\mathbf{r}) = \mathbf{r} - \tfrac{1}{3}\sum_c r_c$ its chromatic part, it asks
+$c(\mathbf{r}_{\mathbf{C}})$ to match $c(\mathbf{r}_{\mathbf{I}})$ over the valid pixels, which
+scores exactly the component that \eqnref{eq:lexpl} discards and can only be satisfied by moving
+colour into the chroma factor. Apply it only to pairs whose measured illuminant gap exceeds
+a threshold (for example $0.08$), since on near-neutral pairs it would fit noise. Supervise $\mathbf{C}$ directly wherever ground truth exists.
 
 \paragraph{4. Training pairs whose illuminant colour actually varies}
-The second 3D-Front-IID render covers the range from near-neutral to strongly coloured pairs
+A rendered corpus built from 3D-FRONT covers the range from near-neutral to strongly coloured pairs
 (tenth to ninetieth percentile gap $0.008$ to $0.35$) with exact albedo and shading chroma;
 its pilot fails only a hard-shadow quality gate, which should not block its use for
 colour. Real coloured pairs are the other half: the LSMI dataset \mycite{kim21lsmi}

@@ -16,7 +16,6 @@ refinement study); re-run their builder before publishing.
 | `fig:formulation` | `tests/viz/build_formulation_figure.py` | data only | current |
 | `fig:wb_lanes`, `fig:dataset_roles` | `tests/viz/build_dataset_roles_figure.py` | data only | current |
 | `fig:mid_preprocessing` | `build_hires_figures.py fig_mid_preprocessing` | data only | current |
-| `fig:front3d` | `tests/viz/build_front3d_figure.py` | data only | current |
 | `fig:datasets` | `tests/viz/build_datasets_figure.py` | data only | current |
 | `fig:comp_grid` | `build_hires_figures.py fig_comp_grid` | roster | regenerate (Ours) |
 | `fig:mid_constancy`, `fig:intro_constancy` | `build_hires_figures.py fig_mid_ours` | v17_44 | regenerate |
@@ -38,3 +37,11 @@ Regeneration needs the MID test split (`../datasets/MIDIntrinsics/test`), the MA
 test data under `tests/testing_data/`, the baseline checkpoints under `checkpoints/`, and a
 complete v17_44 checkpoint. The copy currently in `checkpoints/v17_44/` is truncated (26 MB of
 about 1.4 GB) and does not load.
+
+## Next-stage pipeline figure
+
+`docs/static/img/ciai-pipeline.jpg` (also `documents/thesis/images/readme/`) is built by
+`tests/viz/build_next_stage_figure.py` with no model: two lightings of one 3D-Front-IID view, with the
+ground-truth targets S = I / A, S_lum and C drawn as the three outputs. The photographs are cropped from
+`documents/thesis/images/front3d/front3d_dataset.jpg`; pass `--front3d-root` (the full-resolution corpus)
+to regenerate them sharply.

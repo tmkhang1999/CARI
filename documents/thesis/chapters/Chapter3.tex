@@ -208,17 +208,14 @@ a small convolutional block followed by a sigmoid activation:
 The sigmoid bounds the albedo to $[0,1]^3$, the correct range for a reflectance
 value.
 The RGB skip, together with the chroma-direction loss on albedo of
-\secref{sec:losses}, forms what we call the \emph{colour path}. It addresses a measured
-weakness of the frozen-encoder model: without it, the predicted albedo retains only about
-half of the between-material chroma spread of the reference albedo, with or without
-CIAI (\secref{sec:ablation}). A plausible reason is that the frozen semantic tokens do not
-carry all of the local, absolute colour needed for albedo, and a pixel-wise regression loss
-then favours greyish predictions; we did not probe the encoder directly, so this is a
+\secref{sec:losses}, forms what we call the \emph{colour path}. It is a design choice of this
+model and not part of CIAI: the frozen semantic tokens do not seem to carry all of the
+local, absolute colour needed for albedo, and without the skip the predicted albedo keeps
+only about half of the between-material chroma spread of the reference albedo
+(\secref{sec:ablation}); we did not probe the encoder directly, so the reason is a
 hypothesis. The skip has a cost as well: it is a direct route by which the
-\emph{illuminant} colour of the input can reach the albedo, which the invariance loss must
-then counteract. The model planned in \chapref{ch:conclusion} keeps a colour path but feeds
-the albedo head the input divided by the predicted shading, so that material colour passes
-and illuminant colour does not. The colour path is one of the two ablation axes in
+\emph{illuminant} colour of the input can reach the albedo as a colour cast, which the
+invariance loss must then counteract. The colour path is one of the two ablation axes in
 \chapref{ch:experiments}.
 
 The shading head applies its own convolutional block and sigmoid and outputs the
@@ -328,8 +325,8 @@ with $\mathcal{L}_{\text{inv}}$, which a colour shared by both albedos satisfies
 CIAI states where a change in illuminant \emph{colour} must go. On the trained model we
 measure that the shading explains only $47.9\%$ of the chroma change between paired
 frames, and that the unpenalised chroma residual ($0.074$) is as large as the penalised
-luminance residual ($0.076$). \secref{sec:colour_axis} tests what adding the missing
-chroma term does.
+luminance residual ($0.076$). This is why CIAI is expected to help lightness more than
+colour (\secref{sec:colour_axis}).
 This loss is zero only when the shading ratio matches the image ratio at every
 valid pixel, which means the shading is absorbing the lighting difference rather
 than the albedo.

@@ -24,33 +24,27 @@ illuminations ($C_{\text{mat}}$) by $28\%$ and $39\%$, and on synthetic ARAP ren
 their original coloured lighting it also lowers the dense albedo error by $7$--$14\%$. Our
 model is more lightness-stable than CD-IID, both Marigold variants and Ordinal Shading, level
 with CRefNet and behind RGB$\rightarrow$X, while training $18.5$M parameters.
-CIAI does not make the albedo stable in \emph{colour}. MID's flash is white: between two
-frames the light changes mainly in direction and intensity, and its chromaticity moves by a
-median of only $0.030$. The explanation loss, moreover, is defined on luminance. Under CIAI
-the scale-normalised hue drift improves by only $4$--$6\%$, and our model's hue drift still
-grows with the illuminant colour as much as that of a grey-shading method. CD-IID, which
-predicts the shading colour in a dedicated stage, leads both hue drift and chroma accuracy.
-Two follow-up studies (a chroma explanation loss on the existing shading, and rendered
-coloured-light pairs) do not change this, and we use them to argue that colour invariance needs a structural
-change: shading split into a luminance and a chroma factor, a chroma explanation loss on
-the chroma factor, and training pairs whose illuminant colour genuinely varies.
+However, CIAI does not make the albedo stable in \emph{colour}. The explanation loss is
+defined on luminance, and MID's flash is white: between two frames the light changes mainly
+in direction and intensity, and its chromaticity moves by a median of only $0.030$. Under
+CIAI the scale-normalised hue drift improves by only $4$--$6\%$, and our model's hue drift
+still grows with the illuminant colour as much as that of a grey-shading method. CD-IID,
+which predicts the shading colour in a dedicated stage, leads both hue drift and chroma
+accuracy. We therefore propose, as the next stage, a shading split into a luminance and a
+chroma factor, a chroma explanation loss on the chroma factor, and training pairs whose
+illuminant colour genuinely varies.
 
-Two further findings shape the evaluation. The desaturated albedo of the base model is
-caused by the frozen-encoder architecture, not by CIAI: a colour path restores the chroma
-spread with or without CIAI. And a chroma variance pooled over all materials, which we used
-in an early draft, rewards desaturated predictions because it contains the scene's own
-colour diversity; we therefore report stability only next to accuracy against measured
-albedo (MAW) and against the MID pseudo-ground truth.
+Every stability result is reported next to accuracy against measured albedo (MAW) and
+against the MID pseudo-ground truth, because a grey, constant albedo is perfectly stable.
 
 \paragraph*{Note on this revised edition.}
 This edition corrects the version submitted in July 2026. That version described MID as a
-source of coloured-illuminant pairs, attributed the pooled chroma score to the literature,
-and presented the colour path as a consequence of CIAI; all three were wrong. Its headline
-model came from a refinement study that changed several regularisers and the data mix at
-once; that study is removed, and the model reported throughout is now the complete CIAI
-configuration of the matched ablation. The ARAP numbers were obtained with an evaluation
-mask that fails on ARAP's mixed ground-truth encodings and are marked provisional. Several
-qualitative figures were rendered with later checkpoints of the same architecture,
-trained for 20k further steps from the reported model (see \secref{sec:exp_setup}); they will be
-regenerated. Chapter~\ref{ch:experiments} adds the follow-up colour studies, and
-Chapter~\ref{ch:conclusion} the resulting plan.
+source of coloured-illuminant pairs and attributed the pooled chroma score to the
+literature; both were wrong. Its headline model came from a refinement study that changed
+several regularisers and the data mix at once; that study is removed, and the model
+reported throughout is now the complete CIAI configuration of the matched ablation. The
+follow-up colour studies are also removed, and the colour limitation is reported as a
+limitation with a plan. The ARAP numbers were obtained with an evaluation mask that fails on
+ARAP's mixed ground-truth encodings and are marked provisional. Several qualitative figures
+were rendered with later checkpoints of the same architecture (see \secref{sec:exp_setup});
+they will be regenerated.

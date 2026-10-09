@@ -38,7 +38,7 @@ do not rule that out. The application chapter demonstrates controllability, not 
 ground-truth shading evaluation.
 
 \secref{sec:ablation} then isolates what CIAI itself contributes, and
-\secref{sec:colour_axis} reports the follow-up studies on the colour axis.
+\secref{sec:colour_axis} measures why colour stability improves much less than lightness.
 
 
 \section{Experimental Setup}
@@ -55,8 +55,7 @@ The tables report the model above. Several qualitative figures were rendered bef
 reported model was fixed, with later checkpoints of the same architecture trained for 20k
 further steps from it, and will be regenerated once its weights are available. The
 decomposition figures of \chapref{ch:method} and \chapref{ch:practice} and the MAW and ARAP
-examples use a checkpoint continued with 3D-Front pairs (the treatment arm of
-\secref{sec:colour_axis}); the MID, IIW, resolution and chroma figures use one continued with
+examples use a later checkpoint of the same model; the MID, IIW, resolution and chroma figures use one continued with
 additional albedo regularisers. Their predictions look alike, but the numbers printed inside
 them, where present, are not the reported ones.
 
@@ -363,8 +362,8 @@ much room to drift in absolute units, so comparing raw $\delta_m$ across models 
 different colourfulness penalises the more colourful one for being colourful.
 $\text{Cast}_{\text{rel}}$ instead asks the question that matters perceptually: whether
 two materials remain distinguishable when the lighting changes. Being a ratio, it has one
-blind spot that the follow-up studies of \secref{sec:colour_axis} run into: a change that
-lowers the drift and the model's own chroma by the same fraction leaves it unchanged.
+blind spot: a change that lowers the drift and the model's own chroma by the same
+fraction leaves it unchanged.
 
 \begin{figure}[t!]
   \centering
@@ -1064,10 +1063,7 @@ chroma supervision, starts Adam afresh, and the recorded fallback produces an
 approximately $1.85\times$ different effective learning-rate trajectory. We therefore
 report cross-axis differences descriptively rather than attributing them to the skip alone.
 
-All rows are single training runs. A later measurement of seed-to-seed variation under
-the same training setup (\secref{sec:colour_axis}) found a relative spread of about
-$11\%$ in $C_{\text{mat}}$ between two identical configurations; effects much smaller than
-that are not reported as effects.
+All rows are single training runs, so small differences should not be read as effects.
 
 \begin{table}[p]
   \caption[CIAI ablation across constancy and accuracy.]{%
@@ -1172,22 +1168,16 @@ IIW WHDR in the first pair, while both MAW measures worsen slightly. The load-be
 result is the repeated paired constancy gain, read beside rather than instead of the
 external accuracy guards.
 
-\paragraph{The colour path, not CIAI, decides colour fidelity}
-The rows without the colour path keep about half of the pseudo-GT chroma spread whether
-CIAI is off (Row~1, $0.512$) or on (Row~2, $0.484$); the rows with it keep $0.925$ and
-$0.999$. The desaturated albedo is therefore a property of the base model, and CIAI
-neither causes nor cures it. The colour-path rows also have lower
+\paragraph{The colour path}
+The colour path is a design choice of the base model, not part of CIAI. The rows without it
+keep about half of the pseudo-GT chroma spread whether CIAI is off (Row~1, $0.512$) or on
+(Row~2, $0.484$); the rows with it keep $0.925$ and $0.999$, and have lower
 $\text{Chroma}_{\text{err}}$ and better MAW colour, Row~3 obtaining the best $\Delta E$
 ($4.115$) and intensity score ($0.395$). This is a descriptive comparison: the bundle
 changes chroma supervision, head parameters, optimiser state and effective learning-rate
-history at once, so it does not isolate the skip from the chroma loss.
-
-The same rows are where our early pooled chroma score of \eqnref{eq:castrms} failed. It
-ranked Row~2 best and Row~4 worst on hue stability, because Row~2's low pooled value came
-from its missing colour, not from low drift: its between-material term $S(A)$ is about
-$0.25$, against roughly $0.48$ for the colour-path rows and $0.495$ for the reference.
-Measured as drift relative to the model's own chroma (\eqnref{eq:castrel}), Row~4 is the
-most stable of the four on both lightness and hue.
+history at once, so it does not isolate the skip from the chroma loss. Row~4 is the most
+stable of the four on both lightness and hue, measured as drift relative to the model's own
+chroma (\eqnref{eq:castrel}).
 
 \paragraph{CIAI also makes the albedo more accurate on raw input}
 The pair losses are not only a stability constraint. On ARAP renderings fed with their
@@ -1238,41 +1228,37 @@ Row~3 (0.129 against 0.124) and a worse MAW score (4.155 against 4.115 $\Delta E
 \end{figure}
 
 
-\section{The Colour Axis: Follow-up Studies}
+\section{Colour Stability: A Limitation}
 \label{sec:colour_axis}
 
 The results so far share a pattern: CIAI improves lightness stability substantially and hue
-stability barely. This section asks why: how much colour MID's illumination
-actually varies, whether our hue drift follows that variation, and what two targeted
-interventions do. Each study compares a treatment with a control trained from the same
-checkpoint; all are read on the MID test split.
+stability barely. This is expected for two reasons. First, $\mathcal{L}_{\text{expl}}$ uses
+luminance only (\secref{sec:cari}), so nothing in CIAI states where a change in illuminant
+colour must go. Second, MID's illumination changes little in colour. This section measures
+the second point and checks whether our hue drift follows the illuminant colour.
 
 \subsection{How much colour does MID's illumination vary?}
 
 We measure the illuminant of each frame on its grey probe and take the distance between
 the chromaticities $(R/\Sigma, B/\Sigma)$ of two frames of a scene as the \emph{pair gap}.
-For rendered corpora and ARAP we read the illuminant from $\mathbf{I}/\mathbf{A}^*$ instead.
-\tabref{tab:pair_gaps} compares the corpora.
+For ARAP we read the illuminant from $\mathbf{I}/\mathbf{A}^*$ instead.
+\tabref{tab:pair_gaps} compares the two.
 
 \begin{table}[t!]
   \caption[Illuminant colour change between paired frames.]{%
     Median chromaticity gap between the illuminants of two frames of one scene. MID is
-    measured over all frame pairs of the 30 test scenes; ARAP over all measurable pairs;
-    3D-Front-IID over its training pairs; the v2 render over its 82-view pilot. The last
-    column is the tenth percentile, which shows whether a corpus contains subtle changes.
+    measured over all frame pairs of the 30 test scenes; ARAP over all measurable pairs.
   }
   \label{tab:pair_gaps}
   \centering
   \small
-  \begin{tabular}{@{}lccc@{}}
+  \begin{tabular}{@{}lcc@{}}
     \toprule
-    Corpus & Median gap & vs.\ MID & 10th percentile \\
+    Corpus & Median gap & vs.\ MID \\
     \midrule
-    MID (training pairs and stability benchmark) & 0.030 & $1.0\times$ & -- \\
-    ARAP, all measurable pairs                    & 0.088 & $2.9\times$ & -- \\
-    ARAP, indoor pairs                            & 0.070 & $2.3\times$ & -- \\
-    3D-Front-IID v1 (used in training)            & 0.153 & $5.1\times$ & 0.069 \\
-    3D-Front-IID v2 pilot (not yet used)          & 0.123 & $4.1\times$ & 0.008 \\
+    MID (training pairs and stability benchmark) & 0.030 & $1.0\times$ \\
+    ARAP, all measurable pairs                    & 0.088 & $2.9\times$ \\
+    ARAP, indoor pairs                            & 0.070 & $2.3\times$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -1280,9 +1266,7 @@ For rendered corpora and ARAP we read the illuminant from $\mathbf{I}/\mathbf{A}
 $86\%$ of MID pairs fall below $0.08$, and per-scene medians span only $0.017$ to $0.086$.
 MID's flash is white; what colour change there is comes from light bounced off coloured
 surfaces. MID therefore teaches lightness well and colour weakly, and the hue stability
-measured on it is measured over a narrow range. 3D-Front-IID v1 has the opposite problem:
-its weakest tenth of pairs is already stronger than MID's median, so it never shows a
-subtle change.
+measured on it is measured over a narrow range.
 
 \subsection{Does our hue drift follow the illuminant colour?}
 
@@ -1323,86 +1307,11 @@ illuminant colour ($1.02$) while keeping its albedo colour (spread ratio $0.944$
 narrow colour range makes this a low-powered test, but the contrast is large and
 consistent.
 
-\paragraph{Seed noise}
-Before testing interventions we trained the published CIAI configuration twice with
-different seeds (42 and 43), with 3D-Front pairs in the mix. The high/low ratio differed by $0.014$
-(paired bootstrap interval $[-0.011, +0.047]$), mean $\text{Cast}_{\text{rel}}$ by $0.004$ and
-$C_{\text{mat}}$ by $11\%$ relative. Differences in the ratio of that size are not effects.
-We fixed in advance that a change in the ratio
-smaller than $0.035$ would be reported as a null.
-
-\subsection{Study 1: a chroma explanation loss}
-
-\secref{sec:cari} showed that $\mathcal{L}_{\text{expl}}$ is blind to colour change. We
-added its chromatic counterpart: with $\mathbf{r} = \log(\mathbf{x}_1+\varepsilon) -
-\log(\mathbf{x}_2+\varepsilon)$ per channel and $c(\mathbf{r}) = \mathbf{r} - \tfrac{1}{3}\sum_c
-r_c$ its chromatic part,
-\begin{equation}
-  \mathcal{L}_{\text{chr}} =
-  \frac{1}{|\Omega_v|}\sum_{p\in\Omega_v}
-  \bigl\| c(\mathbf{r}_{\mathbf{I}}(p)) - c(\mathbf{r}_{\mathbf{S}}(p)) \bigr\|_1 ,
-  \label{eq:lchr}
-\end{equation}
-which scores exactly the component that \eqnref{eq:lexpl} discards. The design, endpoint and
-decision rules were written down before any run finished.
-
-The loss trains as intended: it falls by $77\%$ and the chroma residual it targets ends
-$73\%$ below the control. On the ablation's data mix (MID pairs only, seed 42), the hue
-drift falls in $29$ of $30$ scenes ($-3.5\%$), and the reduction concentrates where the
-illuminant colour changes most (correlation $-0.48$ with the scene gap). But the model's
-own chroma falls by almost the same fraction ($-2.9\%$, spread ratio
-$1.009\rightarrow0.972$), so $\text{Cast}_{\text{rel}}$ does not move ($+0.0006$) and the
-high/low ratio changes by $-0.016$, below the $0.035$ threshold. The loss of colour is
-largest on low-gap scenes, where the pairs contain little chromatic change to explain and
-the loss fits noise. In an earlier run whose mix also contained 3D-Front pairs (two seeds),
-the same loss cost $0.10$ of spread ratio: desaturation, not stability.
-
-\subsection{Study 2: rendered coloured-light pairs}
-
-The second study adds the 3D-Front-IID v1 pairs of \secref{sec:front3d}, whose illuminant
-colour changes five times more than MID's and which carry exact albedo. Both arms resume our
-model at 40k and train 20k further steps at a constant learning rate: the control on the
-usual mix (\texttt{v17\_20}), the treatment with 3D-Front pairs at a quarter of the samples
-(\texttt{v17\_29}). The treatment's mix was changed once during its run, so the comparison is
-an association rather than a single-variable test.
-
-\begin{table}[t!]
-  \caption[Adding rendered coloured-light pairs.]{%
-    Control versus control plus 3D-Front-IID pairs, both continued from our model for 20k
-    steps. MID columns on the 30-scene test split; ARAP (provisional) on the colour-varying
-    indoor groups; MAW on the official split.
-  }
-  \label{tab:front3d_study}
-  \centering
-  \small
-  \begin{tabular}{@{}lcccccc@{}}
-    \toprule
-    & \multicolumn{3}{c}{MID} & ARAP indoor & \multicolumn{2}{c}{MAW} \\
-    \cmidrule(lr){2-4}\cmidrule(lr){5-5}\cmidrule(l){6-7}
-    Arm & $C_{\text{mat}}$ & $\text{Cast}_{\text{rel}}$ & $\text{Chroma}_{\text{err}}$
-        & $C_{\text{arap}}$ & $\Delta E$ & Int.$\times$100 \\
-    \midrule
-    Control                 & 0.161 & 0.415 & 0.115 & 0.116 & 4.179 & 0.511 \\
-    \quad + 3D-Front pairs  & 0.163 & 0.418 & 0.120 & 0.111 & 4.040 & 0.512 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\tabref{tab:front3d_study} shows the outcome. Measured colour on MAW improves ($\Delta E$
-4.179 to 4.040), but hue stability on MID does not move ($\text{Cast}_{\text{rel}}$ 0.415 to
-0.418), even though the model learns the rendered pairs almost perfectly: on held-out
-3D-Front rooms its albedos differ between the two lightings by only $0.0013$ on average. The
-model can learn colour invariance; what it learns on renders does not carry over to
-photographs, and the v1 corpus never presented the subtle colour changes that real scenes
-contain (its weakest tenth of pairs is stronger than MID's median).
-
-\subsection{Reading}
-
-Together the two studies point to a structural cause rather than a missing loss weight.
-With one three-channel shading and an RGB skip into the albedo head, nothing in the model
-says where a colour change must go: the invariance loss is satisfied by a colour shared by
-both frames, the luminance explanation loss ignores colour, and adding a chroma explanation
-loss to the same shading lets the model reduce drift by reducing colour. The method that
-does show colour-independent hue drift, CD-IID, separates shading luminance from shading
-chroma and predicts the latter in its own stage. \chapref{ch:conclusion} turns this into the
-plan for the next model.
+\tabref{tab:colour_strat} shows that our model's hue drift rises by $43\%$ on the scenes where
+the illuminant colour moves most, as much as CRefNet's, whose grey shading cannot represent a
+coloured light at all; CIAI's small hue gain in the ablation (\secref{sec:ablation}) has not
+removed this dependence. CD-IID, the one method with a dedicated shading-chroma stage, shows
+no dependence on illuminant colour ($1.02$) while keeping its albedo colour (spread ratio
+$0.944$). MID's narrow colour range makes this a low-powered test, but it agrees with the
+ablation. Colour stability therefore needs a model that predicts the shading colour
+separately, which is the plan of \chapref{ch:conclusion}.

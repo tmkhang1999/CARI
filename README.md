@@ -2,244 +2,133 @@
 
 # Cross-Illumination Albedo Invariance (CIAI)<br>Lightness-Stable Intrinsic Decomposition from Real Multi-Illumination Photographs
 
-**Minh Khang Tran**
+**Train on two photographs of one scene under different lighting, and the albedo stops changing with the light.**
 
-[![Report](https://img.shields.io/badge/Report-PDF-b31b1b.svg?style=for-the-badge)](documents/thesis/Main.pdf)
-[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io%2FCIAI-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/CIAI/)
-[![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.3+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
+**Minh Khang Tran** &middot; MSc thesis project, 2026
 
-<img src="documents/thesis/images/readme/cari-teaser.jpg" width="100%" alt="Top: one MID scene lit by a flash bounced in four directions. Bottom: the albedo recovered from each photograph independently."/>
+[![Report](https://img.shields.io/badge/Report-PDF-b31b1b.svg)](documents/thesis/Main.pdf)
+[![Project Page](https://img.shields.io/badge/Project-Page-38bdf8.svg)](https://tmkhang1999.github.io/CIAI/)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg)](https://www.python.org)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.3+-EE4C2C.svg)](https://pytorch.org)
+
+<img src="documents/thesis/images/readme/cari-teaser.jpg" width="100%" alt="Top: one MID scene lit by a flash bounced in four directions. Bottom: the albedo predicted from each photograph separately."/>
 
 </div>
 
-<p align="center"><em>The light moves; the material does not. One scene with the flash bounced in four directions (top),
-and the albedo recovered from each photograph independently (bottom).</em></p>
+**Figure 1.** One scene photographed with the flash bounced in four directions (top), and the albedo our model predicts from each photograph separately (bottom). The surfaces do not change, so the albedo should not either.
 
----
+## Overview
 
-CIAI is a training strategy for intrinsic image decomposition (IID). Two photographs of the same
-scene under different illumination go through the same network. Their predicted albedos must agree,
-and the shading must explain the brightness change between them. The pairing exists only at
-training time: inference is one image and one forward pass.
+Intrinsic image decomposition (IID) splits a photograph into the albedo of each surface and the shading that falls on it. However, a single image cannot tell a dark surface from a dimly lit one, so part of the lighting leaks into the albedo. As a result, the same wall can come out lighter or darker depending on how the room was lit.
 
-The idea borrows from Siamese/contrastive representation learning (two views of one thing must map
-to the same representation) and from multi-view consistency in 3D reconstruction (one surface
-observed several times must be assigned one property). Unlike contrastive learning there are no
-negative pairs: only positive pairs with a dense, physically motivated agreement target.
+The purpose of this project is to reduce this leakage with a training strategy, **Cross-Illumination Albedo Invariance (CIAI)**. Two photographs of one scene under different lighting go through the same network, and their predicted albedos must agree. The pairs are used only in training, so inference is still one image and one forward pass.
 
-No dataset offers real photographs under several illuminations *and* dense ground-truth albedo. We
-use the Multi-Illumination Dataset (MID), where every scene is captured 25 times with a flash bounced
-in a different direction, together with the pseudo-ground-truth albedo that
-[MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics) derives for all 25 frames.
+In a matched ablation, CIAI lowers the lightness variation of a material across lighting by **28% and 39%**. In addition, it lowers the albedo error by 7-14% on ARAP renderings that keep their original coloured light, although ARAP is never used in training. However, it improves colour much less (hue drift -4 to -6%), because the explanation loss uses luminance only.
 
-**What it does.** In matched ablations CIAI lowers the variation of a material's recovered
-*lightness* across lighting (C<sub>mat</sub>) by 28% and 39%, and lowers the dense albedo error on
-ARAP renderings fed with their original coloured lighting by 7&ndash;14%, a benchmark it never trained
-on. The model trains 18.5M parameters on top of a frozen DINOv2-L encoder.
+**Contributions**
+1. A paired training strategy on real photographs: MID pairs with pseudo-ground-truth albedo, added as a second training stage.
+2. A matched ablation showing the effect on lightness stability and on albedo accuracy.
+3. An evaluation that reports every stability score next to an accuracy score, because a grey, constant albedo is perfectly stable.
 
-**What it does not do (yet).** It does not make the albedo stable in *colour*. MID's flashes are
-white, so the illuminant colour barely changes between frames (median chromaticity gap 0.030), and
-the explanation loss is defined on luminance. Under CIAI hue drift improves by only 4&ndash;6%, and the
-model's hue drift still grows with illuminant colour as much as a grey-shading method's. CD-IID,
-which predicts the shading colour in a dedicated stage, leads both colour measurements. The colour
-axis is the next stage of this project; see [Roadmap](#roadmap).
+## Method
 
-Full write-up: **[project page](https://tmkhang1999.github.io/CIAI/)** &middot;
-**[report PDF](documents/thesis/Main.pdf)**. The repository was previously named `CARI`.
+<div align="center">
+<img src="documents/thesis/images/readme/cari-mechanism.jpg" width="90%" alt="Two photographs of one scene pass through a shared model; the two albedos are tied by L_inv and the two shadings by L_expl."/>
+</div>
 
----
+**Figure 2.** CIAI is used in training only. Two flash directions of one scene share one model.
 
-## Findings
+The model is a frozen DINOv2-L encoder with a DPT decoder, an albedo head and a three-channel shading head (18.5M trainable parameters). A residual R = (I - A * S)<sub>+</sub> absorbs highlights. Training has two stages:
 
-| | Result | Evidence |
-|:---|:---|:---|
-| 1 | Paired cross-illumination training improves lightness stability | C<sub>mat</sub> 0.250 &rarr; 0.180 and 0.259 &rarr; 0.157 in the two matched ablation pairs |
-| 2 | It also improves albedo accuracy where the input carries its lighting | Raw-input ARAP LMSE &minus;14% and &minus;7%, RMSE &minus;14% and &minus;8% (provisional ARAP mask) |
-| 3 | It barely improves colour stability | Cast<sub>rel</sub> &minus;6% and &minus;4%; hue drift tracks illuminant colour like a grey-shading model (1.43 vs CRefNet 1.42, CD-IID 1.02) |
-| 4 | MID varies light direction and intensity, not colour | Median illuminant chromaticity gap 0.030; 86% of frame pairs below 0.08 |
-| 5 | The base model washes out colour; CIAI does not cause it | Without the colour path the chroma spread ratio is 0.51 with CIAI off and 0.48 with it on; the colour path restores 0.93&ndash;1.00 |
-| 6 | A chroma explanation loss on 3-channel shading is not enough | Drift &minus;3.5% but model chroma &minus;2.9%; with synthetic coloured pairs it desaturates (spread ratio &minus;0.10) |
-| 7 | Synthetic coloured pairs are learned but do not transfer | 3D-Front validation invariance gap 0.0013, real hue drift unchanged |
+- **Stage A.** Supervised training on Hypersim and InteriorVerse.
+- **Stage B (CIAI).** Training continues on raw pairs from the Multi-Illumination Dataset (MID), where every scene is photographed 25 times with a flash bounced in a different direction, with the pseudo-ground-truth albedo from [MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics). Two losses tie the pair:
+  - `L_inv`: masked L1 between the two albedos.
+  - `L_expl`: the log luminance ratio of the two shadings must equal that of the two images, which rules out a flat albedo.
 
-Against other methods on MID, the model is more lightness-stable than CD-IID, both Marigold
-variants and Ordinal Shading, level with CRefNet and behind RGB&rarr;X. Rows 6 and 7 are single- or
-two-seed studies and are reported as nulls, not trends.
+The frozen encoder tends to wash out the albedo colour, so the model also has a **colour path**: an RGB skip into the albedo head and a chroma loss on albedo. This is a design choice of the model, not part of CIAI, and the skip can pass the light colour of the input into the albedo as a colour cast.
 
----
+## Results
+
+All numbers use the 30 held-out MID scenes with raw input. The ablation starts from one shared checkpoint with the same data and steps.
+
+| CIAI | Colour path | C<sub>mat</sub> &darr; | Cast<sub>rel</sub> &darr; | MAW &Delta;E &darr; | ARAP raw LMSE &darr; |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| off | off | 0.250 | 0.477 | 4.43 | 0.0463 |
+| on  | off | 0.180 | 0.447 | 4.63 | 0.0397 |
+| off | on  | 0.259 | 0.444 | **4.12** | 0.0426 |
+| on  | on  | **0.157** | **0.425** | 4.16 | **0.0396** |
+
+**Table 1.** Matched ablation. C<sub>mat</sub> is the lightness variation of a material across lighting, Cast<sub>rel</sub> the relative hue drift. The last row is our model.
+
+| Method | C<sub>mat</sub> &darr; | Cast<sub>rel</sub> &darr; | Chroma err &darr; | MAW &Delta;E &darr; |
+|:---|:---:|:---:|:---:|:---:|
+| **Ours** | 0.157 | 0.425 | 0.129 | 4.16 |
+| CD-IID | 0.190 | **0.306** | **0.090** | **3.37**\* |
+| RGB&rarr;X | **0.128** | 0.338 | 0.203 | - |
+| CRefNet | 0.151 | 0.355 | 0.201 | 3.97 |
+| Marigold-App | 0.193 | 0.355 | 0.195 | 3.78 |
+| Marigold-Light | 0.546 | 0.392 | 0.154 | 4.21 |
+| Ordinal Shading | 0.252 | 0.549 | 0.148 | 6.88 |
+
+**Table 2.** Comparison with other methods. \* Value reported in the CD-IID paper.
+
+1. **CIAI improves lightness stability.** C<sub>mat</sub> drops by 28% and 39% in the two matched pairs. Our model is more stable than CD-IID, both Marigold variants and Ordinal Shading, level with CRefNet, and behind RGB&rarr;X.
+2. **CIAI improves accuracy where the input carries its lighting.** On raw ARAP, albedo LMSE drops by 14% and 7%.
+3. **CIAI does not improve measured colour.** MAW &Delta;E does not improve, and CD-IID is better on all colour measures.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/tmkhang1999/CIAI.git
-cd CIAI
+git clone https://github.com/tmkhang1999/CIAI.git && cd CIAI
 conda create -n ciai python=3.10 -y && conda activate ciai
 pip install -r requirements.txt
-python tests/smoke_test.py          # one training step per config on random data, CPU, ~1 min
+python tests/smoke_test.py          # one training step per config on random data, CPU, about 1 min
+
+# Decompose one photograph (--device also accepts mps or cpu)
+python tests/infer/infer_wild.py --image your_photo.jpg \
+    --checkpoint checkpoints/v17_44/checkpoint_iter_40000.pth --device cuda --max_size 1280
 ```
-
-Decompose a photograph into albedo, shading and residual (`--device` accepts `cuda`, `mps` or `cpu`):
-
-```bash
-python tests/infer/infer_wild.py \
-    --image path/to/your_photo.jpg \
-    --checkpoint checkpoints/v17_44/checkpoint_iter_40000.pth \
-    --device cuda --max_size 1280
-```
-
-<div align="center">
-<img src="documents/thesis/images/ch6/decomposition.jpg" width="100%" alt="Predicted decomposition: input, albedo, shading, residual"/>
-<p><em>Input &middot; diffuse albedo <code>A_d</code> &middot; diffuse shading <code>S_d</code> &middot; analytic residual <code>R</code>.</em></p>
-</div>
-
-Training wants a GPU with &ge; 12 GB (two forward passes per step); inference runs in 6 GB.
-
-> [!NOTE]
-> Pretrained weights are not distributed in this repository (each checkpoint is ~1.4 GB, of which
-> ~94% is the frozen DINOv2 encoder). Please open an issue if you would like access.
-
----
-
-## Code
-
-```
-src/
-├── losses/
-│   ├── ciai.py          # the training strategy: albedo invariance, luminance and chroma explanation
-│   ├── v17_loss.py      # V17 single-image losses
-│   └── v21_loss.py      # V21 losses (next model)
-├── models/
-│   ├── v17.py           # reported model: frozen DINOv2-L + DPT, albedo + 3-channel shading
-│   └── v21_trifactor.py # next model: I = A * (S_lum * C) + R
-├── data/                # Hypersim, MID (pairs + measured pair gap), InteriorVerse, 3D-Front v1/v2
-├── configs/             # base.yaml, v17.yaml and one file per experiment, v21.yaml
-├── metrics.py           # albedo/shading metrics shared by validation and ARAP
-├── train_v17.py
-└── train_v21.py
-tests/
-├── smoke_test.py        # data-free check of every config
-├── eval/                # benchmark evaluators, baseline adapters, study readouts
-├── infer/infer_wild.py  # single-image inference and the shared model loader
-└── viz/                 # figure builders for the report and project page
-scripts/                 # train.sh, resilient launcher, 3D-Front renderers, benchmark runners
-documents/thesis/        # report sources and PDF; FIGURE_PROVENANCE.md maps figures to scripts
-documents/results/       # result files the report cites
-```
-
-`src/losses/ciai.py` takes plain tensors (two albedos, two linear shadings, two images, a mask), so
-any model that outputs an albedo and a shading can be trained with CIAI.
-
----
-
-## Data
-
-| Corpus | Role | Source |
-|:---|:---|:---|
-| **Hypersim** | Supervised albedo and shading (synthetic) | [apple/ml-hypersim](https://github.com/apple/ml-hypersim) |
-| **MID + MIDIntrinsics** | Real pairs for CIAI and a pseudo-GT albedo shared by all 25 frames | [MID](https://projects.csail.mit.edu/illumination/), [MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics) |
-| **InteriorVerse** | Extra albedo supervision | [InteriorVerse](https://interiorverse.github.io/) |
-| **3D-Front-IID** | Rendered here: coloured-light pairs with exact factors (colour study, V21) | built from [3D-FRONT](https://tianchi.aliyun.com/dataset/65347) |
-
-```
-datasets/              # next to this repository
-├── hypersim/
-├── MIDIntrinsics/{train,test}/
-├── IndoorInverseRendering/interiorverse/...
-├── front3d_iid/       # v1
-└── front3d_iid_v2/    # v2
-```
-
-MID pairs are loaded without per-frame white balance (`mid_raw_color_pair: true`). Probe white
-balance rescales R and B to neutralise each frame's light colour and leaves intensity untouched, so
-the raw pair keeps only the small bounce-colour change between frames. Each MID pair also carries
-`pair_gap`, its illuminant chromaticity gap measured on the grey probes.
-
-<details>
-<summary><b>Rendering 3D-Front-IID</b></summary>
-
-<br>
-
-Each camera is rendered under 2&ndash;3 lighting variants with an exact, pixel-aligned albedo pass.
-Version 1 (960 rooms, 5,056 pairs) has a median effective illuminant gap of 0.153, but its weakest
-decile (0.069) is above MID's median, so it never shows a subtle colour change. Version 2 adds a
-neutral anchor rig and spans 0.008 to 0.35; its pilot fails only the hard-shadow quality gate.
-
-```bash
-python scripts/render_3dfront_dataset_v2.py --help     # requires Blender 4.2
-python scripts/validate_3dfront_v2.py --help
-```
-</details>
-
----
 
 ## Training
 
+Place the datasets next to this repository: `datasets/hypersim/`, `datasets/MIDIntrinsics/{train,test}/` and `datasets/IndoorInverseRendering/interiorverse/` ([Hypersim](https://github.com/apple/ml-hypersim), [MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics), [InteriorVerse](https://interiorverse.github.io/)).
+
 ```bash
 bash scripts/train.sh --version 17_60 --cuda 0                    # Stage A, stop at 19k
-bash scripts/train.sh --version 17_44 --cuda 0 --skip-optimizer   # CIAI from the 19k checkpoint
-bash scripts/train.sh --version 17_44 --cuda 0 --auto-resume      # resume
+bash scripts/train.sh --version 17_44 --cuda 0 --skip-optimizer   # Stage B (CIAI) from the 19k checkpoint
 ```
 
-| Config | Purpose |
-|:---|:---|
-| `v17_60` | Stage A (Hypersim, then + InteriorVerse); its 19k checkpoint is the shared fork |
-| `v17_41` &hellip; `v17_44` | Ablation: CIAI &times; colour path. **`v17_44` is the reported model** |
-| `v17_61` &hellip; `v17_64` | Study 1: chroma explanation loss (seeds via `--seed`) |
-| `v17_20`, `v17_29` | Colour study: continue v17_44 without / with 3D-Front pairs |
-| `v21` | Next model: luminance + chroma shading, gap-gated chroma explanation |
-
-`scripts/train_resilient.sh` restarts an interrupted run from its own checkpoint, useful on
-preemptible GPUs.
-
----
+`v17_41` to `v17_44` are the four ablation rows, and `v17_44` is the reported model. Training needs a GPU with at least 12 GB, because each step runs two forward passes. The CIAI losses are in `src/losses/ciai.py` and take plain tensors, so any model that outputs an albedo and a shading can use them.
 
 ## Evaluation
-
-Every stability number is reported next to an accuracy number, because a grey, constant albedo is
-perfectly stable.
-
-| Benchmark | Measures | Input | Compared against |
-|:---|:---|:---|:---|
-| MID (30 held-out scenes) | C<sub>mat</sub> lightness drift, Cast<sub>rel</sub> hue drift, chroma error vs pseudo-GT | raw frames | all methods run locally (MID is training data for us and CD-IID) |
-| MAW | &Delta;E and intensity SI-MSE vs measured albedo | real photographs | CD-IID Table 1 |
-| IIW | WHDR | real photographs | Ordinal Shading Table 2 |
-| ARAP | C<sub>arap</sub> on colour-varying groups; LMSE, RMSE, SSIM | raw and white-balanced | Ordinal Shading Table 1 |
 
 ```bash
 CKPT=checkpoints/v17_44/checkpoint_iter_40000.pth
 python tests/eval/eval_mid_constancy.py --ckpts $CKPT --mid-root ../datasets/MIDIntrinsics --split test --save-json
-python tests/eval/mid_colour_stratified.py        # hue drift by illuminant-gap tercile
-python tests/eval/paired_bootstrap_mid.py         # paired per-scene tests against each baseline
 python tests/eval/eval_maw.py --ckpts $CKPT --save-json
-python tests/eval/eval_iiw.py --checkpoint $CKPT --dataset_dir tests/testing_data/iiw-dataset/data
 python tests/eval/eval_arap.py --checkpoint $CKPT --constancy
 ```
 
-`scripts/eval_all_models_4benchmarks_full.py` and `scripts/eval_sota_4benchmarks_full.py` run all
-four benchmarks for our checkpoints and the baselines (adapters in `tests/eval/*_adapter.py`).
+## Limitations
 
-> [!WARNING]
-> ARAP stores its ground-truth albedo in three encodings, and `eval_arap.py` masks pixels with a
-> fixed absolute threshold that keeps about 1.5% of the frame on 40 scenes and drops 21 images. The
-> ARAP numbers in the report are provisional; `tests/eval/arap_preprocess.py` canonicalises the
-> encodings and the tables will be regenerated with it.
-
----
+- **Colour is not learned.** The explanation loss uses luminance only, and the flash in MID is white, so the light colour changes only slightly between frames (median chromaticity gap 0.030). Therefore, hue drift still grows with the light colour, as in a grey-shading model.
+- **ARAP numbers are provisional.** ARAP stores its ground-truth albedo in three encodings, and the current mask does not handle all of them. They will be regenerated with `tests/eval/arap_preprocess.py`.
+- **Figures and weights.** Some qualitative figures were made with a later checkpoint of the same model, and pretrained weights are not in this repository (about 1.4 GB each). Please open an issue if you would like access.
 
 ## Roadmap
 
-1. **Show that CIAI is architecture-agnostic.** With and without CIAI, same data and steps, three
-   seeds, on a CNN (U-Net), a fine-tuned ViT (DPT on DINOv2) and a single-step fine-tuned diffusion
-   model (Marigold-IID). `src/losses/ciai.py` is model-independent for this purpose.
-2. **Model: luminance and chroma shading** (`v21_trifactor.py`). The albedo head receives the
-   illuminant-corrected image I / (S<sub>lum</sub> &middot; C) instead of the raw RGB skip.
-3. **Losses** (`v21_loss.py`). Albedo invariance, luminance explanation, and a chroma explanation
-   applied only to pairs whose measured gap reaches `chr_explain_min_gap`; direct supervision of C.
-4. **Data.** 3D-Front-IID v2, and real coloured-illuminant pairs (for example LSMI, which photographs
-   each scene under several illuminant combinations with per-pixel illuminant chromaticity).
-5. **Evaluation.** Hue drift on genuinely colour-varying real data next to MAW; ARAP regenerated.
+The next stage targets colour. It is planned and not trained yet.
 
----
+<div align="center">
+<img src="documents/thesis/images/readme/ciai-pipeline.jpg" width="100%" alt="Planned pipeline: two photographs of one view under different light colours go through a shared model with three outputs (albedo, grey shading, shading chroma), tied by three losses."/>
+</div>
+
+**Figure 3.** Planned pipeline. The output panels are ground-truth targets from a rendered 3D-Front scene (S = I / A), not predictions.
+
+1. **Cross-architecture test.** Train with and without CIAI on a CNN, a fine-tuned ViT and a single-step diffusion model, with the same data and three seeds.
+2. **Model.** Split the shading into a grey part and a chroma part, I = A * (S<sub>lum</sub> * C) + R (`src/models/v21_trifactor.py`).
+3. **Loss.** Add a chroma explanation loss on C, used only on pairs whose light colour really changes (`src/losses/v21_loss.py`).
+4. **Data.** Rendered coloured-light pairs from 3D-FRONT with exact albedo (`scripts/render_3dfront_dataset_v2.py`, needs Blender 4.2), and real coloured-light pairs such as LSMI.
 
 ## Citation
 
@@ -255,19 +144,13 @@ four benchmarks for our checkpoints and the baselines (adapters in `tests/eval/*
 }
 ```
 
----
-
 ## Acknowledgements
 
-The work started as an MSc thesis supervised by Dr. Luis Gomez Robledo and Prof. Seyed Ali
-Amirshahi (COSI), with Dr. Sezer Karaoglu and Prof. Theo Gevers at the host institution.
-
-It builds on [DINOv2](https://github.com/facebookresearch/dinov2) and
-[DPT](https://github.com/isl-org/DPT), and is evaluated against
-[Marigold-IID](https://github.com/prs-eth/Marigold),
+This work started as an MSc thesis supervised by Dr. Luis Gomez Robledo and Prof. Seyed Ali Amirshahi (COSI),
+with Dr. Sezer Karaoglu and Prof. Theo Gevers at the host institution. It builds on
+[DINOv2](https://github.com/facebookresearch/dinov2) and [DPT](https://github.com/isl-org/DPT), and uses
+[MID](https://projects.csail.mit.edu/illumination/), [MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics),
+[Hypersim](https://github.com/apple/ml-hypersim), [InteriorVerse](https://interiorverse.github.io/),
+[MAW](https://measuredalbedo.github.io/), [IIW](http://opensurfaces.cs.cornell.edu/intrinsic/) and ARAP.
+Baselines: [Marigold-IID](https://github.com/prs-eth/Marigold),
 [Ordinal Shading and CD-IID](https://github.com/compphoto/Intrinsic), RGB&rarr;X and CRefNet.
-Benchmarks: [IIW](http://opensurfaces.cs.cornell.edu/intrinsic/),
-[MID](https://projects.csail.mit.edu/illumination/), [MAW](https://measuredalbedo.github.io/), ARAP.
-Training data: [Hypersim](https://github.com/apple/ml-hypersim),
-[MIDIntrinsics](https://github.com/compphoto/MIDIntrinsics),
-[InteriorVerse](https://interiorverse.github.io/), [3D-FRONT](https://tianchi.aliyun.com/dataset/65347).

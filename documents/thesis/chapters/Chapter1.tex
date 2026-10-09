@@ -163,22 +163,16 @@ The contributions of this work are:
   error on raw, coloured-lit ARAP renderings by $7$--$14\%$, a benchmark it never trained on.
   The model trains $18.5$M parameters on top of a frozen encoder.
 
-  \item \textbf{A measured account of where the strategy stops.}
-  CIAI does not improve colour stability on MID, and we show why: MID's illumination varies
-  in direction and intensity rather than colour, the explanation loss sees luminance only,
-  and a constant tint satisfies the invariance loss. Two follow-up studies (a chroma
-  explanation loss on the existing shading, and rendered coloured-light pairs) test and
-  bound this diagnosis.
-
-  \item \textbf{Two failure modes separated.}
-  The desaturated albedo of the frozen-encoder base model is an architectural problem that a
-  colour path fixes whether CIAI is on or off; it is not a side effect of the invariance
-  loss.
+  \item \textbf{A matched ablation.}
+  Turning the cross-illumination losses and the colour path on and off from one shared
+  checkpoint isolates the effect of CIAI: a large gain in lightness stability, a small gain
+  in hue stability, and a lower albedo error on raw ARAP renderings. The colour limit follows
+  from the luminance-only explanation loss and MID's white flash, and we measure it directly.
 
   \item \textbf{An evaluation that reports stability next to accuracy.}
   Material-level lightness and hue stability on MID, always read beside accuracy against
-  measured albedo (MAW) and against the MID pseudo-ground truth, together with the lesson
-  that a chroma variance pooled over materials rewards desaturation.
+  measured albedo (MAW) and against the MID pseudo-ground truth, because a grey, constant
+  albedo is perfectly stable.
 
   \item \textbf{A plan for the colour axis.}
   A three-factor model that separates shading luminance from shading chroma, a chroma
@@ -196,8 +190,8 @@ multi-illuminant scenes, and the evaluation benchmarks.
 \chapref{ch:method} describes the model architecture and the CIAI training strategy.
 \chapref{ch:implementation} covers the loss terms, training data, and optimisation
 schedule in detail.
-\chapref{ch:experiments} presents the benchmark results, the ablation, and the follow-up
-studies on colour.
+\chapref{ch:experiments} presents the benchmark results, the ablation, and the colour
+limitation.
 \chapref{ch:practice} demonstrates qualitative factor edits built directly on the
 decomposition.
 \chapref{ch:conclusion} summarises the findings, discusses limitations, and

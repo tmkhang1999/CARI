@@ -226,19 +226,14 @@ essentially free.
 \section{Training Data}
 \label{sec:data}
 
-Four datasets participate in training, each with a distinct role. In this
+Three datasets participate in training, each with a distinct role. In this
 chapter, \emph{dataset} means a collection from which training samples are drawn.
 It does not mean an evaluation procedure. Chapter~5 uses held-out data together
 with a fixed protocol and metric; that combination is a \emph{benchmark}. MID
 appears in both roles, but its training and test scenes are disjoint.
-Three are existing public corpora and carry the two-stage schedule of
+They are existing public corpora and carry the two-stage schedule of
 \secref{sec:schedule}: Hypersim and InteriorVerse supply supervised albedo, and
 MID supplies the real cross-illumination pairs that CIAI trains on.
-The fourth, 3D-Front-IID (\secref{sec:front3d}), is rendered for this thesis to
-supply the one combination none of the others offers: a large, deliberately
-coloured illuminant change \emph{and} a ground-truth albedo for the same camera.
-It is not part of the reported model; \secref{sec:colour_axis} uses it in a follow-up
-study of the colour axis.
 
 \begin{figure}[t!]
   \centering
@@ -307,8 +302,7 @@ Skipping white balance here (the \texttt{mid\_raw\_color\_pair} flag,
 frames; the brightness and shadow change, which is the main signal MID provides, is
 present either way.
 An earlier configuration added random global tints to the pair frame to create colour
-differences synthetically; it did not help in our early tests and was dropped. A later,
-calibrated version of the same idea is evaluated in \secref{sec:colour_axis}.
+differences synthetically; it did not help in our early tests and was dropped.
 \figref{fig:mid_preprocessing} summarises this preprocessing split: the
 white-balanced primary frame provides the supervised colour anchor, while the raw
 paired frames preserve the illuminant change used by CIAI.
@@ -329,117 +323,6 @@ paired frames preserve the illuminant change used by CIAI.
     chromaticity change that CIAI needs as supervision.
   }
   \label{fig:mid_preprocessing}
-\end{figure}
-
-\subsection{3D-Front-IID: A Rendered Cross-Illuminant Corpus}
-\label{sec:front3d}
-
-\paragraph{Motivation: the gap MID cannot close}
-MID is the only \emph{real} source of cross-illumination pairs available to CIAI, and
-the thesis depends on it, but it constrains the method along two axes at once.
-First, MID varies the illuminant by bouncing a single white flash in a different
-\emph{direction}: what changes between two frames is the geometry and intensity of
-the light, and only incidentally its colour, with a median chromaticity gap of $0.030$
-between frames (\secref{sec:mid_dataset}). For colour, the one real dataset with
-pixel-aligned multi-illumination pairs supervises only weakly and indirectly.
-Second, MID has no measured dense albedo: its pseudo-ground-truth is itself
-derived from the white-balanced capture stack.
-On a MID pair the invariance loss therefore acts without an independent
-absolute anchor on the same pixels, so nothing in the pair itself prevents the
-two predictions from agreeing on a \emph{wrong} albedo; the anchor has to
-arrive from a different dataset, on a different image.
-The synthetic corpora have the opposite problem: Hypersim and InteriorVerse
-supply exact albedo, but each image is a single illumination, so they carry no
-cross-illumination signal at all.
-
-Among the public datasets available to this project, none offered both
-properties together. We therefore rendered one.
-
-\paragraph{How it is built}
-3D-Front-IID is rendered from 3D-FRONT \mycite{fu213dfront}, a corpus of
-professionally designed indoor layouts furnished with 3D-FUTURE assets, using
-Blender's Cycles path tracer at $512\times512$ and 64 samples per pixel
-(\texttt{scripts/render\_3dfront\_dataset.py}).
-Four design decisions define it.
-
-\begin{itemize}
-  \item \textbf{Interior camera sampling.}
-        The layouts ship with exterior ``dollhouse'' camera poses, which are
-        unusable as photographs.
-        Cameras are instead sampled \emph{inside} each room and accepted by ray
-        casting a grid through the frustum: a view is kept only if it is not
-        embedded in geometry, is not staring at a blank wall or the ceiling,
-        and actually frames furniture rather than empty floor.
-  \item \textbf{Randomised coloured illuminants: the thesis axis.}
-        Each accepted view is rendered under $K \in \{2,3\}$ lighting variants
-        from the identical camera. Every variant re-randomises a key light
-        (a blackbody between 2500\,K and 9000\,K, or a saturated hue) together
-        with a near-neutral fill, and a \emph{minimum rg-chromaticity gap} is
-        enforced between the key lights of a view.
-        The illuminant colour is thus a controlled, guaranteed-present variable
-        rather than a by-product: every pair the loader can draw is a genuine
-        colour change, by construction.
-  \item \textbf{Exact albedo, pixel-aligned.}
-        After the lit passes, every material is converted to an emission shader
-        and all lights are removed, so the renderer returns each surface's base
-        colour directly. The result is a true ground-truth albedo registered
-        pixel-for-pixel with every lit variant of that view.
-  \item \textbf{Automatic quality control.}
-        Each rendered view is validated for exposure clipping, black frames,
-        valid-pixel coverage and framing, and failures are quarantined rather
-        than trained on; 103 of 2{,}599 rendered views were dropped this way.
-\end{itemize}
-
-The resulting corpus contains 960 rooms and 2{,}496 accepted views, yielding
-\textbf{5{,}056 cross-illuminant pairs}. The key-light separation is wide and
-guaranteed: the median rg-chromaticity distance between the two key lights of
-a pair is $0.23$, and no pair falls below the enforced floor of $0.055$. Measured as
-the effective illuminant of the rendered image (key and fill together, read from
-$\mathbf{I}/\mathbf{A}^*$, the same statistic we use for MID), the median pair gap is
-$0.153$, five times MID's, and even the weakest tenth of pairs ($0.069$) lies above MID's
-median. The corpus therefore never shows the model a subtle colour change, a gap that
-matters for transfer (\secref{sec:colour_axis}).
-\figref{fig:front3d} shows samples together with the measured illuminant gamut
-and pair-separation distribution.
-
-\paragraph{What the corpus is designed to test}
-A 3D-Front-IID sample is the only one in the mix where the cross-illumination pair and
-an exact albedo target coexist \emph{on the same pixels}: the loader returns two
-lit observations, the ground-truth albedo, and a per-pair validity mask.
-Two things follow.
-The invariance loss and the supervised albedo anchor act on the same image, so
-the degenerate solution available on an unanchored pair, in which two predictions
-drift together onto a consistent but incorrect albedo, is directly
-penalised rather than left to a different dataset to correct.
-And because the varied quantity is illuminant \emph{colour} by construction,
-CIAI is supervised on colour directly, instead of inferring it from a direction
-change that only partly implies it.
-Its shading, like InteriorVerse's, is defined only implicitly as
-$\mathbf{S}^*_d = \mathbf{I}/\mathbf{A}^*$, so 3D-Front-IID is excluded from the
-shading-ground-truth-gated losses; it contributes the albedo anchor and the CIAI
-pair, not a shading target.
-\secref{sec:colour_axis} measures what it contributes by continuing our model with
-and without the corpus in the training mix.
-
-\begin{figure}[t!]
-  \centering
-  \includegraphics[width=\textwidth]{images/front3d/front3d_dataset.jpg}
-  \caption[3D-Front-IID corpus and illuminant distribution.]{%
-    3D-Front-IID, the cross-illuminant corpus rendered for this thesis.
-    (a) Four rooms, each rendered from a fixed camera under the view's lighting
-    variants (the swatch in each panel is that variant's key-light colour), shown
-    beside the exact ground-truth albedo obtained from the emission pass. Each
-    albedo is pixel-aligned with every lit variant.
-    (b) The rg-chromaticity of all 6{,}272 key lights in the corpus, each drawn
-    in its own colour, with the blackbody locus overlaid: sampling is deliberately
-    not confined to the locus, so the illuminant gamut covers saturated colours
-    that natural white-balanced capture never contains.
-    (c) The chromaticity distance between the two illuminants of each of the
-    5{,}056 cross-illumination pairs. The renderer enforces a minimum separation, so
-    every pair CIAI can draw carries a real illuminant-colour change; the median
-    separation is $0.23$.
-  }
-  \label{fig:front3d}
 \end{figure}
 
 \section{Optimisation Schedule}
