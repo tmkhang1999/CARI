@@ -106,3 +106,6 @@ Khang_presentation.pptx
 # Private development history (old code, results and notes): kept on disk, not published.
 # Everything in it is also in git history, before the 2026-10-09 cleanup (commit c4162a8).
 documents/history/
+
+# macOS
+.DS_Store
