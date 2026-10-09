@@ -8,28 +8,29 @@ genuinely different held-out MID test scenes for qualitative diversity:
   - everett_dining2 (wood desk + colourful board-game box)
   - everett_kitchen5 (colourful bottles/labels, different material profile)
 
-Uses the approved qualitative full-CARI model. Quantitative slides retain their
+Uses the approved qualitative full-CIAI model. Quantitative slides retain their
 separately verified selected-evaluation provenance. Display follows the same
 tonemap/scale-normalisation protocol as tests/viz/build_hires_figures.py.
 """
 import os
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 import sys
 
 import cv2
 import numpy as np
 import torch
 
-sys.path.insert(0, '/home/khang/IR-IID/tests/eval')
-os.chdir('/home/khang/IR-IID/tests/eval')
-sys.path.insert(0, '/home/khang/IR-IID/tests/viz')
+sys.path.insert(0, f'{ROOT}/tests/eval')
+os.chdir(f'{ROOT}/tests/eval')
+sys.path.insert(0, f'{ROOT}/tests/viz')
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 
 from eval_mid_constancy import AlbedoPredictor, _raw_frame, _tonemap_frame  # noqa: E402
 from build_hires_figures import norm, scale_of, load_hdr, panel, fnt, INK, MUTE, RED, ROSTER  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
-OUT_DIR = '/home/khang/IR-IID/presentation/assets/generated/mid_diversity'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+OUT_DIR = f'{ROOT}/presentation/assets/generated/mid_diversity'
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -74,7 +75,7 @@ def build_scene(scene_name, out_name):
     sp = os.path.join(MID, scene_name)
     lights = [0, 6, 12, 18]
     ins = [_tonemap_frame(_raw_frame(sp, i)) for i in lights]
-    label, ckpt, arch = ('Ours', '/home/khang/IR-IID/checkpoints/v17_29/checkpoint_iter_60000.pth', '17')
+    label, ckpt, arch = ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17')
     p = AlbedoPredictor(ckpt, arch, 'cuda', infer_max_size=1280)
     albs = [p.albedo(x) for x in ins]
     del p

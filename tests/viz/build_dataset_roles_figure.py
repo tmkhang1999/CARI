@@ -1,8 +1,11 @@
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 #!/usr/bin/env python3
 """Three-panel overview for Chapter 4's Training Data intro (sec:data): one
 representative frame per dataset, labelled with the role Sec 4.2's own prose
 already assigns it -- Hypersim and InteriorVerse supply supervised albedo,
-MID supplies the real cross-render pairs CARI trains on.
+MID supplies the real cross-render pairs CIAI trains on.
 
 Source frames (presentation/assets/generated/rev2_matrices/dataset_*.jpg) are
 curated representative renders/photographs, one per dataset, not derived data;
@@ -20,13 +23,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'presentation/assets/generated/rev2_matrices'
 OUT = ROOT / 'documents/thesis/images/data/dataset_roles.jpg'
 
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 
 PANELS = [
     ('dataset_hypersim.jpg', 'Hypersim', 'supervised albedo + shading'),
     ('dataset_interiorverse.jpg', 'InteriorVerse', 'supervised albedo, added diversity'),
-    ('dataset_mid.jpg', 'MID', 'real cross-render pairs -- the CARI signal'),
+    ('dataset_mid.jpg', 'MID', 'real cross-render pairs -- the CIAI signal'),
 ]
 
 

@@ -26,17 +26,18 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
 from eval_mid_constancy import _raw_frame, _tonemap_frame  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 OUT = f'{ROOT}/tests/visualizations/formulation'
 DST = f'{ROOT}/documents/thesis/images/formulation'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 RED, GRN, INK = (196, 30, 36), (25, 110, 40), (25, 25, 28)
 
 

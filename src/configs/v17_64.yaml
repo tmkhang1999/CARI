@@ -1,94 +1,20 @@
-# ============================================================================
-# STUDY 1, ROW 4 of 4 -- chroma explain INSTEAD of luminance explain.
-# ============================================================================
-#
-# See v17_61.yaml for the full study design and everything held fixed.
-#
-# WEIGHTS: L_inv 0.5, L_explain(lum) 0.0, L_chr_explain 0.25
-#
-# WHAT THIS ROW IS FOR. Row 3 adds a term and (hopefully) improves colour
-# constancy -- but "adding a loss helped" is a weak claim if the two explain
-# halves are partly redundant. This row removes the luminance half entirely, so
-# the three comparisons together decompose the effect:
-#
-#   (3 - 2)  what the chroma half ADDS on top of the published loss
-#   (4 - 2)  whether chroma can SUBSTITUTE for luminance
-#   (3 - 4)  whether the luminance half still contributes once chroma is present
-#
-# If (3 - 4) is ~0, the luminance half was doing nothing that the chroma half
-# and L_inv do not already cover, and the honest paper claim is "replace",
-# not "add". If (4 - 2) regresses on the intensity axis while improving the
-# colour axis, that is the expected trade and it must be reported as such --
-# the model is already best-of-8 on the intensity axis (HIGH/LOW 0.76,
-# r = -0.35) and worst-tier on colour (1.42), and this row is the one that can
-# show whether those two axes are in tension or independent.
-#
-# WHY L_inv STAYS ON HERE. Dropping it too would make this row differ from row 2
-# on two axes at once and (4 - 2) would be uninterpretable. Row 1 already
-# provides the no-cross-render control.
-#
-# READ THIS ROW ON BOTH AXES, NOT JUST COLOUR. The relevant intensity-axis
-# readout is the HIGH/LOW Cast_rel ratio plus the LOW-tercile check from
-# tests/eval/phase_b_readout.py -- a colour gain bought by regressing the weak-
-# colour scenes is not a gain. Chroma_fid guards the other failure mode: a model
-# can trivially reduce chroma drift by draining colour, and Chroma_fid < 1 is
-# what catches that (it is exactly what unmasked the old Cast_RMS pooling bug).
-#
-# LAUNCH:
-#   INITIAL_RESUME=checkpoints/v17_60/checkpoint_iter_19000.pth \
-#   VERSION=17.64 CUDA=1 bash scripts/train_resilient.sh
-# ============================================================================
-
+# Study 1: chroma explanation instead of luminance explanation.
+# All four rows fork from the 19k Stage-A checkpoint of v17_60 and differ only in the
+# three CIAI weights. Run each with --seed 42/43/44 for replicates.
 extends: '17'
-
 train:
   extend_iterations: 40000
-  skip_optimizer: false          # see v17_61.yaml -- CLI flag on first launch only
-  # Only 1 iter checkpoint retained (+ checkpoint_latest.pth). Two concurrent rows on
-  # the ~16 GB session scratchpad peak at 11.4 GB with the default 2, and that margin
-  # is what killed both Round-1 rows at step 2000. Evaluation uses the FINAL checkpoint
-  # only, so retaining intermediates buys nothing here.
+  skip_optimizer: false        # pass --skip-optimizer on the first launch from 19k
   keep_checkpoints: 1
   checkpoint_interval_iters: 1000
   val_interval_iters: 2000
   max_val_batches: 10
   num_workers: 8
-
-  # TABLE-A MIX -- matches v17_41..44 exactly (hypersim 0.4 / mid 0.3 / IV 0.3).
-  # NO front3d, deliberately.
-  #
-  # This was WRONG before: the mix had been copied from v17_34, which is the Table-B
-  # REFINEMENT ladder, not Table A. Two things follow from that mistake, and both
-  # break the study:
-  #
-  #  1. Row 62 exists to reproduce the PUBLISHED CARI loss so rows 63/64 are legible
-  #     against the thesis numbers. Under a different data mix it reproduces nothing.
-  #
-  #  2. front3d is not merely extra data -- it is a CARI PAIR SOURCE
-  #     (front3d_dataset.py: "synthetic replacement for the unavailable OpenRooms
-  #     pairs... the illuminant COLOR axis is explicitly randomized"). It feeds rgb2,
-  #     the same channel L_inv / L_explain / L_chr_explain read. And its colour gaps
-  #     dwarf MID's: v1's p10 is 0.069, ABOVE MID's median of 0.030
-  #     (PHASE_A_FINDINGS.md). Since L_chr_explain only fires on chromatic
-  #     differences, nearly all of its gradient came from SYNTHETIC pairs with
-  #     exaggerated colour changes rather than from real measured illuminants.
-  #     That is a candidate cause of the measured desaturation (Chroma_fid -0.098),
-  #     and it makes "does the chroma loss work on MID" unanswerable from those runs.
-  #
-  # front3d belongs on STUDY 2's data axis, which is where the runs that used it now
-  # sit -- they are relabelled, not discarded.
   sampling_weights_phase3:
     hypersim: 0.4
     midintrinsic: 0.3
     interiorverse: 0.3
-
-
 loss:
-  # ROW 4 = chroma explain replaces luminance explain.
   lambda_alb_invariance: 0.5
   lambda_explain: 0.0
   lambda_chr_explain: 0.25
-
-paths:
-  checkpoint_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_ckpt'
-  log_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_logs'

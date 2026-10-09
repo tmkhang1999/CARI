@@ -1,3 +1,6 @@
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 #!/usr/bin/env python3
 """Figure 5.2 (fig:datasets): the four benchmarks, in the order the chapter presents them.
 
@@ -19,11 +22,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 OUT = f'{ROOT}/tests/visualizations/datasets'
 DST = f'{ROOT}/documents/thesis/images/datasets'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 RED = (200, 30, 30)
 CW, CH = 600, 452
 
@@ -109,7 +110,7 @@ def main():
     rows = []
 
     # ---- 1. MID (chapter order: first) ----
-    mid = '/home/khang/datasets/MIDIntrinsics/test/everett_kitchen12'
+    mid = f'{ROOT}/../datasets/MIDIntrinsics/test/everett_kitchen12'
     rows.append(('MID — real, multi-illuminant capture of one scene; no measured albedo '
                  '(GT-free constancy diagnostic)',
                  [panel(pil(load_hdr(f'{mid}/dir_0_mip2.exr')), 'input, light A'),

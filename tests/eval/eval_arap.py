@@ -29,22 +29,15 @@ from tqdm import tqdm
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(ROOT_DIR / 'src'))
-sys.path.insert(0, str(ROOT_DIR / 'preprocessor'))
-sys.path.insert(0, str(ROOT_DIR / 'tests' / 'infer'))   # infer_wild moved here
+sys.path.insert(0, str(ROOT_DIR / 'tests' / 'infer'))
 
 INTRINSIC_HDR_PATH = ROOT_DIR / 'documents/references/IntrinsicHDR/intrinsic_decomposition'
 sys.path.insert(0, str(INTRINSIC_HDR_PATH))
 
 MARIGOLD_PATH = ROOT_DIR / 'documents/references/marigold'
 
-from infer_wild import (  # noqa: E402
-    load_image, get_normals_metric3d, get_segmentation_nyu40,
-    resolve_device, _infer_model_version, _build_model,
-)
-from src.models.ccr_utils import compute_ccr
-from src.models.iid_utils import uninvert, iuv_to_rgb
-from src.models import IntrinsicDecompositionV17
-from src.train import (  # noqa: E402
+from infer_wild import load_image, resolve_device, load_model  # noqa: E402
+from src.metrics import (  # noqa: E402
     _compute_lmse, _masked_scale_invariant_rmse,
     _compute_ssim_bounded, _compute_shading_ssim,
 )
@@ -89,25 +82,9 @@ def _load_marigold_pipeline(checkpoint, device):
 
 
 def _load_model_versioned(checkpoint, version, device):
-    """Load V17, V18, V20, or auto-detect from checkpoint config."""
-    state_dict = torch.load(checkpoint, map_location='cpu')
-    config = state_dict.get('config', {})
-    model_state = state_dict.get('model_state_dict', state_dict.get('model', {}))
-    model_cfg = config.get('model', {})
-
-    # Determine version
-    inferred = _infer_model_version(config, checkpoint, version)
-
-    if inferred == 'auto' or model_cfg.get('backbone') == 'convnextv2_base':
-        model = _build_model(model_cfg, inferred, device)
-    else:
-        model = IntrinsicDecompositionV17(model_cfg).to(device)
-
-    own = model.state_dict()
-    filtered = {k: v for k, v in model_state.items()
-                if k in own and v.shape == own[k].shape}
-    model.load_state_dict(filtered, strict=False)
-    return model.eval()
+    """Our checkpoints (V17 or V21), rebuilt from their own config."""
+    model, _ = load_model(checkpoint, device)
+    return model
 
 
 def _is_external_version(version):
@@ -258,45 +235,12 @@ def _run_own_model_inference(model, version, rgb_linear, is_hdr, img_path,
     rgb_in = _prepare_input_rgb(rgb_res, is_hdr, version)
     t_rgb = torch.from_numpy(rgb_in).permute(2, 0, 1).unsqueeze(0).float().to(device)
 
-    version_int = int(version) if str(version).isdigit() else 0
-
-    # V18: needs normals + segmentation + CCR
-    if version_int == 18:
-        t_normals = torch.from_numpy(
-            get_normals_metric3d(rgb_in, device).astype(np.float32)
-        ).permute(2, 0, 1).unsqueeze(0).to(device)
-        seg_nyu40 = get_segmentation_nyu40(str(img_path))
-        if seg_nyu40.shape != (H, W):
-            seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H),
-                                   interpolation=cv2.INTER_NEAREST)
-        t_seg = torch.from_numpy(seg_nyu40).long().unsqueeze(0).unsqueeze(0).to(device)
-        t_masks = torch.ones((1, 1, H, W), dtype=torch.bool).to(device)
-        t_ccr = compute_ccr(t_rgb)
-
-        stride = 32
-        pad_h = (stride - (H % stride)) % stride
-        pad_w = (stride - (W % stride)) % stride
-        if pad_h > 0 or pad_w > 0:
-            pad_spec = (0, pad_w, 0, pad_h)
-            t_rgb = torch.nn.functional.pad(t_rgb, pad_spec, mode='replicate')
-            t_normals = torch.nn.functional.pad(t_normals, pad_spec, mode='replicate')
-            t_ccr = torch.nn.functional.pad(t_ccr, pad_spec, mode='replicate')
-            t_seg = torch.nn.functional.pad(t_seg.float(), pad_spec, mode='replicate').long()
-            t_masks = torch.nn.functional.pad(t_masks.float(), pad_spec, mode='replicate').bool()
-
-        with torch.no_grad():
-            preds = model(rgb=t_rgb, normals=t_normals, seg=t_seg,
-                          valid_mask=t_masks, ccr=t_ccr)
-    else:
-        # V17, V20: RGB only; pad to stride-14 multiple
-        stride = 8 if version_int == 17 else 8
-        ph = (32 - (H % 32)) % 32
-        pw = (32 - (W % 32)) % 32
-        if ph > 0 or pw > 0:
-            t_rgb = torch.nn.functional.pad(t_rgb, (0, pw, 0, ph), mode='replicate')
-
-        with torch.no_grad():
-            preds = model(t_rgb)
+    ph = (32 - (H % 32)) % 32
+    pw = (32 - (W % 32)) % 32
+    if ph > 0 or pw > 0:
+        t_rgb = torch.nn.functional.pad(t_rgb, (0, pw, 0, ph), mode='replicate')
+    with torch.no_grad():
+        preds = model(t_rgb)
 
     def to_hwc(t):
         arr = t.squeeze(0).permute(1, 2, 0).cpu().numpy()
@@ -304,20 +248,11 @@ def _run_own_model_inference(model, version, rgb_linear, is_hdr, img_path,
             arr = np.repeat(arr, 3, axis=-1)
         return arr
 
-    t_ad = preds.get('a_d', preds.get('albedo', t_rgb[:, :3]))
-    t_sd = preds.get('shading_linear', preds.get('pi', t_rgb[:, :1]))
+    t_ad = preds['a_d']
+    t_sd = preds['shading_linear']
 
     pred_ad = to_hwc(t_ad.clamp(0.0, 1.0))[:H, :W]
     pred_sd = to_hwc(t_sd.clamp(0.0, None))[:H, :W]
-
-    # Uninvert shading (π → S) ONLY if we fell back to the π-domain field. Both V17 and
-    # V20 expose 'shading_linear' (already-linear S); V20 additionally exposes 'd_g' (π-domain
-    # gray), so gating on d_g alone would double-invert the already-linear V20 shading.
-    if preds.get('shading_linear') is None and (preds.get('d_g') is not None or 'pi' in preds):
-        try:
-            pred_sd = uninvert(t_sd[:, :, :H, :W]).squeeze(0).permute(1, 2, 0).cpu().numpy()
-        except Exception:
-            pass
 
     # Back to original resolution
     rgb_tm_orig = _hdr_norm(rgb_linear, 99.0) if is_hdr else np.clip(rgb_linear, 0.0, 1.0)
@@ -1293,7 +1228,7 @@ def eval_arap(args):
         # 4 unscaled), so it keeps a median 1.5% of the frame on the /179 group against
         # ~99% on the others -- a 68x coverage spread, with 6 scenes fully empty. That
         # biases every masked metric here (LMSE, RMSE, si-RMSE, SSIM), not just SSIM.
-        # See documents/evals/PHASE_A_FINDINGS.md §1.
+        # See documents/history/DEVELOPMENT_HISTORY.md, section 5 (ARAP encodings).
         #
         # --canonical_mask canonicalises the GT to a [0,1] reflectance range and
         # thresholds relative to canonical white, making coverage encoding-invariant.
@@ -1458,7 +1393,7 @@ if __name__ == '__main__':
                              'absolute alb_lum>0.004 threshold, which is encoding-'
                              'dependent and keeps a median 1.5%% of the frame on the 40 '
                              '/179-encoded scenes vs ~99%% elsewhere (6 fully empty). '
-                             'See documents/evals/PHASE_A_FINDINGS.md.')
+                             'See documents/history/DEVELOPMENT_HISTORY.md, section 5.')
     parser.add_argument('--mask_frac', type=float, default=0.02,
                         help='Mask threshold as a fraction of canonical white, '
                              'used with --canonical_mask.')

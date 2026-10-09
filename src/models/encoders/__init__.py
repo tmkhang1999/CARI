@@ -1,8 +1,4 @@
-"""
-Package initialization for encoders.
-"""
+"""Encoders: the frozen DINOv2 backbone used by V17 and V21."""
+from .dino_encoder import DINOv2Encoder
 
-from .guidance_encoder import GuidanceEncoder
-
-__all__ = ["GuidanceEncoder"]
-
+__all__ = ["DINOv2Encoder"]

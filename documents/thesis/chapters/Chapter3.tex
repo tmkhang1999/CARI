@@ -7,7 +7,7 @@
 This chapter describes how our model works.
 We start with the physical model that underlies IID (\secref{sec:physics}),
 then describe the network architecture (\secref{sec:architecture}),
-and finally explain the CARI training strategy (\secref{sec:cari}).
+and finally explain the CIAI training strategy (\secref{sec:cari}).
 
 
 \section{Physical Model}
@@ -88,11 +88,14 @@ A three-channel shading solves the representation problem but not the
 belongs to the albedo and how much to the shading colour, and the standard
 ground-truth datasets (including Hypersim) supervise shading only up to this
 ambiguity.
-This is where CARI comes in: by constraining the albedo to be identical across
-images of the same scene under different illuminants, the colour split stops
-being a free choice: any illuminant colour that the model puts into the albedo
-now violates the invariance constraint, so it is forced into $\mathbf{S}_d$,
-which is exactly where the physics says it belongs.
+Paired observations can narrow this ambiguity. If the albedo is required to be
+identical across two images of a scene whose illuminant colours differ, any part of the
+illuminant colour that \emph{differs} between the two frames can no longer sit in the
+albedo. Two limits follow directly, and both turn out to matter. A colour common to both
+frames (a constant tint) satisfies the constraint and is left unresolved; and the
+constraint can only remove colour differences that the training pairs actually contain.
+\secref{sec:cari} defines the losses and \secref{sec:colour_axis} measures how much of
+this the real pairs deliver.
 
 \subsection{The Shading Parameterisation}
 
@@ -204,15 +207,19 @@ a small convolutional block followed by a sigmoid activation:
 \end{equation}
 The sigmoid bounds the albedo to $[0,1]^3$, the correct range for a reflectance
 value.
-The RGB skip is motivated by a practical risk of using a frozen semantic encoder:
-its tokens need not retain all of the local, absolute colour information required
-for albedo prediction. We did not directly probe DINOv2 for illumination
-invariance, so this is a design hypothesis rather than an established property of
-the encoder. Feeding image colour directly into the head restores that capacity.
-Crucially, this skip is only safe \emph{in combination with} the CARI invariance
-loss: with a direct colour path and no invariance constraint, the illuminant
-colour would flow straight through the skip into the albedo.
-This coupling is one of the ablation axes in \chapref{ch:experiments}.
+The RGB skip, together with the chroma-direction loss on albedo of
+\secref{sec:losses}, forms what we call the \emph{colour path}. It addresses a measured
+weakness of the frozen-encoder model: without it, the predicted albedo retains only about
+half of the between-material chroma spread of the reference albedo, with or without
+CIAI (\secref{sec:ablation}). A plausible reason is that the frozen semantic tokens do not
+carry all of the local, absolute colour needed for albedo, and a pixel-wise regression loss
+then favours greyish predictions; we did not probe the encoder directly, so this is a
+hypothesis. The skip has a cost as well: it is a direct route by which the
+\emph{illuminant} colour of the input can reach the albedo, which the invariance loss must
+then counteract. The model planned in \chapref{ch:conclusion} keeps a colour path but feeds
+the albedo head the input divided by the predicted shading, so that material colour passes
+and illuminant colour does not. The colour path is one of the two ablation axes in
+\chapref{ch:experiments}.
 
 The shading head applies its own convolutional block and sigmoid and outputs the
 three-channel inverse shading:
@@ -238,17 +245,21 @@ are both derived from the same underlying scene representation.
 \input{./chapters/fig_architecture}
 
 
-\section{Cross-Render Albedo Invariance (CARI)}
+\section{Cross-Illumination Albedo Invariance (CIAI)}
 \label{sec:cari}
 
 \subsection{The Core Idea}
 
-CARI is a training strategy, not a change to the network.
+CIAI is a training strategy, not a change to the network.
 It adds two loss terms that operate on \emph{pairs} of images of the same scene
-photographed under different illuminants.
+photographed under different illumination. The design follows the Siamese pattern of
+representation learning \mycite{chen21simsiam}: one network with shared weights processes
+both views, and only positive pairs are used. Unlike a learned embedding, the quantity the
+two views must share here is a dense physical map, the albedo.
 
 Let $(\mathbf{I}_1, \mathbf{I}_2)$ be such a pair, where $\mathbf{I}_1$ and
-$\mathbf{I}_2$ show the same scene under two different coloured light sources.
+$\mathbf{I}_2$ show the same scene under two different illuminations; on MID, two
+different flash directions.
 Let $\mathbf{A}_1 = \mathbf{A}(\mathbf{I}_1)$ and $\mathbf{A}_2 = \mathbf{A}(\mathbf{I}_2)$
 be the albedos predicted by the model for each image, and let $S_1$ and $S_2$ be
 the corresponding shadings.
@@ -274,8 +285,8 @@ $\Omega_v$ excludes clipped and near-black pixels in either frame (roughly 75\%
 of pixels survive the mask on average), so the invariance constraint is only
 applied where both observations are trustworthy.
 This loss is zero only when the model predicts identical albedo for both images.
-Minimising it forces the model to make the albedo independent of the illuminant
-colour.
+Minimising it pushes the albedo to be independent of whatever differs between the two
+illuminations; it says nothing about a component the two frames share.
 
 \subsection{Explanation Loss}
 
@@ -311,59 +322,52 @@ domain for numerical robustness:
 where $L(\cdot)$ is the Rec.~601 luminance, $\varepsilon = 10^{-3}$, and
 $\Omega_v$ is the same validity mask as in \eqnref{eq:linv}.
 Using luminance makes this term supervise the achromatic \emph{intensity} change
-between the frames. Colour separation is produced by the interaction of the
-three-channel decomposition, albedo/reconstruction supervision, and
-$\mathcal{L}_{\text{inv}}$; the invariance term alone does not identify where the
-rejected colour must go.
+between the frames, and only that. A purely chromatic change between the two frames
+leaves both log-ratios in \eqnref{eq:lexpl} unchanged and contributes no gradient. Together
+with $\mathcal{L}_{\text{inv}}$, which a colour shared by both albedos satisfies, nothing in
+CIAI states where a change in illuminant \emph{colour} must go. On the trained model we
+measure that the shading explains only $47.9\%$ of the chroma change between paired
+frames, and that the unpenalised chroma residual ($0.074$) is as large as the penalised
+luminance residual ($0.076$). \secref{sec:colour_axis} tests what adding the missing
+chroma term does.
 This loss is zero only when the shading ratio matches the image ratio at every
 valid pixel, which means the shading is absorbing the lighting difference rather
 than the albedo.
 
-\subsection{Why Raw (Un-White-Balanced) Pairs Are Necessary}
+\subsection{Raw Pairs and the Role of White Balance}
 \label{sec:raw_pairs}
 
-A subtle but important point about applying CARI is the role of white balance.
-Standard image pre-processing in most datasets applies automatic white balance,
-which estimates the illuminant and rescales the colour channels so that neutral
-surfaces appear neutral. A common heuristic is the \emph{grey-world} assumption:
-the average scene reflectance is treated as grey. It fails when the scene itself
-is not colour-balanced. For example, in a room dominated by a red painted wall,
-the average red signal can come from the material rather than the lamp; forcing
-that average to grey removes genuine wall colour. White balance is therefore an
-estimate, not ground truth.
-After white balance, the two images $\mathbf{I}_1$ and $\mathbf{I}_2$ of the same
-scene under different illuminants will look very similar in terms of global colour,
-because the illuminant colour has been removed.
+MID ships a grey probe in every frame, and the usual pre-processing white-balances each
+frame by its own probe: the red and blue channels are rescaled so that the probe becomes
+neutral, while the green channel, and with it the overall intensity, is left unchanged.
+After this step the two frames of a pair differ in brightness and shadows exactly as
+before, but their illuminant colours have been equalised.
 
-This is precisely the wrong input for CARI.
-The luminance explanation loss in \eqnref{eq:lexpl} needs the intensity change,
-whereas the colour variation is needed by the RGB invariance and reconstruction
-constraints. If both images are white-balanced to look neutral, much of that RGB
-variation is removed before training, so CARI can no longer teach the model which
-colour belongs to the illuminant rather than the surface.
+For the cross-illumination pair we skip this step (the \texttt{mid\_raw\_color\_pair}
+flag). The supervised MID frame stays white-balanced, because the pseudo-ground-truth
+albedo was derived from the white-balanced stack, while the paired frames keep whatever
+illuminant colour difference they have, so that $\mathcal{L}_{\text{inv}}$ is asked to be
+invariant to it. \figref{fig:wb_lanes} shows the two pre-processing lanes.
+
+The size of what is kept should not be overstated. MID's flash is white, and the colour
+difference between two raw frames comes only from light bounced off coloured surfaces:
+measured on the grey probes, the median chromaticity gap between two frames of a scene is
+$0.030$ (\secref{sec:colour_axis}). Keeping the pairs raw is therefore a choice that
+preserves a small real colour signal, not a source of strong coloured-illuminant
+supervision, and our ablations do not isolate its effect from the other components.
 
 \begin{figure}[t!]
   \centering
   \includegraphics[width=\textwidth]{images/wb/wb_lanes.png}
-  \caption[Two supervision lanes: a white-balanced anchor and a raw CARI pair.]{%
+  \caption[Two supervision lanes: a white-balanced anchor and a raw CIAI pair.]{%
     The two supervision lanes are built from different pre-processing of the same
     kind of scene, not different data. The absolute anchor (left) is
-    white-balanced, so the sofa's material colour is the only signal left to
-    supervise --- this is what pins $\mathbf{A}$ to a true colour rather than an
-    arbitrary one. The CARI pair (right) is deliberately left raw: both
-    observations still carry their illuminant's cast, which is exactly the
-    variation $\mathcal{L}_{\text{inv}}$ and $\mathcal{L}_{\text{expl}}$ need to
-    see in order to learn what to discard.
+    white-balanced and supervised against the pseudo-ground-truth albedo, which pins
+    $\mathbf{A}$ to a reference colour rather than an arbitrary one. The CIAI pair
+    (right) is left raw, so each observation keeps its own illuminant, including the
+    small colour difference that bounced light introduces between flash directions.
   }
   \label{fig:wb_lanes}
 \end{figure}
-
-We confirm this by measuring the chromaticity spread of the MID dataset with and
-without white balance.
-The ground-truth illuminant probes show 15--25\% variation in chromaticity across
-the different illuminant conditions; this variation is almost entirely removed by
-white balance.
-We therefore set the \texttt{mid\_raw\_color\_pair} flag to \texttt{true} in our
-training configuration, which disables white balance for MID pairs.
 
 \input{./chapters/fig_cari}

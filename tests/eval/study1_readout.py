@@ -7,7 +7,7 @@ that pairing. Study 1 is four rows and the question is NOT "did row 3 beat row 2
 it is which PART of the explain constraint carries the effect. That needs three
 contrasts read together:
 
-    (62 - 61)  does CARI do anything at all, on the rebuilt base
+    (62 - 61)  does CIAI do anything at all, on the rebuilt base
     (63 - 62)  what the chroma half ADDS to the published loss    <- the headline
     (64 - 62)  whether chroma can SUBSTITUTE for luminance
     (63 - 64)  whether the luminance half still contributes once chroma is present
@@ -35,9 +35,9 @@ Usage:
       python tests/eval/eval_mid_constancy.py \
         --ckpts checkpoints/v17_$v/checkpoint_iter_40000.pth \
         --mid-root ../datasets/MIDIntrinsics --split test \
-        --save-json documents/evals/study1_v17_$v.json
+        --save-json documents/results/study1_v17_$v.json
     done
-    python tests/eval/study1_readout.py documents/evals/study1_v17_6*.json
+    python tests/eval/study1_readout.py documents/results/study1_v17_6*.json
 """
 
 from __future__ import annotations
@@ -60,15 +60,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # Kept here so the printed table is self-describing and a mislabelled json cannot
 # quietly turn into a wrong conclusion.
 ROWS = {
-    '17_61': ('no CARI',            'L_inv 0    L_expl 0     L_chr 0'),
-    '17_62': ('CARI (published)',   'L_inv 0.5  L_expl 0.25  L_chr 0'),
-    '17_63': ('CARI + chroma',      'L_inv 0.5  L_expl 0.25  L_chr 0.25'),
+    '17_61': ('no CIAI',            'L_inv 0    L_expl 0     L_chr 0'),
+    '17_62': ('CIAI (published)',   'L_inv 0.5  L_expl 0.25  L_chr 0'),
+    '17_63': ('CIAI + chroma',      'L_inv 0.5  L_expl 0.25  L_chr 0.25'),
     '17_64': ('chroma, no lum',     'L_inv 0.5  L_expl 0     L_chr 0.25'),
 }
 
 # The contrasts to print, in the order they should be read.
 CONTRASTS = [
-    ('17_61', '17_62', 'does CARI do anything on the rebuilt base?'),
+    ('17_61', '17_62', 'does CIAI do anything on the rebuilt base?'),
     ('17_62', '17_63', 'what the chroma half ADDS  [HEADLINE]'),
     ('17_62', '17_64', 'can chroma SUBSTITUTE for luminance?'),
     ('17_64', '17_63', 'does the luminance half still contribute?'),
@@ -167,7 +167,7 @@ def contrast(a_key, b_key, why, by_key, raw_by_key, gaps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('runs', nargs='+', help='eval_mid_constancy --save-json outputs')
-    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'evals',
+    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'results',
                                                   'study1_readout.json'))
     args = ap.parse_args()
 

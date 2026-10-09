@@ -22,13 +22,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
 from eval_mid_constancy import AlbedoPredictor, _raw_frame, _tonemap_frame  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
 OUT = f'{ROOT}/presentation/assets/generated/compare_widget'
 os.makedirs(OUT, exist_ok=True)
 
@@ -43,7 +43,7 @@ SCENES = [
 ]
 
 MODELS = [
-    ('Ours', f'{ROOT}/checkpoints/v17_29/checkpoint_iter_60000.pth', '17'),
+    ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17'),
     ('CD-IID', '', 'cdiid'),
     ('CRefNet', f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet'),
     ('Marigold-App', f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1', 'marigold-appearance'),

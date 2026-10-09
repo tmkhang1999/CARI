@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CARI: Coloured Illumination Constancy in Intrinsic Image Decomposition</title>
-  <meta name="description" content="CARI trains an intrinsic image decomposition model on real photographs of one scene under different lamps, so the recovered material colour stays the same when the light changes. Master's thesis, Minh Khang Tran, 2026.">
+  <title>Cross-Illumination Albedo Invariance</title>
+  <meta name="description" content="Cross-Illumination Albedo Invariance (CIAI) trains an intrinsic image decomposition model on real photographs of one scene under different illumination, so the recovered albedo keeps its lightness when the light changes. It also measures why colour stability needs more than this. Minh Khang Tran, 2026.">
   <meta name="author" content="Minh Khang Tran">
-  <meta property="og:title" content="CARI: Cross-Render Albedo Invariance">
-  <meta property="og:description" content="The light moves; the material should not. Master's thesis project page.">
+  <meta property="og:title" content="Cross-Illumination Albedo Invariance">
+  <meta property="og:description" content="The light moves; the material should not. Lightness-stable intrinsic decomposition from real multi-illumination photographs.">
   <meta property="og:image" content="https://tmkhang1999.github.io/CARI/static/img/cari-teaser.jpg">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232c5c7a'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23dbeafb'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -689,6 +689,10 @@
       color: var(--fg); text-align: center; font-size: clamp(1.7rem, 4vw, 2.5rem);
       font-weight: 700; line-height: 1.25; margin-bottom: 28px;
     }
+    .paper-subtitle {
+      display: block; margin-top: 10px; font-size: clamp(1rem, 2.2vw, 1.3rem);
+      font-weight: 400; color: var(--muted); line-height: 1.4;
+    }
     .paper-authors { justify-content: center; text-align: center; margin-bottom: 6px; }
     .paper-author { color: var(--accent) !important; font-size: 1.02rem; }
     .paper-author strong { color: var(--accent) !important; font-weight: 600; }
@@ -884,11 +888,11 @@
       <i class="fas fa-moon"></i>
     </button>
 
-    <div class="hero-venue">Master's Thesis &nbsp;·&nbsp; COSI / NTNU &nbsp;·&nbsp; 2026</div>
+    <div class="hero-venue">Research project &nbsp;·&nbsp; 2026 &nbsp;·&nbsp; started as an MSc thesis (COSI / NTNU)</div>
 
     <h1 class="paper-title">
-      Coloured Illumination Constancy in Intrinsic Image Decomposition
-      via Cross-Render Albedo Invariance
+      Cross-Illumination Albedo Invariance
+      <span class="paper-subtitle">Lightness-stable intrinsic decomposition from real multi-illumination photographs</span>
     </h1>
 
     <div class="paper-authors">
@@ -918,7 +922,7 @@
 
     <div class="paper-links">
       <a href="https://github.com/tmkhang1999/CARI/blob/main/documents/thesis/Main.pdf" class="paper-btn primary" target="_blank" rel="noopener">
-        <i class="fas fa-file-pdf"></i> Thesis
+        <i class="fas fa-file-pdf"></i> Report
       </a>
       <a href="https://github.com/tmkhang1999/CARI" class="paper-btn secondary" target="_blank" rel="noopener">
         <i class="fab fa-github"></i> Code
@@ -931,12 +935,12 @@
     <!-- ── Teaser ──────────────────────────────────── -->
     <div class="teaser-wrap">
       <img src="static/img/cari-teaser.jpg" class="teaser-img"
-           alt="Top row: one indoor scene photographed under four different lamp settings, the colour of the light visibly changing. Bottom row: the albedo our model recovers from each of those four photographs, which stays the same.">
+           alt="Top row: one indoor scene photographed four times with a flash bounced in a different direction each time, so brightness and shadows change. Bottom row: the albedo our model recovers from each of those four photographs.">
       <p class="teaser-caption">
         <strong>The light moves; the material should not.</strong>
-        One scene, four lamp settings (top), and the material colour our model recovers from each
-        photograph independently (bottom). Nothing about the surface changed between the four shots,
-        so nothing about the recovered albedo should either.
+        One scene photographed with the flash bounced in four directions (top), and the albedo our
+        model recovers from each photograph independently (bottom). Nothing about the surfaces changed
+        between the shots, so nothing about the recovered albedo should either.
       </p>
     </div>
 
@@ -947,6 +951,8 @@
       <a href="#problem">The idea</a>
       <a href="#method">Method</a>
       <a href="#results">Results</a>
+      <a href="#colour">Colour</a>
+      <a href="#next">Next</a>
       <a href="#bibtex">BibTeX</a>
     </nav>
 
@@ -954,54 +960,71 @@
     <section class="cari-section" id="abstract">
       <h2 class="cari-section-title">Abstract</h2>
       <p class="cari-text">
-        Intrinsic image decomposition splits a photograph into the colour of the material and the
-        light falling on it. Almost every method assumes that light is white. Real interiors do not
-        oblige: a warm lamp and cool daylight tint the recovered <strong>albedo</strong>, so the same
-        wall appears to change colour when only the lighting did.
+        Intrinsic image decomposition splits a photograph into the reflectance of each surface, the
+        <strong>albedo</strong>, and the light falling on it, the shading. A single image cannot tell a
+        dark surface from a dimly lit one, so the light leaks into the recovered albedo: the same wall
+        comes out lighter or darker, and sometimes tinted, depending on how the room was lit.
       </p>
       <p class="cari-text">
-        We introduce <strong>Cross-Render Albedo Invariance (CARI)</strong>, a training strategy built
-        on a single constraint — <em>if the same surface appears in two photographs lit differently,
-        its recovered albedo must be identical in both.</em> Real multi-illumination photographs supply
-        that pairing; a white-balanced synthetic anchor supplies the absolute colour that pairwise
-        agreement alone cannot pin down. CARI acts only during training: inference stays a single
-        image through a single forward pass.
+        We train with <strong>Cross-Illumination Albedo Invariance (CIAI)</strong>. Two photographs of one
+        scene under different illumination pass through the same network; their albedos must agree, and
+        the shading must explain the brightness change between them. The idea borrows from Siamese
+        representation learning and from multi-view consistency in 3D reconstruction. No dataset has real
+        photographs under several lights <em>and</em> dense true albedo, so we use the Multi-Illumination
+        Dataset, 25 flash directions per scene, with the pseudo-ground-truth albedo that MIDIntrinsics
+        derives for all of them. Pairing is needed only in training; inference is one image, one pass.
       </p>
       <p class="cari-text">
-        Evaluating that claim meant first repairing how it is measured, because the field's
-        constancy score rewards a model for discarding colour entirely — a fully grey albedo
-        scores as perfectly invariant. Under the repaired metric, our model leads lightness
-        stability while training <strong>24× fewer parameters</strong> than the strongest
-        baseline. It does not lead the colour axes, and this page says so.
+        In matched ablations CIAI cuts the variation of recovered material lightness across lighting by
+        28&ndash;39%, and on synthetic renderings fed with their original coloured light it also lowers the
+        albedo error by 7&ndash;14%, on a benchmark it never trained on. The model trains 18.5M parameters.
+        It does not make the albedo stable in <em>colour</em>: MID's flashes are white, so its illuminant colour barely changes, and our
+        explanation loss sees luminance only. We measure that limit directly and lay out the model, losses
+        and data meant to close it.
       </p>
+
+      <div class="contrib-heading">What this project contributes</div>
+      <ol class="contrib-numbered">
+        <li><strong>A paired training strategy for lightness stability.</strong> Albedo invariance plus a
+          luminance explanation loss on raw MID pairs, used as a fine-tuning stage on top of supervised
+          synthetic training. Matched ablations isolate its effect on stability, and on accuracy where the
+          input carries its lighting.</li>
+        <li><strong>A measured account of where it stops.</strong> MID varies light direction and intensity,
+          not colour (median chromaticity gap 0.030). CIAI barely changes hue drift, which still tracks
+          illuminant colour; two follow-up studies show why.</li>
+        <li><strong>Separating two failure modes the base model mixed up.</strong> The desaturated albedo of
+          the frozen-encoder baseline is a model problem, not a CIAI side effect: a colour path fixes it with
+          CIAI on or off.</li>
+        <li><strong>An evaluation that reports stability next to accuracy.</strong> Stability on MID, accuracy
+          on measured albedo (MAW), because a grey albedo is perfectly stable.</li>
+      </ol>
     </section>
 
     <div class="cari-divider"></div>
 
-    <!-- ── Demo (promoted ahead of the explanation — this is the payoff) ── -->
+    <!-- ── Demo ────────────────────────────────────── -->
     <section class="cari-section" id="demo">
       <div class="sec-eyebrow">See it work</div>
-      <h2 class="cari-section-title">Same scene, three lamps, nine methods</h2>
+      <h2 class="cari-section-title">Same scene, three flash directions, seven methods</h2>
       <p class="cari-text">
-        Before the method or the numbers: this is what "the material colour shouldn't change
-        when the light does" looks like in practice, and what happens when a model gets it wrong.
+        Before the method or the numbers: this is what "the albedo shouldn't change when the light does"
+        looks like in practice, and where each model gets it wrong.
       </p>
 
       <div class="cari-figure wide-matrix">
         <img src="static/img/cari-qualitative.jpg"
-             alt="Grid comparing input, ground-truth albedo, and predictions from all seven methods across three lighting conditions of the same scene. Two regions are tracked with coloured boxes across every panel: a mirror-finish calibration sphere in red, and a dark jacket in blue.">
+             alt="Grid comparing input, pseudo-ground-truth albedo, and predictions from seven methods across three flash directions of the same scene. Two regions are tracked with coloured boxes across every panel: a mirror-finish calibration sphere in red, and a dark jacket in blue.">
         <p class="fig-caption">
-          <strong>Held-out scene, three lamp settings, all seven methods.</strong> Two fixed regions
-          are tracked across every panel — a mirror sphere (red) and a dark jacket (blue) — so any
-          change between panels is the model's, not the camera's.
+          <strong>Held-out MID scene, three flash directions, all seven methods.</strong> Two fixed regions
+          are tracked across every panel, a mirror sphere (red) and a dark jacket (blue), so any change
+          between panels is the model's, not the camera's.
         </p>
       </div>
 
       <h3 class="cari-section-title" style="font-size:1.05rem; margin-top:44px;">Try it yourself</h3>
       <p class="cari-text">
         Pick a model and see its predicted albedo next to the photograph it came from, then step
-        through four held-out scenes. Every prediction is a real checkpoint output — nothing here
-        is staged.
+        through four held-out scenes. Every prediction is a real checkpoint output.
       </p>
 
       <div class="compare-widget" id="compareWidget">
@@ -1028,48 +1051,50 @@
 
     <!-- ── Problem ─────────────────────────────────── -->
     <section class="cari-section" id="problem">
-      <div class="sec-eyebrow">The problem</div>
-      <h2 class="cari-section-title">A single grey number has nowhere to put a colour</h2>
+      <div class="sec-eyebrow">The idea</div>
+      <h2 class="cari-section-title">One photograph cannot tell the surface from the light</h2>
       <p class="cari-text">
-        Write a photograph as material times shading, <strong>I = A ⊙ S<sub>d</sub> + R</strong>.
-        If shading <var>S<sub>d</sub></var> is one channel per pixel, it can only make a surface
-        lighter or darker. It cannot be orange. So when a tungsten lamp casts an orange light across
-        a white wall, that hue has exactly one place left to go — into the albedo, the one layer that
-        is supposed to describe the paint rather than the lamp.
+        Write a photograph as material times shading, <strong>I = A ⊙ S<sub>d</sub> + R</strong>. From one
+        image, a grey wall in shadow and a dark wall in full light are the same pixels, and a white wall
+        under a warm lamp looks like a warm wall under white light. Whatever the model cannot attribute to
+        the light ends up in the albedo.
       </p>
 
       <div class="cari-figure">
         <img src="static/img/cari-ambiguity.jpg"
-             alt="The same photograph explained two ways. With RGB shading the albedo stays neutral and the lamp's hue lives in the shading layer. With one-channel grey shading the same lamp hue is forced into the albedo, tinting it orange.">
+             alt="A MID frame, its pseudo-ground-truth albedo, the RGB shading implied by the data, and the albedo obtained when only the luminance of that shading is divided out, which stays tinted.">
         <p class="fig-caption">
-          <strong>Two explanations of one image.</strong> Both reconstruct the input exactly. Only the
-          shading model differs — and with a single-channel shading map, the lamp's hue is pushed into
-          the material layer.
+          <strong>Why the shading needs colour channels.</strong> Dividing an image by even the correct
+          <em>luminance</em> of its shading leaves the light's tint in the albedo. Our model therefore
+          predicts three-channel shading, but representing colour is not the same as being trained to put
+          it there, which is the gap this project ends up measuring.
         </p>
       </div>
 
       <p class="cari-text">
-        Giving the model RGB shading is necessary but not sufficient — it still needs to be told
-        what changed between two shots is <em>lighting</em>, not material. From a single image, a
-        warm surface under white light and a white surface under warm light are the same picture; a
-        <strong>second photograph of the same scene under a different lamp</strong> breaks the tie.
+        A <strong>second photograph of the same scene under different light</strong> breaks the tie: the
+        surfaces are the same in both, so anything that changed between them is lighting. This is the
+        intuition behind Siamese and contrastive learning (two views of one thing should share a
+        representation) and behind multi-view consistency in 3D reconstruction (one surface seen several
+        times has one property). CIAI keeps only the positive pairs: there are no negatives, just a dense
+        target that the two albedos must share.
       </p>
 
       <div class="cari-figure">
         <img src="static/img/cari-pairs.jpg"
-             alt="The same table of objects photographed under cool and warm lighting, with a zoomed crop of a book cover under each, showing the same object appearing to be different colours.">
+             alt="The same table of objects photographed with the flash bounced in two directions, with a zoomed crop of a book cover under each. Brightness and shadows change between the two frames; the light colour changes only slightly.">
         <p class="fig-caption">
-          <strong>The supervision signal.</strong> Same camera, same objects, same materials — only the
-          lamps changed. The Multi-Illumination Dataset provides thousands of such pixel-aligned pairs
-          of real indoor scenes.
+          <strong>The supervision signal.</strong> Same camera, same objects, the flash bounced in a
+          different direction. The Multi-Illumination Dataset (MID) captures every scene 25 times this way;
+          MIDIntrinsics provides one pseudo-ground-truth albedo shared by all 25 frames.
         </p>
       </div>
 
       <div class="insight-box">
-        Standard preprocessing works against this. White balance removes exactly the illuminant colour
-        CARI needs to observe, so the paired images are kept
-        <strong>raw and un-white-balanced</strong>, while the synthetic supervision that anchors
-        absolute colour stays white-balanced.
+        <strong>What MID varies, and what it does not.</strong> The flash is white. Between frames the light
+        changes direction and intensity; its colour changes only through bounce off coloured walls, with a
+        median chromaticity gap of 0.030, and 86% of frame pairs below 0.08. MID is a strong signal for
+        lightness and a weak one for colour.
       </div>
     </section>
 
@@ -1078,27 +1103,42 @@
     <!-- ── Method ──────────────────────────────────── -->
     <section class="cari-section" id="method">
       <div class="sec-eyebrow">Method</div>
-      <h2 class="cari-section-title">Cross-Render Albedo Invariance</h2>
+      <h2 class="cari-section-title">Cross-Illumination Albedo Invariance</h2>
       <p class="cari-text">
-        During training, two photographs of one scene under different lamps go through the same
-        network. Three losses then say what the pair is allowed to disagree about.
+        The base model is a frozen DINOv2-L encoder with a DPT decoder and two heads: albedo, and
+        three-channel shading; a residual R = (I &minus; A ⊙ S<sub>d</sub>)<sub>+</sub> absorbs highlights. It is
+        first trained with supervised losses on Hypersim and InteriorVerse. CIAI is then added as a second
+        stage on MID pairs.
       </p>
 
       <div class="cari-figure">
-        <img src="static/img/cari-mechanism.svg"
-             alt="Diagram: two images of the same scene under different illumination pass through the shared model, producing two albedo maps that are pushed together while the shading maps absorb the lighting difference.">
+        <img src="static/img/cari-mechanism.jpg"
+             alt="Diagram: two photographs of the same scene with the flash in different directions pass through one shared model. The two predicted albedos are tied by the invariance loss; the two predicted shadings are tied by the explanation loss on the luminance ratio.">
         <p class="fig-caption">
-          <strong>CARI applies at training time only.</strong> The pairing disappears at inference —
-          the deployed model still takes one image and makes one forward pass.
+          <strong>CIAI applies at training time only.</strong> Thumbnails are the model's own outputs: the two
+          albedos agree closely in lightness but less in colour, which is exactly what the results below
+          measure.
         </p>
       </div>
 
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-name">L<sub>inv</sub> <span class="arrow">albedo invariance</span></div>
+          <div class="metric-role">the pair must agree</div>
+          <div class="metric-desc">Masked L1 between the two RGB albedos over pixels that are valid in both
+            frames (not clipped, not near black).</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-name">L<sub>expl</sub> <span class="arrow">shading explanation</span></div>
+          <div class="metric-role">the shading must explain the change</div>
+          <div class="metric-desc">The log luminance ratio of the two shadings must equal that of the two
+            images. It rules out the trivial flat albedo, and it sees brightness only.</div>
+        </div>
+      </div>
       <p class="cari-text">
-        The pair is required to agree on albedo (<var>L</var><sub>inv</sub>), the shading is
-        required to explain whatever brightness change the pair disagrees on
-        (<var>L</var><sub>expl</sub>), and a synthetic anchor pins the agreed colour to ground
-        truth (<var>L</var><sub>chroma</sub>) — otherwise two predictions could agree and still
-        both be wrong. Full derivations are in the thesis.
+        The pairs are loaded without per-frame white balance, and the supervised anchors on synthetic data
+        keep the agreed albedo tied to a true colour; agreement alone would also be satisfied by a wrong
+        albedo shared by both frames.
       </p>
 
       <div class="results-grid">
@@ -1115,40 +1155,9 @@
           <div class="result-label">forward pass at inference</div>
         </div>
       </div>
-      <p class="cari-text" style="font-size:0.9rem; color:#64748b; margin-top:14px;">
+      <p class="cari-text" style="font-size:0.9rem; opacity:0.7; margin-top:14px;">
         The DINOv2-L backbone (304M parameters) stays frozen throughout and is not counted as trained.
       </p>
-    </section>
-
-    <div class="cari-divider"></div>
-
-    <!-- ── Metrics ─────────────────────────────────── -->
-    <section class="cari-section" id="metrics">
-      <div class="sec-eyebrow">Measuring it</div>
-      <h2 class="cari-section-title">The constancy metric pays models to destroy colour</h2>
-      <p class="cari-text">
-        The standard chroma-cast score pools albedo chromaticity across every material in a scene and
-        then takes the variance over illuminants. That pooled quantity mixes two different things: how
-        much the illuminant dragged the prediction around, and how chromatically diverse the scene is
-        — and the second term is computed from the <em>prediction</em>, not from ground truth.
-      </p>
-
-      <div class="insight-box">
-        A model can improve its constancy score simply by washing the colour out of its albedo.
-        A perfectly grey prediction is perfectly invariant. The metric pays models to destroy the
-        quantity the task exists to recover.
-      </div>
-
-      <div class="cari-figure">
-        <img src="static/img/cari-chroma-fidelity.jpg"
-             alt="Albedo predictions from several methods on the same scene, showing that the most numerically constant ones are visibly the most desaturated.">
-        <p class="fig-caption">
-          <strong>When the collapse happens, it is visible.</strong> CRefNet and the colour-path-off
-          ablation score well on pooled invariance with visibly drained material colour. This is a
-          real failure mode, but not the only route to invariance — CD-IID reaches the lowest drift
-          in the table while keeping its colour.
-        </p>
-      </div>
     </section>
 
     <div class="cari-divider"></div>
@@ -1156,11 +1165,38 @@
     <!-- ── Results ─────────────────────────────────── -->
     <section class="cari-section" id="results">
       <div class="sec-eyebrow">Results</div>
-      <h2 class="cari-section-title">Stability and fidelity, scored together</h2>
+      <h2 class="cari-section-title">Stability next to accuracy</h2>
       <p class="cari-text">
-        Held-out MIDIntrinsics split, 30 scenes, all methods through one evaluation harness on raw
-        un-white-balanced input. Bracketed ranges are 95% bootstrap intervals over scenes.
+        A grey, constant albedo is perfectly stable, so a stability score means nothing on its own. We
+        report it next to accuracy, measured on the same frames where possible.
       </p>
+
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-name">C<sub>mat</sub> <span class="arrow">↓</span></div>
+          <div class="metric-role">stability · lightness</div>
+          <div class="metric-desc">For each material, the coefficient of variation of its mean albedo
+            lightness across a scene's flash directions, averaged over materials.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-name">Cast<sub>rel</sub> <span class="arrow">↓</span></div>
+          <div class="metric-role">stability · hue</div>
+          <div class="metric-desc">Each material's chromaticity drift across frames, relative to the chroma
+            spread of the prediction.</div>
+        </div>
+        <div class="metric-card fidelity">
+          <div class="metric-name">MAW ΔE <span class="arrow">↓</span></div>
+          <div class="metric-role">accuracy · measured albedo</div>
+          <div class="metric-desc">CIEDE2000 against physically measured albedo on real photographs, the
+            standard external colour benchmark.</div>
+        </div>
+        <div class="metric-card fidelity">
+          <div class="metric-name">MID chroma error <span class="arrow">↓</span></div>
+          <div class="metric-role">accuracy · same frames</div>
+          <div class="metric-desc">Per-material chromaticity distance to the MIDIntrinsics pseudo-GT, so a
+            stability score cannot be bought by washing colour out of the very frames it is measured on.</div>
+        </div>
+      </div>
 
       <div class="results-table-wrap">
         <table class="results-table">
@@ -1168,92 +1204,185 @@
             <tr>
               <th>Model</th>
               <th>C<sub>mat</sub> ↓</th>
-              <th>Chroma<sub>err</sub> ↓</th>
               <th>Cast<sub>rel</sub> ↓</th>
-              <th>Chroma<sub>fid</sub> → 1</th>
+              <th>MID chroma err ↓</th>
+              <th>MAW ΔE ↓</th>
             </tr>
           </thead>
           <tbody>
             <tr class="row-ours">
-              <td>Ours (full)</td>
-              <td>0.130<span class="ci">[.117–.144]</span></td>
-              <td>0.121<span class="ci">[.102–.143]</span></td>
-              <td>0.421<span class="ci">[.357–.485]</span></td>
-              <td>0.941</td>
-            </tr>
-            <tr class="row-ours">
-              <td>Ours (base CARI)</td>
+              <td>Ours</td>
               <td>0.157<span class="ci">[.141–.174]</span></td>
-              <td>0.129<span class="ci">[.109–.150]</span></td>
               <td>0.425<span class="ci">[.360–.491]</span></td>
-              <td class="best">0.999</td>
+              <td>0.129<span class="ci">[.109–.150]</span></td>
+              <td>4.16</td>
             </tr>
             <tr>
               <td>CD-IID</td>
               <td>0.190<span class="ci">[.172–.210]</span></td>
-              <td class="best">0.090<span class="ci">[.073–.110]</span></td>
               <td class="best">0.306<span class="ci">[.262–.355]</span></td>
-              <td>0.944</td>
+              <td class="best">0.090<span class="ci">[.073–.110]</span></td>
+              <td class="best">3.37<span class="ci">reported</span></td>
             </tr>
             <tr>
               <td>RGB→X</td>
               <td class="best">0.128<span class="ci">[.115–.141]</span></td>
-              <td>0.203<span class="ci">[.170–.239]</span></td>
               <td>0.338<span class="ci">[.273–.409]</span></td>
-              <td>0.907</td>
+              <td>0.203<span class="ci">[.170–.239]</span></td>
+              <td class="dim">–</td>
             </tr>
             <tr>
               <td>CRefNet</td>
               <td>0.151<span class="ci">[.138–.164]</span></td>
-              <td>0.201<span class="ci">[.165–.241]</span></td>
               <td>0.355<span class="ci">[.309–.406]</span></td>
-              <td class="dim">0.484</td>
+              <td>0.201<span class="ci">[.165–.241]</span></td>
+              <td>3.97</td>
             </tr>
             <tr>
               <td>Marigold-App</td>
               <td>0.193<span class="ci">[.173–.214]</span></td>
-              <td>0.195<span class="ci">[.152–.245]</span></td>
               <td>0.355<span class="ci">[.309–.406]</span></td>
-              <td class="dim">0.728</td>
+              <td>0.195<span class="ci">[.152–.245]</span></td>
+              <td>3.78</td>
             </tr>
             <tr>
               <td>Marigold-Light</td>
               <td class="dim">0.546<span class="ci">[.462–.645]</span></td>
-              <td>0.154<span class="ci">[.124–.187]</span></td>
               <td>0.392<span class="ci">[.333–.459]</span></td>
-              <td>1.148</td>
+              <td>0.154<span class="ci">[.124–.187]</span></td>
+              <td>4.21</td>
             </tr>
             <tr>
               <td>Ordinal Shading</td>
               <td>0.252<span class="ci">[.229–.279]</span></td>
-              <td>0.148<span class="ci">[.130–.166]</span></td>
               <td class="dim">0.549<span class="ci">[.463–.637]</span></td>
-              <td>0.924</td>
+              <td>0.148<span class="ci">[.130–.166]</span></td>
+              <td class="dim">6.88</td>
             </tr>
           </tbody>
         </table>
       </div>
       <div class="rank-legend">
         <span class="r1"><i></i>Best in column</span>
-        <span class="r4"><i></i>Not leading</span>
+        <span class="r4"><i></i>Clear outlier</span>
       </div>
-
-
-      <div class="caveat-box" style="margin-top:34px;">
-        <strong>We lead one axis, and we say only that.</strong> Lightness stability
-        (C<sub>mat</sub>) is best in the table. CD-IID leads both colour columns without
-        collapsing its own colour to get there — that comparison, its significance, and why
-        it doesn't undercut the stability claim, is in the thesis.
-      </div>
-
-      <p class="cari-text" style="margin-top:34px;">
-        An ablation confirms the gain is CARI's, not incidental: turning the paired cross-render
-        losses on, with everything else matched, drops conventional albedo error (ARAP) by
-        7–14%. Constancy also isn't bought with accuracy elsewhere — the model still leads dense
-        albedo accuracy on ARAP and sits within 0.2&nbsp;ΔE of the best measured-colour score on
-        MAW. All of it — the 2×2 ablation, the IIW/MAW numbers, and the full cost table against
-        every baseline — is in the thesis.
+      <p class="fig-caption" style="text-align:center;">
+        MID held-out split, 30 scenes, raw input, one harness for every method; brackets are 95% bootstrap
+        intervals over scenes. MAW is evaluated locally with the official scorer except CD-IID, whose value
+        is the one reported in its paper.
       </p>
+
+      <div class="caveat-box" style="margin-top:30px;">
+        <strong>What the table supports.</strong> In paired per-scene tests our model is more
+        lightness-stable than CD-IID, both Marigold variants and Ordinal Shading, level with CRefNet and
+        behind RGB&rarr;X. It does not lead on hue: CD-IID, which predicts the shading colour in a dedicated
+        stage, is better on hue drift, chroma error and MAW. These methods differ in architecture, data and
+        size at once, so the claim about the training strategy rests on the matched ablation below. MID is
+        in CD-IID's and our training data, so neither side is zero-shot on it.
+      </div>
+
+      <h3 class="cari-section-title" style="font-size:1.05rem; margin-top:44px;">What the ablation isolates</h3>
+      <p class="cari-text">
+        A 2&times;2 study toggles the CIAI losses and a <em>colour path</em> (an RGB skip into the albedo head
+        plus a chroma loss on albedo), from one shared checkpoint with matched data and steps.
+      </p>
+      <ul class="contrib-list">
+        <li><strong>CIAI drives lightness stability.</strong> C<sub>mat</sub> drops from 0.250 to 0.180 with the
+          colour path off and from 0.259 to 0.157 with it on (&minus;28% and &minus;39%). Hue drift improves only
+          slightly (Cast<sub>rel</sub> &minus;6% and &minus;4%).</li>
+        <li><strong>It also makes the albedo more accurate where the input carries its lighting.</strong> On ARAP
+          renderings with their original coloured light, CIAI lowers albedo LMSE by 14% and 7% and RMSE by 14%
+          and 8% in the two matched pairs; on the same scenes white-balanced, the change is small. ARAP was
+          never in training. These ARAP numbers use a provisional evaluation mask (below), shared by all
+          rows, so the matched differences are more reliable than the absolute values.</li>
+        <li><strong>The colour path, not CIAI, decides colour fidelity.</strong> Without it the model keeps about
+          half of the pseudo-GT chroma spread whether CIAI is on (0.48) or off (0.51); with it, 0.93&ndash;1.00.
+          The washed-out albedo was the frozen-encoder baseline's problem.</li>
+        <li><strong>A lesson about metrics.</strong> Our first draft scored hue stability with a chroma variance
+          pooled over all materials. That number also contains the scene's own colour diversity, computed
+          from the prediction, so it ranked the washed-out configuration best. Splitting it into drift and
+          spread reversed the ranking; the pooled score is no longer used.</li>
+      </ul>
+      <p class="cari-text" style="font-size:0.9rem; opacity:0.75;">
+        ARAP results were computed with a mask that breaks on ARAP's mixed ground-truth encodings; they are
+        marked provisional and will be regenerated. Qualitative images on this page were rendered with a
+        later checkpoint of the same model and will be refreshed with the reported one.
+      </p>
+    </section>
+
+    <div class="cari-divider"></div>
+
+    <!-- ── Colour ──────────────────────────────────── -->
+    <section class="cari-section" id="colour">
+      <div class="sec-eyebrow">Where it stops</div>
+      <h2 class="cari-section-title">Colour is the part CIAI does not learn</h2>
+      <p class="cari-text">
+        If a model's hue drift comes from the illuminant colour, it should grow on scenes where the
+        illuminant colour changes more. Splitting the 30 test scenes into thirds by their measured
+        illuminant gap and dividing the hue drift of the top third by that of the bottom third gives a
+        direct test. 1.0 means drift does not follow illuminant colour.
+      </p>
+
+      <div class="results-table-wrap">
+        <table class="results-table">
+          <thead>
+            <tr><th>Model</th><th>Drift ratio, high / low gap</th><th>Shading</th></tr>
+          </thead>
+          <tbody>
+            <tr class="row-ours"><td>Ours</td><td>1.43</td><td>RGB</td></tr>
+            <tr><td>CRefNet</td><td>1.42</td><td>grey</td></tr>
+            <tr><td>Ordinal Shading</td><td class="dim">1.56</td><td>grey</td></tr>
+            <tr><td>Marigold-Light</td><td>1.14</td><td>RGB</td></tr>
+            <tr><td>Marigold-App</td><td>1.03</td><td>RGB</td></tr>
+            <tr><td>CD-IID</td><td class="best">1.02</td><td>grey + chroma stage</td></tr>
+            <tr><td>RGB→X</td><td class="best">0.90</td><td>RGB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cari-text" style="margin-top:22px;">
+        Our model's drift follows illuminant colour as much as CRefNet's, whose grey shading cannot represent
+        a coloured light at all. MID's whole colour range is narrow, so this is a low-powered test, but both
+        follow-up studies point the same way:
+      </p>
+      <ul class="contrib-list">
+        <li><strong>A chroma explanation loss on the current shading.</strong> Colour drift falls 3.5%, but the
+          model's own colour falls 2.9%, so relative drift does not move. Trained with synthetic coloured pairs,
+          the same loss desaturates the albedo (chroma spread &minus;0.10).</li>
+        <li><strong>Synthetic coloured pairs.</strong> Continuing training with rendered 3D-Front pairs improves
+          measured colour on MAW (&Delta;E 4.18 &rarr; 4.04) and makes the model almost perfectly invariant on the
+          renders (validation gap 0.0013), yet hue drift on real photographs is unchanged (0.415 &rarr; 0.418). Our first render also
+          never showed a subtle colour change: its weakest pairs are stronger than MID's median.</li>
+      </ul>
+      <div class="insight-box">
+        <strong>Reading.</strong> With one three-channel shading and a luminance-only explanation loss, nothing
+        says <em>where</em> a colour change must go, and a constant tint satisfies the invariance loss. The fix
+        has to be structural: give the shading colour its own output and supervise it.
+      </div>
+    </section>
+
+    <div class="cari-divider"></div>
+
+    <!-- ── Next ────────────────────────────────────── -->
+    <section class="cari-section" id="next">
+      <div class="sec-eyebrow">Next steps</div>
+      <h2 class="cari-section-title">From lightness to colour</h2>
+      <ol class="contrib-numbered">
+        <li><strong>Prove the strategy, not the decoder.</strong> Train with and without CIAI on a CNN (U-Net), a
+          fine-tuned ViT (DPT on DINOv2) and a single-step fine-tuned diffusion model (Marigold-IID), same data
+          and steps, three seeds each.</li>
+        <li><strong>Model: luminance and chroma shading.</strong> Predict I = A ⊙ (S<sub>lum</sub> · C) + R with a
+          unit-luminance chroma map C, in the spirit of CD-IID's separate colour stage. The albedo head sees the
+          illuminant-corrected image I / (S<sub>lum</sub> · C) instead of raw RGB, so material colour gets
+          through and illuminant colour has to be explained by C.</li>
+        <li><strong>Losses.</strong> Keep L<sub>inv</sub> and the luminance explanation; add a chroma explanation
+          on C, applied only to pairs whose measured illuminant gap is large enough to carry signal; supervise C
+          directly wherever ground truth exists.</li>
+        <li><strong>Data.</strong> Coloured-light pairs with exact factors from a second 3D-Front render that spans
+          subtle to strong colour changes, and real coloured-illuminant pairs (e.g. LSMI, which photographs each
+          scene under several illuminant combinations with per-pixel illuminant chromaticity).</li>
+        <li><strong>Evaluation.</strong> Hue drift on genuinely colour-varying real data, next to MAW; ARAP
+          regenerated with corrected masks.</li>
+      </ol>
     </section>
 
     <div class="cari-divider"></div>
@@ -1263,30 +1392,32 @@
       <h2 class="cari-section-title">Citation</h2>
       <div class="bibtex-block">
 <button class="copy-btn" onclick="copyBibtex(this)"><i class="far fa-copy"></i> Copy</button>
-<pre id="bibtex-src">@mastersthesis<span class="bibtex-brace">{</span><span class="bibtex-key">tran2026cari</span>,
-  <span class="bibtex-key">title</span>   = <span class="bibtex-brace">{</span><span class="bibtex-val">Coloured Illumination Constancy in Intrinsic Image Decomposition
-             via Cross-Render Albedo Invariance</span><span class="bibtex-brace">}</span>,
-  <span class="bibtex-key">author</span>  = <span class="bibtex-brace">{</span><span class="bibtex-val">Tran, Minh Khang</span><span class="bibtex-brace">}</span>,
-  <span class="bibtex-key">school</span>  = <span class="bibtex-brace">{</span><span class="bibtex-val">Norwegian University of Science and Technology (NTNU)</span><span class="bibtex-brace">}</span>,
-  <span class="bibtex-key">year</span>    = <span class="bibtex-brace">{</span><span class="bibtex-val">2026</span><span class="bibtex-brace">}</span>,
-  <span class="bibtex-key">note</span>    = <span class="bibtex-brace">{</span><span class="bibtex-val">Erasmus Mundus Joint Master in Computational Colour
-             and Spectral Imaging (COSI)</span><span class="bibtex-brace">}</span>
+<pre id="bibtex-src">@misc<span class="bibtex-brace">{</span><span class="bibtex-key">tran2026ciai</span>,
+  <span class="bibtex-key">title</span>  = <span class="bibtex-brace">{</span><span class="bibtex-val">Cross-Illumination Albedo Invariance: Lightness-Stable Intrinsic
+            Decomposition from Real Multi-Illumination Photographs</span><span class="bibtex-brace">}</span>,
+  <span class="bibtex-key">author</span> = <span class="bibtex-brace">{</span><span class="bibtex-val">Tran, Minh Khang</span><span class="bibtex-brace">}</span>,
+  <span class="bibtex-key">year</span>   = <span class="bibtex-brace">{</span><span class="bibtex-val">2026</span><span class="bibtex-brace">}</span>,
+  <span class="bibtex-key">note</span>   = <span class="bibtex-brace">{</span><span class="bibtex-val">Project report, revised from the author's MSc thesis (Erasmus Mundus
+            Joint Master in Computational Colour and Spectral Imaging, NTNU)</span><span class="bibtex-brace">}</span>,
+  <span class="bibtex-key">url</span>    = <span class="bibtex-brace">{</span><span class="bibtex-val">https://github.com/tmkhang1999/CARI</span><span class="bibtex-brace">}</span>
 <span class="bibtex-brace">}</span></pre>
       </div>
     </section>
 
     <footer class="cari-footer">
       <p>
-        CARI reduces coloured-light leakage; it does not resolve the decomposition ambiguity. Hard
-        shadows still read as material, non-diffuse surfaces stay unstable, and the flatness prior
-        over-smooths fine detail — full failure analysis in the thesis.
+        Limits beyond colour: hard cast shadows can still read as material, and mirrors, glass and glossy
+        surfaces stay unstable because an albedo&ndash;shading product cannot represent them. The report
+        documents both.
       </p>
       <p>
-        Thesis carried out at the University of Amsterdam and 3DUniversum, within the Erasmus Mundus
-        Joint Master in Computational Colour and Spectral Imaging (COSI), hosted by NTNU Gjøvik.
+        The project began as an MSc thesis carried out at the University of Amsterdam and 3DUniversum, within
+        the Erasmus Mundus Joint Master in Computational Colour and Spectral Imaging (COSI), hosted by NTNU
+        Gjøvik. The repository keeps its original name, CARI.
       </p>
       <p>
-        Datasets: <a href="https://projects.csail.mit.edu/illumination/" target="_blank" rel="noopener">MIDIntrinsics</a>,
+        Datasets: <a href="https://projects.csail.mit.edu/illumination/" target="_blank" rel="noopener">MID</a>,
+        <a href="https://github.com/compphoto/MIDIntrinsics" target="_blank" rel="noopener">MIDIntrinsics</a>,
         <a href="https://github.com/apple/ml-hypersim" target="_blank" rel="noopener">Hypersim</a>,
         InteriorVerse,
         <a href="https://people.csail.mit.edu/kimo/publications/intrinsic/" target="_blank" rel="noopener">ARAP</a>,
@@ -1294,7 +1425,7 @@
         <a href="https://opensurfaces.cs.cornell.edu/intrinsic/" target="_blank" rel="noopener">IIW</a>.
         Every figure on this page is produced by the code in
         <a href="https://github.com/tmkhang1999/CARI" target="_blank" rel="noopener">this repository</a>
-        or taken from the thesis itself.
+        or taken from the report itself.
       </p>
     </footer>
 

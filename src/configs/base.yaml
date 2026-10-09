@@ -1,10 +1,9 @@
-# Base Configuration for Multi-Stage Intrinsic Decomposition
+# Shared defaults. Every experiment config extends v17.yaml (or sets its own values),
+# which overrides most of these.
 
-# Training settings
 train:
   batch_size: 8
-  num_workers: 4          # 4->2: halves concurrent heavy decodes + prefetch depth (32GiB container cap; allows 2 runs)
-  dataloader_seed: 42
+  num_workers: 4
   lr: 1.0e-5
   grad_accum_steps: 1
   grad_clip_max_norm: 1.0
@@ -13,80 +12,48 @@ train:
   log_interval: 50
   val_interval_iters: 2000
   checkpoint_interval_iters: 5000
-  val_example_images: 3  # ignored if val_example_indices is set
-  val_example_indices: [120, 200, 250]  # e.g., [120, 200, 250] to log specific samples; empty=use val_example_images count
-  max_val_batches: null   # null=full val set, set small int (e.g. 10) for faster inline validation
-  compute_val_losses: true # true=compute full criterion losses in val; false=metrics-only faster validation
+  val_example_images: 3
+  val_example_indices: [120, 200, 250]   # empty list = log the first val_example_images
+  max_val_batches: null                  # null = full validation split
+  compute_val_losses: true
   input_size: 384
-
-  # Two-phase curriculum (global-iteration based)
+  # Curriculum boundaries (global step); the data mix switches at each boundary.
   phase1_iterations: 20000
   phase2_iterations: 15000
   extend_iterations: 40000
-
   sampling_weights_phase1:
     hypersim: 1.0
     midintrinsic: 0.0
-
   sampling_weights_phase2:
     hypersim: 0.6
     midintrinsic: 0.4
 
-# Model settings
 model:
-  version: 1
-  backbone: convnextv2_base
-  freeze_stages: [1, 2]
-  z_channels: 1024
-  pretrained: true
-  num_seg_classes: 41
+  version: 17
 
-# Dataset settings
 data:
-  datasets: ['hypersim', 'midintrinsic']
   hypersim_root: '../datasets/hypersim'
-  interiornet_root: '../datasets/interiornet'
   midintrinsic_root: '../datasets/MID'
-
-  # Data pipeline controls
-  # cache_max_items / mid_cache_max_items:
-  #   Bounded per-worker decode cache (LRU). 0 disables caching.
-  #   Cache only stores decoded arrays; dataloader indices are never replayed.
-  # Per-worker LRU caches slashed: hit rates are tiny (hypersim 256/16828~1.5%, mid 128/985~13%,
-  # front3d 128/2374~5%) but each cache is anonymous RAM x num_workers x n_concurrent_runs and
-  # drives the transient peaks that hit the 32GiB container cap. Cheap to cut, big peak reduction.
-  cache_max_items: 64           # 256 -> 32 (hypersim)
-  mid_cache_max_items: 32       # 128 -> 32
-  front3d_cache_max_items: 32    # 128 -> 0 (front3d is a pair-loading dataset: heaviest per-draw peak)
-  val_cache_max_items: 32       # 128 -> 32
-  val_num_workers: 2            # validation: increased from 2 to reduce data loading bottleneck
-  crop_mode_train: 'random'   # random|center|hybrid
-  crop_mode_val: 'center'     # random|center
-
-  # Train subset controls for dataset-size ablations (0 => use full dataset)
-  subset_seed: 42
-  hypersim_train_max_images: 0
-  midintrinsic_train_max_images: 0
-
-  # Fixed scene-level split for reproducible ablations (V1/V2/V3/V4)
+  # Per-worker decode caches (items). Small on purpose: each is RAM x workers x runs.
+  cache_max_items: 64
+  front3d_cache_max_items: 32
+  val_cache_max_items: 32
+  val_num_workers: 2
+  crop_mode_train: 'random'
+  crop_mode_val: 'center'
+  # Fixed scene-level Hypersim split
   hypersim_split_file: 'hypersim_split.json'
   hypersim_split_seed: 42
   hypersim_split_ratio: 0.9
   hypersim_strict_split: true
-
-  # Hypersim I/O robustness controls
   hypersim_max_hdf5_retries: 1
   hypersim_skip_corrupt_samples: true
 
-
-# Loss weights
 loss:
   lambda_msg: 0.5
-  lambda_dssim: 0.4 #0.4
+  lambda_dssim: 0.4
 
-# Paths  (relative to repo root when run from IR-IID/)
-paths:
+paths:   # relative to the repository root
   checkpoint_dir: './checkpoints'
   log_dir: './logs'
   output_dir: './outputs'
-

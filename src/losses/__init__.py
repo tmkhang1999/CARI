@@ -1,6 +1,2 @@
-"""
-Package initialization for losses.
-"""
-from .v21_loss import V21Loss, V21RestorerLoss
-
-__all__ = ["V21Loss", "V21RestorerLoss"]
+"""Losses: the CIAI pair terms (ciai.py) shared by every model, and each model's
+single-image objective (v17_loss.py, v21_loss.py)."""

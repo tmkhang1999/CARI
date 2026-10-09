@@ -5,7 +5,7 @@
 \label{ch:practice}
 
 The previous chapter measured the decomposition; this chapter puts it to use.
-Separating a photograph into an illuminant-invariant albedo and a coloured shading
+Separating a photograph into an albedo and a three-channel shading
 layer is not only an estimation target but a practical handle: once the two factors
 are available, an image can be altered by changing one of them and leaving the other
 untouched, which no edit on the entangled pixels can do. This chapter develops that
@@ -132,8 +132,8 @@ preservation.
 
 Both edits succeed exactly to the degree the decomposition does, and their two
 failure modes map onto the two axes measured in \chapref{ch:experiments}. Wherever
-some illuminant colour has leaked into the albedo (the residual cast quantified by the
-MID and ARAP constancy metrics), that component is already baked into the material
+some illuminant colour has leaked into the albedo (the residual hue drift measured in
+\secref{sec:colour_axis}), that component is already baked into the material
 layer and will not respond to a shading edit. And wherever the shading is structurally
 soft (a sharp shadow boundary that was never fully separated from the albedo), scaling
 the shading cannot cleanly remove it. Neither limitation is repaired by the editing

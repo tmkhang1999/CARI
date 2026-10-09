@@ -27,8 +27,7 @@ default. So the returned albedo must be raised to 2.2 to return it to the linear
 convention every metric in this harness expects.
 
 Getting that second one backwards is exactly the double-gamma bug that once inflated
-Marigold's constancy scores by silently desaturating its albedo (documents/evals/,
-2026-06-19..20), which is why it is read off the source here rather than guessed.
+Marigold's constancy scores by silently desaturating its albedo (June 2026), which is why it is read off the source here rather than guessed.
 `probe_albedo_gamma()` re-derives the same verdict empirically as a cross-check.
 """
 from __future__ import annotations

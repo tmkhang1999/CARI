@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production batch renderer: 3D-FRONT rooms -> CARI cross-illuminant IID dataset.
+"""Production batch renderer: 3D-FRONT rooms -> CIAI cross-illuminant IID dataset.
 
 Renders, per room and per sampled interior view, K same-camera lighting
 variants plus a ground-truth albedo:
@@ -17,7 +17,7 @@ Findings baked in from the single-room pilots (tests/viz/3dfront_iid_pair*):
     at one wall), BlenderProc-front3d style.
   - Room GLBs can have open faces, so a neutral shell (randomly tinted per
     room) backstops missing walls.
-  - The two fixed warm/cool configs of the pilot would give CARI a single
+  - The two fixed warm/cool configs of the pilot would give CIAI a single
     illuminant delta repeated 1000x. Lighting here is randomized per variant
     (blackbody 2500-9000K or saturated HSV) with a minimum rg-chromaticity
     gap enforced between the K key lights of a view, so L_inv pairs always
@@ -357,7 +357,7 @@ def sample_interior_cameras(rng, lo, hi, size, content_names, num_views, tries=1
     return cam, picked
 
 
-# ── randomized colored illuminants (the CARI axis) ──────────────────────────
+# ── randomized colored illuminants (the CIAI axis) ──────────────────────────
 
 def kelvin_to_rgb(k):
     # Tanner Helland blackbody approximation -> linear RGB.
@@ -459,7 +459,7 @@ def build_lighting(rng, lo, hi, center, size, radius, key_color):
         view_target = cam.location + view_dir * max(radius, 2.0)
         # Weak view-facing fill prevents fully black samples when the random
         # key/fill fall behind an interior wall. It is neutral and weaker than
-        # the colored key, so the CARI illuminant change remains visible.
+        # the colored key, so the CIAI illuminant change remains visible.
         lights.append({
             'role': 'view_fill',
             'color': [round(c, 4) for c in kelvin_to_rgb(6000)],

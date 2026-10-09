@@ -51,7 +51,7 @@ import torchvision.transforms.functional as TF
 from torch.utils.data import Dataset
 import json
 from collections import OrderedDict
-from src.data.shared_transforms import prepare_training_tensors, compute_tonemap_scale
+from src.data.shared_transforms import prepare_training_tensors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,19 +173,10 @@ class HypersimDataset(Dataset):
         augment_train: bool = True,
         load_geometry: bool = True,
         load_normals: bool = True,
-        color_pair_prob: float = 0.0,
-        color_tint_min: float = 0.8,
-        color_tint_max: float = 1.25,
     ):
         self.root_dir = root_dir
         self.split = split
         self.input_size = input_size
-        # c·S colored-relight pair (CARI on Hypersim): probability that a train sample
-        # is emitted as a cross-render pair (rgb, c·rgb) so L_inv reaches Hypersim's
-        # distribution. 0.0 = off (single-image supervised only, the original behavior).
-        self.color_pair_prob = float(color_pair_prob)
-        self.color_tint_min = float(color_tint_min)
-        self.color_tint_max = float(color_tint_max)
         self.cache_max_items = max(0, int(cache_max_items))
         self.crop_mode_train = str(crop_mode_train).lower()
         self.crop_mode_val = str(crop_mode_val).lower()
@@ -484,28 +475,6 @@ class HypersimDataset(Dataset):
         if crop_mode == 'hybrid':
             crop_mode = 'center' if np.random.rand() < 0.2 else 'random'
 
-        # ── c·S colored-relight pair (CARI on Hypersim) ──────────────────────────
-        # With prob color_pair_prob, emit a per-channel color-shifted copy c·rgb as the
-        # cross-render pair. c·I = A·(c·S) + c·R is physically exact (albedo unchanged,
-        # the tint lands in shading), so L_inv: A(rgb) ≈ A(c·rgb) forces the colored cast
-        # OUT of albedo — bringing L_inv to Hypersim's distribution, where the yellow-cast
-        # leak was measured. Color-axis only (shadows don't move), which is the right tool
-        # since the leak is a color problem. The PRIMARY frame keeps its full supervised
-        # albedo+shading GT (M_diffuse=1), so this L_inv is co-anchored and cannot
-        # gray-collapse. Photometric aug auto-disables for the pair (shared_transforms).
-        extra_rgb = None
-        extra_valid = None
-        if (self.split == 'train' and self.color_pair_prob > 0.0
-                and np.random.rand() < self.color_pair_prob):
-            c = np.random.uniform(self.color_tint_min, self.color_tint_max, size=3).astype(np.float32)
-            c /= c.mean()                                   # preserve exposure; only chroma shifts
-            extra_rgb = (rgb * c.reshape(1, 1, 3)).astype(np.float32)
-            # Pair valid where NEITHER frame saturates after the shared tonemap (clips at
-            # value/scale = 1), so the cross-frame ratio c stays recoverable.
-            sat = 0.99 * compute_tonemap_scale(rgb)
-            valid = (rgb < sat).all(axis=-1) & (extra_rgb < sat).all(axis=-1)
-            extra_valid = valid.astype(np.float32)
-
         out = prepare_training_tensors(
             rgb=rgb,
             alb=alb,
@@ -515,8 +484,6 @@ class HypersimDataset(Dataset):
             crop_mode=crop_mode,
             input_size=self.input_size,
             split=self.split,
-            extra_rgb=extra_rgb,
-            extra_valid=extra_valid,
         )
         out['M_diffuse'] = torch.tensor(1.0)
         out['is_front3d'] = torch.tensor(0.0, dtype=torch.float32)

@@ -1,83 +1,10 @@
-# V17.60 -- SHARED FORK BASE for the CARI-only paper: phase 1 + phase 2, stop at 19k.
-#
-# WHY THIS EXISTS
-# ---------------
-# The original Table-A rows (v17_41..44) all forked from `v17_old/checkpoint_iter_19000`,
-# the end of phase 2. That checkpoint NO LONGER EXISTS and is unrecoverable:
-#   - train_v17.py:1842 prunes all but the 2 most recent checkpoints per run, via rm
-#     (so it never reaches Trash);
-#   - `checkpoints/` is in .gitignore:33, so it was never version-controlled.
-# Verified by a full-filesystem scan: no v17_old directory, no checkpoint_iter_19000.pth
-# anywhere, and no .pth in ~/.local/share/Trash.
-#
-# It does NOT need to reproduce the original bit-for-bit. It only needs to be ONE
-# checkpoint shared by every row of the new ablation, so the rows differ by their
-# toggles and nothing else.
-#
-# WHY PHASES 1-2 ARE SAFE TO RUN BEFORE THE LOSS WORK LANDS
-# --------------------------------------------------------
-# phase1 = hypersim 1.0, phase2 = hypersim 0.6 + interiorverse 0.4 (v17.yaml:80-88).
-# Neither samples midintrinsic, so no rgb2 pair is emitted and the cross-render losses
-# (L_inv / L_explain / the new L_chr_explain) never fire. This fork is therefore
-# independent of the loss change and can train while that is implemented.
-#
-# CARI-ONLY: NO REFINEMENT LEVERS
-# -------------------------------
-# The paper is scoped to CARI, so the Table-B refinement levers are deliberately absent.
-# v17.yaml is already clean -- lambda_alb_flat_lf and lambda_shadow_inv exist only in
-# v17_34.yaml (lines 63, 68), the Table-B ladder. Inheriting v17 directly gives:
-#   albedo_rgb_skip: true, lambda_a_chroma: 0.2   (the colour path -- Table-A axis 2,
-#                                                  held ON and constant for every row)
-#   lambda_alb_invariance: 0.5, lambda_explain: 0.25   (inactive here; no pairs)
-#
-# ONE DELIBERATE DIFFERENCE FROM THE ORIGINAL FORK
-# ------------------------------------------------
-# The original 19k was trained with the colour path OFF (a 443-parameter architecture --
-# see v17_42.yaml's note about loading it "EXACTLY"), and rows 3/4 then bolted the colour
-# path on via a shape-compatible load. Here the colour path is ON from the start, so all
-# four rows load this fork with no shape mismatch and no cold-started tensors. That is
-# cleaner than the original, and it is the right choice now that the colour path is fixed
-# ON for every row rather than being an ablation axis.
-#
-# LAUNCH (from scratch -- no --resume, no --auto-resume):
-#   bash scripts/train.sh --version 17.60 --cuda 0
-
+# Stage A: phases 1-2 only (Hypersim, then + InteriorVerse). No pairs are seen.
+# The 19k checkpoint of this run is the shared starting point of Table A and Study 1;
+# stop the run there.
 extends: '17'
-
 train:
-  # HORIZON 40000, BUT THE RUN IS STOPPED AT 19000 BY THE LAUNCH WRAPPER.
-  #
-  # This is deliberate and it matters. extend_iterations feeds BOTH the stop condition
-  # and the cosine schedule:
-  #     train_v17.py:1749  total_opt_steps = ceil(max_iters / grad_accum_steps)
-  #     train_v17.py:1753  CosineAnnealingLR(T_max=total_opt_steps, eta_min=lr_eta_min)
-  #
-  # Setting it to 19000 (the first attempt) makes T_max = 19000/8 = 2375, so the LR
-  # anneals all the way from 2e-4 to eta_min 1e-7 BY step 19000. The fork would end
-  # fully annealed -- an over-converged state the original never passed through, since
-  # the original ran a 40000 horizon and sits at ~1.08e-4 mid-schedule at step 19000.
-  # The ablation rows would then resume and jump the LR back up ~1000x, reintroducing
-  # exactly the kind of discontinuity that damaged both arms in Phase B.
-  #
-  # With the horizon at 40000 the schedule is continuous across the fork: the base
-  # stops mid-cosine, and every row resumes the same schedule via
-  # last_epoch=completed_opt_steps-1 (train_v17.py:1750,1754). Stop is enforced
-  # externally by watching for checkpoint_iter_19000.pth.
   extend_iterations: 40000
-
   checkpoint_interval_iters: 1000
   val_interval_iters: 2000
   max_val_batches: 10
-
-  # Measured in Phase B: this pipeline is loader-bound, not compute-bound. 4 -> 8 workers
-  # took it from 2.29 s/it (GPU util 0-39%) to ~1.3 s/it (util 46-100%).
   num_workers: 8
-
-# Checkpoints and logs go to /tmp, which is a different filesystem with ~333 GB free and
-# no per-user quota. /home/khang is quota-bound with only a few GB spare -- that is what
-# killed the first v17_51 run at step 1999 with "OSError: [Errno 122] Disk quota
-# exceeded". df reports 298 GB free there, which is filesystem space and says nothing
-# about the quota. The 19k fork is copied back deliberately after the run.
-paths:
-  checkpoint_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_ckpt'
-  log_dir: '/tmp/claude-1036/-home-khang-IR-IID/d673ee8e-3d22-4990-a1e4-390c85742e82/scratchpad/cari_logs'

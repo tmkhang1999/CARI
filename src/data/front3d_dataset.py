@@ -14,7 +14,7 @@ from src.data.shared_transforms import prepare_training_tensors
 
 
 class Front3DDataset(Dataset):
-    """3D-FRONT rendered cross-illuminant IID dataset (CARI L_inv source).
+    """3D-FRONT rendered cross-illuminant IID dataset (CIAI pair source).
 
     Produced by scripts/render_3dfront_dataset.py: per room and interior view,
     K same-camera renders under randomized colored illuminants (min

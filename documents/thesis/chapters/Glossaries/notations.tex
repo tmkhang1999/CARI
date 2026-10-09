@@ -16,7 +16,7 @@ $\boldsymbol{\pi} \in (0,1)^{H \times W \times 3}$
   & Network shading output before inversion; $\mathbf{S}_d = (1-\boldsymbol{\pi})/\boldsymbol{\pi}$ \\
 
 $(\mathbf{I}_1,\, \mathbf{I}_2)$
-  & A cross-render pair: same scene photographed under two different illuminants \\
+  & A cross-illumination pair: same scene photographed under two different illuminants \\
 
 $\Omega_v$
   & Set of valid paired pixels (excludes clipped/near-black pixels in either frame of a pair) \\
@@ -55,10 +55,10 @@ $\mathcal{L}_{\text{mat}}$
   & DINOv2-token material-consistency loss \\
 
 $\mathcal{L}_{\text{inv}}$
-  & Cross-render invariance loss (CARI, albedo consistency) \\
+  & Cross-illumination invariance loss (CIAI, albedo consistency) \\
 
 $\mathcal{L}_{\text{expl}}$
-  & Shading explanation loss (CARI, illuminant ratio) \\
+  & Shading explanation loss (CIAI, illuminant ratio) \\
 
 $\mathcal{L}_{\text{sign}}$
   & Shading sign loss (positivity prior) \\

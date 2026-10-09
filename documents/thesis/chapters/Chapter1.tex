@@ -38,8 +38,8 @@ interior-design tool can recolour a wall without painting over its shadows; an
 augmented-reality system can place a virtual chair under the room's existing
 light; a photograph can be re-lit without changing the apparent material; and a
 catalogue or inspection system can compare product colours captured under
-different lamps. All four applications fail when lamp colour remains baked into
-the estimated material.
+different lamps. All four applications fail when the lighting, its brightness
+pattern or its colour, remains baked into the estimated material.
 
 \begin{figure}[t!]
   \centering
@@ -69,120 +69,121 @@ the estimated material.
 \end{figure}
 
 
-\section{The Coloured Illumination Problem}
+\section{Lighting Leaks into the Albedo}
 
-Most IID methods, both classical and modern, share an implicit assumption:
-the illuminant is grey.
-Under a grey illuminant, the shading $S$ in \eqnref{eq:iid_model} is a single
-scalar value per pixel, and colour information in the image comes entirely from
-the albedo.
-This simplification allows the model to be trained with standard supervision,
-and it works well when the light is close to white.
+\eqnref{eq:iid_model} has twice as many unknowns as observations, so every IID method
+relies on priors to choose one factorisation. When those priors fail, part of the
+lighting is assigned to the albedo. Two forms of this leakage matter here.
 
-Real indoor scenes, however, rarely have pure white light.
-Incandescent bulbs emit warm orange-yellow light; fluorescent tubes lean green;
-LEDs can be cool blue; afternoon sunlight through a window can have a strong
-orange cast.
-When illumination is coloured, the shading is no longer achromatic because it carries
-a hue, and the simple product model in \eqnref{eq:iid_model} breaks down.
-What typically happens is that the model absorbs the illuminant colour into the
-albedo, because the albedo is the only 3-channel (RGB) term in the equation.
-The result is that the same wall looks orange when lit by one lamp and blue
-when lit by another, even though its paint has not changed.
+The first is \emph{lightness} leakage. A shadow, a soft gradient from a nearby lamp or a
+bright patch where light falls directly can be read as a darker or lighter material.
+The same wall then receives a different albedo depending on where the light comes from,
+even if the light is white.
 
-This is not a failure of any specific model; it is a fundamental ambiguity.
-Without additional constraints, there is no way to tell from a single image
-whether the orange hue in a pixel comes from orange paint or orange light.
-The state of the art handles this by training on large synthetic datasets with
-diverse illumination, which provides statistical regularisation, but it does not
-resolve the core ambiguity.
-\figref{fig:intro_constancy} shows a concrete example: two photographs of the
-same indoor scene lit by different coloured lamps.
-A model trained without illuminant-invariance constraints assigns different albedos
-to the same wall in each image, while our approach, detailed in this report, keeps
-the predicted albedo stable.
+The second is \emph{colour} leakage. Most IID methods, classical and modern, assume a grey
+illuminant, so that the shading $S$ in \eqnref{eq:iid_model} is one value per pixel and all
+colour in the image is attributed to the albedo. Real indoor light is rarely grey:
+incandescent bulbs are warm, LEDs can be cool, and light bounced off a coloured wall takes
+on its colour. With a scalar shading the illuminant hue has nowhere to go but the albedo,
+and even with a three-channel shading a single image does not say how much of a hue belongs
+to the surface and how much to the light.
+
+Both are instances of the same ambiguity, and both can in principle be broken by a second
+observation of the same scene under different light: the surfaces are identical in the two
+images, so whatever differs between them is lighting.
+\figref{fig:intro_constancy} shows the setting used in this work: one real scene
+photographed under several flash directions, and the albedo our model predicts from each
+photograph on its own.
 
 \begin{figure}[t!]
   \centering
   \includegraphics[width=\textwidth]{images/hires/mid_ours.jpg}
-  \caption[MID albedo constancy under four illuminants.]{%
-    Albedo predictions on one MID scene under four light conditions.
+  \caption[MID albedo predictions under four flash directions.]{%
+    Albedo predictions on one MID scene under four flash directions.
     The upper row shows the four inputs and the dataset pseudo-ground-truth albedo;
     the lower row shows the four predictions and a per-pixel coefficient-of-variation
-    map (red marks regions that change with the light).
-    The predicted albedo stays consistent as the illumination changes, so the
-    CoV maps remain cool over the flat surfaces where the colour cast varies
-    most: the constancy this thesis targets.
+    map of predicted lightness (red marks regions that change with the light).
+    The map stays cool over the table and most matte surfaces, and turns red on the
+    plastic tray, the glass jar and the mirror sphere.
   }
   \label{fig:intro_constancy}
 \end{figure}
 
 
-\section{Our Approach: Cross-Render Albedo Invariance}
+\section{Our Approach: Cross-Illumination Albedo Invariance}
 
-We attack the coloured illumination problem through a training-time constraint
-we call \emph{Cross-Render Albedo Invariance} (CARI).
-The idea is straightforward: if a dataset contains images of the same physical
-scene photographed under different coloured illuminants, then a correct IID model
-must produce the same albedo for all of those images.
-We can enforce this with a loss term that directly penalises any change in the
-predicted albedo across the illuminant conditions.
-At the same time, a companion loss ensures that the shading layer absorbs and
-explains the difference between the two images, so the model cannot simply predict
-a flat albedo and ignore the image content.
+We turn the second observation into a training signal and call it
+\emph{Cross-Illumination Albedo Invariance} (CIAI).
+Two photographs of one scene under different illumination are passed through the same
+network. An invariance loss requires the two predicted albedos to agree, and an explanation
+loss requires the ratio of the two predicted shadings to match the luminance ratio of the
+two images, so that the model cannot satisfy the first loss with a flat albedo.
+The pairing is needed only during training; at inference the model takes one image.
 
-To apply CARI in practice, we need a dataset with real multi-illuminant pairs.
-We use the Multi-Illumination Dataset (MID), which contains indoor scenes photographed
-under several different light sources.
-A crucial practical insight arises here: most datasets pre-process images with
-\emph{white balance} (WB), which neutralises the illuminant colour and produces
-images that all look as if they were lit by white light.
-This pre-processing is counterproductive for our goal.
-CARI needs the illuminant colour to be visible in the images so the model can
-learn to separate it from the material colour.
-We therefore train on raw, un-white-balanced MID pairs, preserving the full
-illuminant information in the training signal.
+The idea is borrowed from two places. Siamese and contrastive representation learning train
+a network so that two views of the same object map to the same representation
+\mycite{chen21simsiam}; multi-view 3D reconstruction asks one surface, observed several
+times, to receive one set of properties. CIAI keeps only positive pairs, with no negatives,
+and replaces the learned embedding by a dense, physically defined target: the albedo map.
+Training IID on images of one scene under varying light is not new in itself; time-lapse and
+illumination-varying sequences have been used for self-supervised decomposition
+\mycite{li18bigtime,lettry18unsupervised,ma18single,kinoshita21consistency}. What we study is
+the effect of this constraint as a fine-tuning stage on top of supervised synthetic training
+in a modern feed-forward model, using real raw photographs, and what such pairs can and
+cannot teach.
 
-We implement CARI inside a model built on a frozen \emph{DINOv2-Large}
-vision encoder \mycite{oquab24dinov2} and a Dense Prediction Transformer (DPT)
-decoder \mycite{ranftl21dpt}.
-The model is first trained on Hypersim \mycite{roberts21hypersim}, a large
-photorealistic synthetic dataset with ground truth albedo and shading, which gives
-it a strong baseline decomposition.
-CARI losses are then added in a second stage, using the MID raw pairs to push
-the model toward illuminant-invariant albedo predictions.
+Applying CIAI requires real photographs of one scene under several illuminations, and no
+dataset combines them with dense measured albedo. We use the Multi-Illumination Dataset
+(MID) \mycite{midintrinsics}, in which each scene is photographed 25 times from a fixed
+camera with a flash bounced in a different direction, together with the pseudo-ground-truth
+albedo that MIDIntrinsics derives for all 25 frames of a scene \mycite{careaga23ordinal}.
+The flash is white. Between two MID frames the light therefore changes mainly in direction
+and intensity, and its colour changes only through light bounced off coloured surfaces; we
+measure a median chromaticity gap of $0.030$ between frames. MID is a strong signal for
+lightness and a weak one for colour, and this property turns out to decide what CIAI can
+learn.
+
+We implement CIAI inside a model built on a frozen \emph{DINOv2-Large} vision encoder
+\mycite{oquab24dinov2} and a Dense Prediction Transformer (DPT) decoder
+\mycite{ranftl21dpt} with a three-channel shading output.
+The model is first trained with supervised losses on Hypersim \mycite{roberts21hypersim}
+and InteriorVerse; CIAI is added in a second stage on MID pairs.
 
 
 \section{Contributions}
 
-The main contributions of this work are:
+The contributions of this work are:
 
 \begin{itemize}
 
-  \item \textbf{Cross-Render Albedo Invariance (CARI).}
-  We introduce paired invariance and explanation losses that require the same
-  scene to retain its albedo while shading explains the change of illumination.
+  \item \textbf{A paired training strategy for lightness stability.}
+  An albedo-invariance loss and a luminance explanation loss on raw MID pairs, used as a
+  fine-tuning stage. Matched ablations show that it lowers the variation of recovered
+  material lightness across illuminations by $28\%$ and $39\%$, and lowers the dense albedo
+  error on raw, coloured-lit ARAP renderings by $7$--$14\%$, a benchmark it never trained on.
+  The model trains $18.5$M parameters on top of a frozen encoder.
 
-  \item \textbf{A raw-pair training result.}
-  Controlled ablations show that white balancing removes much of the colour
-  variation needed by CARI; retaining raw MID pairs materially improves the
-  targeted constancy measures.
+  \item \textbf{A measured account of where the strategy stops.}
+  CIAI does not improve colour stability on MID, and we show why: MID's illumination varies
+  in direction and intensity rather than colour, the explanation loss sees luminance only,
+  and a constant tint satisfies the invariance loss. Two follow-up studies (a chroma
+  explanation loss on the existing shading, and rendered coloured-light pairs) test and
+  bound this diagnosis.
 
-  \item \textbf{A corrected evaluation of colour constancy.}
-  We show that a pooled chroma-cast score can reward desaturated albedo, then
-  separate cross-light invariance from calibration to a pseudo-albedo reference.
-  Four complementary benchmarks report real constancy, measured colour,
-  synthetic dense accuracy, and perceptual reflectance ordering.
+  \item \textbf{Two failure modes separated.}
+  The desaturated albedo of the frozen-encoder base model is an architectural problem that a
+  colour path fixes whether CIAI is on or off; it is not a side effect of the invariance
+  loss.
 
-  \item \textbf{3D-Front-IID and an informative negative result.}
-  We render 5{,}056 paired observations with deliberately varied illuminant
-  colour and exact albedo. The corpus improves the colour axis it covers but not
-  ARAP's hard-shadow failure mode, exposing a specific gap in the renderer rather
-  than hiding a null result.
+  \item \textbf{An evaluation that reports stability next to accuracy.}
+  Material-level lightness and hue stability on MID, always read beside accuracy against
+  measured albedo (MAW) and against the MID pseudo-ground truth, together with the lesson
+  that a chroma variance pooled over materials rewards desaturation.
 
-  \item \textbf{Optimisation evidence.}
-  The final refinement study documents the measured trade-off between invariant
-  material colour, hard-shadow leakage, and retained image structure.
+  \item \textbf{A plan for the colour axis.}
+  A three-factor model that separates shading luminance from shading chroma, a chroma
+  explanation loss on that factor, rendered and real training pairs whose illuminant colour
+  actually varies, and a cross-architecture test of the training strategy.
 
 \end{itemize}
 
@@ -190,16 +191,14 @@ The project code, training configurations, and evaluation scripts are publicly a
 \url{https://github.com/tmkhang1999/CARI}.
 
 The rest of this report is organised as follows.
-\chapref{ch:related} reviews related work on IID, multi-illuminant scenes, and
-the datasets used for evaluation.
-\chapref{ch:method} describes the model architecture and the CARI training
-strategy.
+\chapref{ch:related} reviews related work on IID, paired-illumination training,
+multi-illuminant scenes, and the evaluation benchmarks.
+\chapref{ch:method} describes the model architecture and the CIAI training strategy.
 \chapref{ch:implementation} covers the loss terms, training data, and optimisation
 schedule in detail.
-\chapref{ch:experiments} presents quantitative and qualitative experiments on
-all four benchmarks, together with the ablation studies and a controlled
-negative result.
+\chapref{ch:experiments} presents the benchmark results, the ablation, and the follow-up
+studies on colour.
 \chapref{ch:practice} demonstrates qualitative factor edits built directly on the
-decomposition: residual suppression and factor-space illumination adjustment.
+decomposition.
 \chapref{ch:conclusion} summarises the findings, discusses limitations, and
-outlines directions for future work.
+sets out the next stage of the work.

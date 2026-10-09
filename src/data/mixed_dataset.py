@@ -57,90 +57,72 @@ def get_mixed_loader(
     cache_max_items: int = 512,
     mix_weights: dict[str, float] = None,
     seed: int | None = None,
-    **kwargs
+    strict_split: bool = True,
+    use_mid_paired: bool = False,
+    mid_raw_color_pair: bool = False,
+    front3d_cache_max_items: int = 0,
 ) -> DataLoader:
-    """
-    Returns a DataLoader that dynamically samples from Hypersim and MIDIntrinsics
-    (and potentially others in the future) according to mix_weights.
+    """Training loader that samples each item from one of the datasets by mix_weights.
+
+    Datasets: hypersim, midintrinsic, interiorverse, front3d (3D-Front-IID v1). Only those
+    with a positive weight are instantiated. MID yields cross-illumination pairs when
+    use_mid_paired is True; front3d always yields pairs.
     """
     if split != 'train':
         raise ValueError("get_mixed_loader should only be used for training.")
-        
     if mix_weights is None:
         mix_weights = {'hypersim': 0.5, 'midintrinsic': 0.5}
+    unknown = [k for k, w in mix_weights.items()
+               if w > 0 and k not in ('hypersim', 'midintrinsic', 'interiorverse', 'front3d')]
+    if unknown:
+        raise ValueError(f'unknown datasets in mix_weights: {unknown}')
 
     from src.data.hypersim_dataset import HypersimDataset
     from src.data.midintrinsic_dataset import MIDIntrinsicDataset
-    
+
     datasets = {}
-    
-    if 'hypersim' in mix_weights and mix_weights['hypersim'] > 0:
+
+    if mix_weights.get('hypersim', 0) > 0:
         datasets['hypersim'] = HypersimDataset(
-            root_dir=data_roots.get('hypersim', '../../../datasets/hypersim'),
+            root_dir=data_roots.get('hypersim', '../datasets/hypersim'),
             split='train',
             input_size=input_size,
             cache_max_items=cache_max_items,
             crop_mode_train='hybrid',
             augment_train=True,
-            split_file=kwargs.get('split_file', 'hypersim_split.json'),
-            split_seed=kwargs.get('split_seed', 42),
-            split_ratio=kwargs.get('split_ratio', 0.9),
-            strict_split=kwargs.get('strict_split', True),
-            max_hdf5_retries=kwargs.get('max_hdf5_retries', 1),
-            skip_corrupt_samples=kwargs.get('skip_corrupt_samples', True),
-            load_geometry=kwargs.get('load_geometry', True),
-            load_normals=kwargs.get('load_normals', False),
-            color_pair_prob=kwargs.get('hypersim_color_pair_prob', 0.0),
-            color_tint_min=kwargs.get('hypersim_color_tint_min', 0.8),
-            color_tint_max=kwargs.get('hypersim_color_tint_max', 1.25),
+            strict_split=strict_split,
+            load_geometry=False,
+            load_normals=False,
         )
-        
-    if 'midintrinsic' in mix_weights and mix_weights['midintrinsic'] > 0:
+
+    if mix_weights.get('midintrinsic', 0) > 0:
         datasets['midintrinsic'] = MIDIntrinsicDataset(
-            root_dir=data_roots.get('midintrinsic', '../../../datasets/MIDIntrinsics'),
+            root_dir=data_roots.get('midintrinsic', '../datasets/MIDIntrinsics'),
             split='train',
             input_size=input_size,
             crop_mode_train='hybrid',
-            use_paired=kwargs.get('use_mid_paired', False),
-            pair_mode=kwargs.get('mid_pair_mode', 'raw'),
-            chromatic_aug=kwargs.get('mid_chromatic_aug', False),
-            raw_color_pair=kwargs.get('mid_raw_color_pair', False),
-            # Phase B colour-signal levers (documents/evals/PHASE_A_FINDINGS.md).
-            # Both default off, so omitting them reproduces prior runs exactly.
-            chroma_stratified_pairs=kwargs.get('mid_chroma_stratified_pairs', False),
-            chroma_stratify_power=kwargs.get('mid_chroma_stratify_power', 2.0),
-            chroma_stratify_floor=kwargs.get('mid_chroma_stratify_floor', 0.05),
-            per_direction_tint=kwargs.get('mid_per_direction_tint', False),
-            per_direction_tint_prob=kwargs.get('mid_per_direction_tint_prob', 0.5),
-            per_direction_tint_dirs=kwargs.get('mid_per_direction_tint_dirs', 1),
+            use_paired=use_mid_paired,
+            pair_mode='raw',
+            raw_color_pair=mid_raw_color_pair,
         )
-        
-    if 'interiorverse' in mix_weights and mix_weights['interiorverse'] > 0:
+
+    if mix_weights.get('interiorverse', 0) > 0:
         from src.data.interiorverse_dataset import InteriorVerseDataset
         datasets['interiorverse'] = InteriorVerseDataset(
-            root_dir=data_roots.get('interiorverse', '../../../datasets/InteriorVerse'),
+            root_dir=data_roots.get('interiorverse', '../datasets/InteriorVerse'),
             split='train',
             input_size=input_size,
             crop_mode_train='hybrid',
         )
 
-    if 'openrooms' in mix_weights and mix_weights['openrooms'] > 0:
-        from src.data.openrooms_dataset import OpenRoomsDataset
-        datasets['openrooms'] = OpenRoomsDataset(
-            root_dir=data_roots.get('openrooms', '../../../datasets/OpenRooms'),
-            split='train',
-            input_size=input_size,
-            crop_mode_train='hybrid',
-        )
-
-    if 'front3d' in mix_weights and mix_weights['front3d'] > 0:
+    if mix_weights.get('front3d', 0) > 0:
         from src.data.front3d_dataset import Front3DDataset
         datasets['front3d'] = Front3DDataset(
-            root_dir=data_roots.get('front3d', '../../../datasets/front3d_iid'),
+            root_dir=data_roots.get('front3d', '../datasets/front3d_iid'),
             split='train',
             input_size=input_size,
             crop_mode_train='hybrid',
-            cache_max_items=kwargs.get('front3d_cache_max_items', 0),
+            cache_max_items=front3d_cache_max_items,
         )
 
     mixed_dataset = MixedDataset(datasets, mix_weights)

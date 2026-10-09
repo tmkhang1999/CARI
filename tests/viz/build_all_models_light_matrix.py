@@ -18,18 +18,21 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
 from eval_mid_constancy import AlbedoPredictor, _raw_frame, _tonemap_frame  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 
 # label, ckpt_path, version -- "Ours" pinned to the deck's qualitative-gallery
-# checkpoint convention (v17_29/checkpoint_iter_60000.pth).
+# checkpoint convention (v17_44/checkpoint_iter_40000.pth).
 MODELS = [
-    ('Ours', f'{ROOT}/checkpoints/v17_29/checkpoint_iter_60000.pth', '17'),
+    ('Ours', f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17'),
     ('CRefNet', f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet'),
     ('Marigold-App', f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1', 'marigold-appearance'),
     ('Marigold-Light', f'{ROOT}/checkpoints/marigold-iid-lighting-v1-1', 'marigold-lighting'),
@@ -38,8 +41,6 @@ MODELS = [
     ('RGB->X', '', 'rgbx'),
 ]
 
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 
 def _fnt(sz, bold=False):

@@ -2,7 +2,7 @@
 
 MOTIVATION
 ----------
-MID -- the corpus supplying CARI's real training pairs AND the corpus on which
+MID -- the corpus supplying CIAI's real training pairs AND the corpus on which
 Cast_rel / Chroma_fid are reported -- barely varies illuminant colour. Measured from
 its gray probes over 30 test scenes / 9000 illuminant pairs (2026-09-05):
 
@@ -124,7 +124,7 @@ def main():
     ap.add_argument('--min-gap', type=float, default=0.15,
                     help='minimum illuminant chromaticity gap for subset membership')
     ap.add_argument('--mask-frac', type=float, default=DEFAULT_MASK_FRAC)
-    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'evals',
+    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'results',
                                                   'arap_colour_subset.json'))
     args = ap.parse_args()
 
@@ -180,7 +180,7 @@ def main():
             'front3d_v2_pilot_median_gap': 0.123,
             '_gap_convention': ('rb plane (R/sum,B/sum), MEDIAN over pairs. The 0.2425 in '
                                 'validate_3dfront_v2.py is rg plane + MAX over pairs and is NOT '
-                                'comparable -- see PHASE_A_FINDINGS.md section 2.'),
+                                'comparable -- see documents/history/DEVELOPMENT_HISTORY.md, section 5.'),
         },
         'min_gap': args.min_gap,
         'mask_frac': args.mask_frac,

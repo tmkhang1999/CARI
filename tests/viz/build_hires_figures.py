@@ -34,7 +34,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
@@ -42,29 +42,30 @@ from eval_mid_constancy import AlbedoPredictor, _raw_frame, _tonemap_frame  # no
 
 OUT = f'{ROOT}/tests/visualizations/hires'
 DST = f'{ROOT}/documents/thesis/images/hires'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 RED, INK, MUTE = (196, 30, 36), (25, 25, 28), (95, 95, 102)
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 IIW = f'{ROOT}/tests/testing_data/iiw-dataset/data'
 MAW = f'{ROOT}/tests/testing_data/MAW'
 ARAP = f'{ROOT}/tests/testing_data/ARAP_dataset'
 
 CK = f'{ROOT}/checkpoints'
 ROSTER = [
-    ('Ours',           f'{CK}/v17_34/checkpoint_iter_60000.pth', '17'),
+    ('Ours',           f'{CK}/v17_44/checkpoint_iter_40000.pth', '17'),
     ('Marigold-App',   f'{CK}/marigold-iid-appearance-v1-1', 'marigold-appearance'),
     ('Marigold-Light', f'{CK}/marigold-iid-lighting-v1-1', 'marigold-lighting'),
     ('CRefNet',        f'{CK}/CRefNet/final_real.pt', 'crefnet'),
     ('Ordinal',        f'{ROOT}/ordinal-hub-weights', 'ordinal'),
 ]
-QUALITATIVE_CKPT = f'{CK}/v17_29/checkpoint_iter_60000.pth'
+QUALITATIVE_CKPT = f'{CK}/v17_44/checkpoint_iter_40000.pth'
 TABLE_A = [
-    ('Row 1: no CARI, no skip',  f'{CK}/v17_41/checkpoint_iter_40000.pth'),
-    ('Row 2: CARI, no skip',     f'{CK}/v17_42/checkpoint_iter_40000.pth'),
-    ('Row 3: no CARI, skip',     f'{CK}/v17_43/checkpoint_iter_40000.pth'),
-    ('Row 4: full CARI (base)',  f'{CK}/v17_44/checkpoint_iter_40000.pth'),
+    ('Row 1: no CIAI, no skip',  f'{CK}/v17_41/checkpoint_iter_40000.pth'),
+    ('Row 2: CIAI, no skip',     f'{CK}/v17_42/checkpoint_iter_40000.pth'),
+    ('Row 3: no CIAI, skip',     f'{CK}/v17_43/checkpoint_iter_40000.pth'),
+    ('Row 4: full CIAI (base)',  f'{CK}/v17_44/checkpoint_iter_40000.pth'),
 ]
 
 
@@ -186,7 +187,7 @@ def fig_mid_ours(PW=440):
 
     Carries the GT albedo and a per-pixel coefficient-of-variation map across the four
     conditions: red marks pixels whose predicted albedo moved when only the light moved,
-    i.e. exactly the error CARI exists to remove.
+    i.e. exactly the error CIAI exists to remove.
     """
     print('mid_ours: albedo stability across illuminants (+ GT and CoV map)')
     sc = sorted(os.listdir(MID))[0]
@@ -405,31 +406,6 @@ def fig_ablation(PW=440):
          header_font=30, row_font=28)
 
 
-def fig_shadow_aug(PW=520):
-    """The synthetic relighting used by the shadow-invariance lever.
-
-    The sources are 1024x768; the legacy figure downsampled them to 210px tiles, which is
-    why it printed soft. Nothing is recomputed here -- only recomposited at full size.
-    """
-    print('shadow_aug: synthetic relighting for the shadow lever')
-    src = f'{ROOT}/tests/visualizations/shadow_aug_out'
-    spec = [('original.png', 'Original Hypersim\nimage'),
-            ('shadow_field.png', 'Shadow field\n(known)'),
-            ('shadow.png', 'Shadowed\nobservation'),
-            ('sun_field.png', 'Sun field\n(known)'),
-            ('sun.png', 'Sunlit\nobservation')]
-    arrs, labs = [], []
-    for name, lab in spec:
-        p = f'{src}/{name}'
-        if not os.path.exists(p):
-            print(f'  [skip] missing {name}')
-            return
-        arrs.append(load_linear_png(p))
-        labs.append(lab)
-    ar = arrs[0].shape[0] / arrs[0].shape[1]
-    grid([arrs], labs, 'shadow_aug', PW, ar, header_font=42)
-
-
 def fig_maw_resolution(PW=470):
     """Inference resolution sweep on one MAW photograph, against the measured albedo."""
     print('maw_resolution: inference-resolution sweep')
@@ -459,7 +435,7 @@ def fig_mid_preprocessing(PW=470):
     """What white balance destroys: the raw pair carries the illuminant colour, the
     white-balanced pair does not. This is the figure behind the raw-pair contribution."""
     print('mid_preprocessing: raw vs white-balanced MID pairs')
-    sp = '/home/khang/datasets/MIDIntrinsics/train/kingston_library26'
+    sp = f'{ROOT}/../datasets/MIDIntrinsics/train/kingston_library26'
     if not os.path.isdir(sp):
         sp = os.path.join(MID, sorted(os.listdir(MID))[0])
     a = _tonemap_frame(_raw_frame(sp, 0))
@@ -474,7 +450,7 @@ def fig_mid_preprocessing(PW=470):
             [gray_world(a), gray_world(b), norm(gt, scale_of(gt))]]
     ar = a.shape[0] / a.shape[1]
     grid(rows, ['Frame a', 'Frame b', 'Pseudo-GT albedo'], 'mid_preprocessing', PW, ar,
-         row_labels=['RAW pair (what CARI trains on)',
+         row_labels=['RAW pair (what CIAI trains on)',
                      'White-balanced (illuminant erased)'],
          gt_cols=(2,))
 
@@ -483,7 +459,7 @@ FIGS = {
     'comp_grid': fig_comp_grid, 'mid_ours': fig_mid_ours, 'iiw_ours': fig_iiw_ours,
     'maw_ours': fig_maw_ours, 'arap_ours': fig_arap_ours,
     'arap_model_grid': fig_arap_model_grid, 'ablation_mid': fig_ablation,
-    'shadow_aug': fig_shadow_aug, 'maw_resolution': fig_maw_resolution,
+    'maw_resolution': fig_maw_resolution,
     'mid_preprocessing': fig_mid_preprocessing,
 }
 

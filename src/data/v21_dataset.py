@@ -1,4 +1,9 @@
-"""Uniform data contract for V21 tri-factor training."""
+"""Data for V21 training: the 3D-Front-IID v2 loader and one collatable target schema.
+
+Every sample carries the second illumination (`rgb2`), the pixels valid in both frames,
+and `pair_gap`, the illuminant chromaticity gap of the pair (-1 when unknown), which gates
+the chroma explanation loss.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,25 @@ def _log_chroma(tensor: torch.Tensor) -> torch.Tensor:
         ),
         dim=0,
     ).clamp(-4.0, 4.0)
+
+
+def _illuminant_gap(shading_a: np.ndarray, shading_b: np.ndarray, valid: np.ndarray) -> float:
+    """Distance between the two lightings' illuminant chromaticities in (R/sum, B/sum).
+
+    The illuminant of each lighting is the median of its diffuse shading over pixels valid
+    in both frames, the same statistic used to measure the corpus gaps. -1 if too few pixels.
+    """
+    mask = valid > 0.5
+    if mask.sum() < 100:
+        return -1.0
+    chroma = []
+    for shading in (shading_a, shading_b):
+        median = np.median(shading[mask], axis=0)
+        total = float(median.sum())
+        if not np.isfinite(total) or total <= 1e-8:
+            return -1.0
+        chroma.append(median / total)
+    return float(np.hypot(chroma[0][0] - chroma[1][0], chroma[0][2] - chroma[1][2]))
 
 
 def _gradient_magnitude(tensor: torch.Tensor) -> torch.Tensor:
@@ -100,6 +124,7 @@ class Front3DV2Dataset(Dataset):
         rgb = self._load(view_dir / f"rgb_L{first}.exr")
         rgb2 = self._load(view_dir / f"rgb_L{second}.exr")
         diffuse = self._load(view_dir / f"diffuse_L{first}.exr")
+        diffuse2 = self._load(view_dir / f"diffuse_L{second}.exr")
         albedo = np.clip(self._load(view_dir / "albedo.exr"), 0.0, 1.0)
         valid = (
             np.isfinite(rgb).all(axis=-1)
@@ -108,6 +133,8 @@ class Front3DV2Dataset(Dataset):
             & (rgb2.max(axis=-1) > 1e-5)
         ).astype(np.float32)
         shading = diffuse / np.maximum(albedo, 1e-6)
+        pair_gap = _illuminant_gap(shading, diffuse2 / np.maximum(albedo, 1e-6),
+                                   valid * (albedo.max(axis=-1) > 0.02))
         height, width = albedo.shape[:2]
         crop_mode = self.crop_mode_train if self.split == "train" else self.crop_mode_val
         output = prepare_training_tensors(
@@ -126,6 +153,7 @@ class Front3DV2Dataset(Dataset):
         output["m_residual"] = torch.tensor(1.0)
         output["is_front3d"] = torch.tensor(1.0)
         output["sample_idx"] = torch.tensor(index, dtype=torch.long)
+        output["pair_gap"] = torch.tensor(pair_gap, dtype=torch.float32)
         return output
 
 
@@ -180,6 +208,7 @@ class V21SampleAdapter(Dataset):
             "shadow_edge": shadow_edge,
             "material_edge": material_edge,
             "pair_supervision": sample["m_invariant"].float(),
+            "pair_gap": sample.get("pair_gap", torch.tensor(-1.0)).float(),
             "factor_supervision": factor_supervision,
             "residual_supervision": sample.get("m_residual", factor_supervision).float(),
             "source_id": torch.tensor(self.source_id, dtype=torch.long),

@@ -1,20 +1,13 @@
-"""Model package exports.
+"""Model package.
 
-V17 is the architecture reported in the thesis (frozen DINOv2-L encoder + DPT
-trunk). V12 and V16 are earlier in-house versions kept for reference. The other
-exploratory versions (V17-Refiner, V18-PGID, V20) were removed during cleanup
-and remain recoverable from git history.
+V17 is the model reported in the project report (frozen DINOv2-L + DPT, albedo and
+three-channel inverse-shading heads). V21 is the next model: shading split into a
+luminance and a unit-luminance chroma factor.
 """
-from .v12 import IntrinsicDecompositionV12
-from .v16 import IntrinsicDecompositionV16
 from .v17 import IntrinsicDecompositionV17
 from .v21_trifactor import IntrinsicDecompositionV21
-from .v21_restorer import V21AlbedoRestorer
 
 __all__ = [
-    "IntrinsicDecompositionV12",
-    "IntrinsicDecompositionV16",
     "IntrinsicDecompositionV17",
     "IntrinsicDecompositionV21",
-    "V21AlbedoRestorer",
 ]

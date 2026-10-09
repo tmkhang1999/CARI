@@ -13,13 +13,13 @@
 # An interruption mid-Stage-B is a different situation: the objective has not changed,
 # and resetting Adam every time the job is killed would repeatedly re-disrupt training.
 # So restarts DO load the run's own optimizer state (no --skip-optimizer), which is why
-# the row configs keep `skip_optimizer: false` -- train_v17.py:1711 ORs the CLI flag with
+# the row configs keep `skip_optimizer: false` -- train_v17.py ORs the CLI flag with
 # the config value, so config false + CLI flag on first launch gives exactly this.
 #
 # WHY THIS MATTERS FOR THE ABLATION
 # ---------------------------------
 # The original Table A was invalidated because rows differed in optimizer treatment: a
-# silent fresh-Adam fallback (train_v17.py:299-307 catches a param-group mismatch, warns,
+# silent fresh-Adam fallback (load_checkpoint in train_v17.py catches a param-group mismatch, warns,
 # and continues with a fresh optimizer) gave the colour-ON rows ~1.85x the effective LR
 # of the colour-OFF rows. Every row must therefore take the SAME path. This script makes
 # that path explicit, and greps each launch for the silent-fallback warning so a row that
@@ -27,7 +27,7 @@
 #
 # skip_optimizer does NOT affect the learning rate. A fresh optimizer takes initial_lr
 # from the config and CosineAnnealingLR recomputes the schedule from
-# last_epoch=completed_opt_steps-1 (train_v17.py:1749-1755); a restart restores the saved
+# last_epoch=completed_opt_steps-1 (train_v17.py main); a restart restores the saved
 # initial_lr. Both give the same LR at the same step. Only Adam's moments differ.
 #
 # HOW TO STOP A RUN  -- READ THIS BEFORE KILLING ANYTHING
@@ -81,7 +81,7 @@ INITIAL_RESUME="${INITIAL_RESUME:-}"
 
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/train_v${TAG}.log"
-PY="${PY:-/home/khang/miniconda3/envs/IR/bin/python}"
+PY="${PY:-python}"
 CFG="$ROOT/src/configs/v${CFG_TAG}.yaml"
 [ -f "$CFG" ] || { echo "ERROR: config not found: $CFG"; exit 2; }
 
@@ -99,12 +99,9 @@ echo "===== v$TAG | cfg v$CFG_TAG | seed ${SEED:-<unseeded>} | GPU $CUDA | log $
 
 # PREFLIGHT: can this filesystem actually take a checkpoint?
 #
-# df CANNOT answer this. Both writable filesystems here report hundreds of GB free
-# while refusing writes: /home/khang is per-user quota'd (df says 298 G, real
-# headroom ~3 G) and /tmp is session-capped near 16 G (df says 321 G). Trusting df
-# is what let v17_51 die at step 1999 with Errno 122, and what let BOTH Round-1 rows
-# get killed at step 2000 when a checkpoint save crossed the cap -- exit 120, no
-# traceback, ~1 GPU-hour each lost.
+# df cannot answer this on quota'd or session-capped filesystems: it can report hundreds
+# of GB free while a 1.4 GB checkpoint save fails, which once killed runs at their first
+# checkpoint with no traceback.
 #
 # So probe it for real: write a checkpoint-sized file and delete it. Costs seconds
 # before a 10-hour run.

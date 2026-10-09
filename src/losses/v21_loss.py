@@ -1,10 +1,23 @@
-"""Losses for the V21 tri-factor IID model."""
+"""Losses for the V21 tri-factor model: I = A * (S_lum * C) + R, Y(C) = 1.
+
+Single-image terms supervise the albedo, the shading luminance S_lum and the shading
+chroma C wherever ground truth exists. The pair terms are the CIAI losses of
+losses/ciai.py, applied to the full shading S_lum * C:
+
+  invariance   the albedos of the two frames agree
+  lum_explain  the luminance ratio of the shadings matches that of the images
+  chr_explain  the chromatic part of the ratio matches too; applied only to pairs whose
+               measured illuminant gap reaches `chr_explain_min_gap`, because on pairs
+               with no real colour change it fits noise and drains the albedo's colour
+"""
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from . import ciai
 
 
 def _expand_mask(mask: torch.Tensor, value: torch.Tensor, gate: torch.Tensor | None = None) -> torch.Tensor:
@@ -113,6 +126,7 @@ class V21Loss(nn.Module):
     def __init__(self, config: dict) -> None:
         super().__init__()
         self.weights = {key: float(value) for key, value in config.items() if key.startswith("lambda_")}
+        self.chr_explain_min_gap = float(config.get("chr_explain_min_gap", 0.08))
 
     def weight(self, name: str) -> float:
         return self.weights.get(f"lambda_{name}", 0.0)
@@ -167,61 +181,17 @@ class V21Loss(nn.Module):
 
         zero = output["a_d"].new_zeros(())
         losses["invariance"] = zero
-        losses["explain"] = zero
+        losses["lum_explain"] = zero
+        losses["chr_explain"] = zero
         if pair_output is not None:
-            pair_gate = batch["pair_supervision"]
-            pair_mask = batch["pair_valid"] & mask
-            losses["invariance"] = masked_charbonnier(
-                output["a_d"], pair_output["a_d"], pair_mask, pair_gate
-            )
-            rgb_ratio = torch.log(batch["rgb"].clamp_min(1e-4)) - torch.log(
-                batch["rgb2"].clamp_min(1e-4)
-            )
-            shading_ratio = torch.log(output["shading_linear"].clamp_min(1e-4)) - torch.log(
-                pair_output["shading_linear"].clamp_min(1e-4)
-            )
-            losses["explain"] = masked_charbonnier(
-                shading_ratio, rgb_ratio, pair_mask, pair_gate
-            )
+            pair_mask = ciai.pair_gate(mask, batch["pair_supervision"], batch["pair_valid"])
+            s1, s2 = output["shading_linear"], pair_output["shading_linear"]
+            losses["invariance"] = ciai.albedo_invariance(output["a_d"], pair_output["a_d"], pair_mask)
+            losses["lum_explain"] = ciai.luminance_explain(batch["rgb"], batch["rgb2"], s1, s2, pair_mask)
+            if self.weight("chr_explain") > 0:
+                gate = ciai.gap_gate(batch["pair_gap"], self.chr_explain_min_gap)
+                losses["chr_explain"] = ciai.chroma_explain(
+                    batch["rgb"], batch["rgb2"], s1, s2, pair_mask * gate.view(-1, 1, 1, 1))
 
         total = sum(self.weight(name) * value for name, value in losses.items())
-        return total, losses
-
-
-class V21RestorerLoss(nn.Module):
-    def __init__(self, config: dict) -> None:
-        super().__init__()
-        self.weights = {key: float(value) for key, value in config.items() if key.startswith("lambda_")}
-
-    def forward(
-        self,
-        output: dict[str, torch.Tensor],
-        base_output: dict[str, torch.Tensor],
-        batch: dict[str, torch.Tensor],
-        pair_output: dict[str, torch.Tensor] | None = None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        mask = batch["loss_mask"]
-        observed = mask & (output["observable"] > 0.5)
-        target = batch["albedo_gt"]
-        losses = {
-            "flow": masked_charbonnier(output["velocity"], output["target_velocity"], mask),
-            "rgb": masked_charbonnier(output["albedo"], target, mask),
-            "log": masked_charbonnier(
-                torch.log(output["albedo"].clamp_min(1e-4)),
-                torch.log(target.clamp_min(1e-4)), mask,
-            ),
-            "grad": gradient_loss(output["albedo"], target, mask),
-            "identity": masked_charbonnier(output["albedo"], base_output["a_d"], observed),
-            "physics": masked_charbonnier(
-                output["albedo"] * output["shading_linear"],
-                batch["diffuse_gt"], mask, batch["factor_supervision"],
-            ),
-        }
-        losses["invariance"] = output["albedo"].new_zeros(())
-        if pair_output is not None:
-            losses["invariance"] = masked_charbonnier(
-                output["albedo"], pair_output["albedo"],
-                batch["pair_valid"] & mask, batch["pair_supervision"],
-            )
-        total = sum(self.weights.get(f"lambda_{name}", 0.0) * value for name, value in losses.items())
         return total, losses

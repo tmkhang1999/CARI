@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Train - supported versions: V9 through V21
+# Train a model from src/configs.
 #
-# Usage:
-#   bash scripts/train.sh                                  # V20 / MICC (default), CUDA auto
-#   bash scripts/train.sh --version 13.1 --cuda 0          # train V13.1 on GPU 0
-#   bash scripts/train.sh --version 20 --cuda 1           # use GPU 1
-#   bash scripts/train.sh --version 9 --device cpu        # force CPU
-#   bash scripts/train.sh --version 13.1 --resume checkpoints/v13.1/checkpoint_latest.pth
-#   bash scripts/train.sh --version 9 --auto-resume
+#   bash scripts/train.sh --version 17_44 --cuda 0          # base CIAI model (V17)
+#   bash scripts/train.sh --version 17_62 --cuda 0 --seed 43
+#   bash scripts/train.sh --version 17_44 --auto-resume
+#   bash scripts/train.sh --version 21 --cuda 0             # next model (V21)
 #
-# All extra flags are forwarded directly to train_stage1.py (e.g. --device cpu).
+# --version 17_xx runs src/train_v17.py with src/configs/v17_xx.yaml; --version 21 runs
+# src/train_v21.py with src/configs/v21.yaml. Unknown flags are passed through.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Default to version 20 (MICC) if no --version or --config flag is given.
-# V20 routes to src/train_v20.py, which reuses src/train_v17.py's model build / losses
-# / train step verbatim (the MICC model is IntrinsicDecompositionV20 in src/models/v20.py).
-VERSION=20
-RUN_DEVICE="cuda"          # forwarded to train.py --device
+VERSION=17_44
+RUN_DEVICE="cuda"          # forwarded as --device
 CUDA_IDS=""                # if set, exported as CUDA_VISIBLE_DEVICES
 EXTRA_ARGS=()
-RESUME_MODE=""            # forwarded as --resume <path|latest>
-AUTO_RESUME=0             # forwarded as --auto-resume
-MODE="single"             # Default mode for V11
+RESUME_MODE=""             # forwarded as --resume <path|latest>
+AUTO_RESUME=0              # forwarded as --auto-resume
 
 require_value() {
     local flag="$1"
@@ -41,11 +35,6 @@ while [[ $# -gt 0 ]]; do
         --version)
             require_value "$1" "${2:-}"
             VERSION="$2"
-            shift 2
-            ;;
-        --mode)
-            require_value "$1" "${2:-}"
-            MODE="$2"
             shift 2
             ;;
         --cuda|--gpus|--cuda-visible-devices)
@@ -79,52 +68,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${VERSION}" =~ ^(9|10|11|12([._][0-9]+)?|13([._][0-9]+)?|14([._][0-9]+)?|15([._][0-9]+)?|16([._][0-9]+)?|17([._][0-9]+)?|18([._][0-9]+)?|19([._][0-9]+)?|20([._][0-9]+)?|21([._][0-9]+)?)$ ]]; then
-    echo "ERROR: Unsupported version '${VERSION}'. Supported versions: 9 through 21 (and their .x variants)"
+VERSION="${VERSION//./_}"
+if [[ "${VERSION}" == 17_* ]]; then
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v17.py"
+elif [[ "${VERSION}" == 21* ]]; then
+    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v21.py"
+else
+    echo "ERROR: unsupported version '${VERSION}'. Use 17_xx (V17 configs) or 21 (V21)."
     exit 1
 fi
-
-# Normalize version: convert dots to underscores (e.g. 13.1 -> 13_1) to match filenames
-VERSION="${VERSION//./_}"
-
-# Resolve config path and train script. For v11 we use mode flag (single or mix).
-if [[ "${VERSION}" == "11" ]]; then
-    if [[ "${MODE}" == "mix" ]]; then
-        CONFIG="${ROOT_DIR}/src/configs/v11_mix.yaml"
-        TRAIN_SCRIPT="${ROOT_DIR}/src/train_mix.py"
-    else
-        CONFIG="${ROOT_DIR}/src/configs/v11_single.yaml"
-        TRAIN_SCRIPT="${ROOT_DIR}/src/train_single.py"
-    fi
-elif [[ "${VERSION}" == 12* ]]; then
-    if [[ "${VERSION}" == "12" ]]; then
-        CONFIG="${ROOT_DIR}/src/configs/v12.yaml"
-    else
-        CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    fi
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
-elif [[ "${VERSION}" == 17* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v17.py"
-elif [[ "${VERSION}" == 18* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v18.py"
-elif [[ "${VERSION}" == 19* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v19.py"
-elif [[ "${VERSION}" == 20* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v20.py"
-elif [[ "${VERSION}" == 21* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_v21.py"
-elif [[ "${VERSION}" == 13* || "${VERSION}" == 14* || "${VERSION}" == 15* || "${VERSION}" == 16* ]]; then
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train.py"
-else
-    CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
-    TRAIN_SCRIPT="${ROOT_DIR}/src/train_stage1.py"  # legacy
-fi
+CONFIG="${ROOT_DIR}/src/configs/v${VERSION}.yaml"
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "ERROR: Config not found: $CONFIG"
@@ -137,7 +90,7 @@ if [[ -n "$CUDA_IDS" && "$RUN_DEVICE" != "cpu" ]]; then
     export CUDA_VISIBLE_DEVICES="$CUDA_IDS"
 fi
 
-# Reduce CUDA allocator fragmentation (helps V18 full-FT fit on 24GB). Harmless elsewhere.
+# Reduce CUDA allocator fragmentation (two forward passes per step on a 24 GB card).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [[ "$AUTO_RESUME" -eq 1 && -n "$RESUME_MODE" ]]; then
@@ -146,7 +99,7 @@ if [[ "$AUTO_RESUME" -eq 1 && -n "$RESUME_MODE" ]]; then
 fi
 
 echo "========================================"
-echo "  Stage 1  |  Version ${VERSION}  |  Mode: ${MODE}"
+echo "  Version ${VERSION}  |  ${TRAIN_SCRIPT##*/}"
 echo "  Config:  ${CONFIG}"
 echo "  Device:  ${RUN_DEVICE}"
 if [[ -n "$CUDA_IDS" ]]; then

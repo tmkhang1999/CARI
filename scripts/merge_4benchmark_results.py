@@ -18,10 +18,11 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PY = "/home/khang/miniconda3/envs/IR/bin/python"
+PY = sys.executable
 
 _FILES = {
     'mid': 'eval_mid_constancy_results.json',

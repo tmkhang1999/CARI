@@ -1,3 +1,6 @@
+# V21: shading split into luminance and unit-luminance chroma, I = A * (S_lum * C) + R.
+# The next model of the project (not trained yet). Initialised from the base CIAI model,
+# trained on Hypersim, InteriorVerse, MID pairs and 3D-Front-IID v2 coloured-light pairs.
 model:
   version: 21
   dino_variant: large
@@ -29,9 +32,10 @@ train:
   max_val_batches: 8
   seed: 42
   amp: true
-  # This initializes only shape-compatible DINO/DPT/albedo weights. New
-  # luminance/chroma heads always start clean, and the V21 step remains zero.
-  init_checkpoint: checkpoints/v17_29/checkpoint_iter_60000.pth
+  # Shape-compatible weights come from the base CIAI model (Table A, row 4): encoder,
+  # DPT trunk and albedo head. The albedo head's skip now receives I / (S_lum * C) instead
+  # of the gamma-encoded input; the luminance and chroma heads start fresh.
+  init_checkpoint: checkpoints/v17_44/checkpoint_iter_40000.pth
   albedo_freeze_steps: 0
   sampling_weights:
     hypersim: 0.30
@@ -60,8 +64,12 @@ loss:
   lambda_diffuse: 1.0
   lambda_residual: 0.25
   lambda_edge_ownership: 0.3
+  # CIAI pair terms (losses/ciai.py). The chroma term only sees pairs whose measured
+  # illuminant chromaticity gap reaches chr_explain_min_gap.
   lambda_invariance: 0.5
-  lambda_explain: 0.25
+  lambda_lum_explain: 0.25
+  lambda_chr_explain: 0.25
+  chr_explain_min_gap: 0.08
 
 output:
   checkpoint_dir: checkpoints/v21

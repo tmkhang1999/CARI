@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PY = Path(os.environ.get('IR_PYTHON', '/home/khang/miniconda3/envs/IR/bin/python'))
+PY = Path(os.environ.get('IR_PYTHON', sys.executable))
 
 _MARIGOLD_VERSIONS = {'marigold-appearance', 'marigold-lighting'}
 _CREFNET_VERSIONS = {'crefnet', 'crefnet-e'}
@@ -48,7 +48,7 @@ DEFAULT_CKPTS = [
     'CRefNet=checkpoints/CRefNet/final_real.pt=crefnet',
     f'Ordinal={_ORDINAL_PLACEHOLDER}=ordinal',
 ]
-DEFAULT_MID_ROOT = Path('/home/khang/datasets/MIDIntrinsics')
+DEFAULT_MID_ROOT = ROOT.parent / 'datasets' / 'MIDIntrinsics'
 DEFAULT_MAW_ROOT = ROOT / 'tests/testing_data/MAW'
 DEFAULT_ARAP_ROOT = ROOT / 'tests/testing_data/ARAP_dataset'
 DEFAULT_IIW_ROOT = ROOT / 'tests/testing_data/iiw-dataset/data'
@@ -245,7 +245,7 @@ def protocol_manifest(args: argparse.Namespace, specs: list[dict]) -> dict:
         arap_splits.append('all__wb')
     return {
         'scope': 'full SOTA benchmark (Marigold-App/Light, CRefNet, Ordinal); no persisted predictions',
-        'protocol_doc': 'documents/evals/BENCHMARK_PROTOCOL.md',
+        'protocol_doc': 'README.md#evaluation',
         'models': [{'label': s['label'], 'path': str(s['path']), 'kind': s['kind']} for s in specs],
         'infer_size': {'mid': args.infer_max_size, 'iiw': args.infer_max_size,
                        'arap': args.arap_infer_size, 'maw': args.maw_infer_size},
@@ -276,7 +276,7 @@ def main() -> None:
                         help='Retries per failed child evaluator when --auto-resume is enabled.')
     parser.add_argument('--retry-delay-sec', type=int, default=60,
                         help='Delay between child-evaluator retries.')
-    # Per-dataset inference resolution — see documents/evals/BENCHMARK_PROTOCOL.md.
+    # Per-dataset inference resolution — see README.md#evaluation.
     parser.add_argument('--infer-max-size', type=int, default=1280,
                         help='Long-side cap for MID and IIW (default 1280, the comparable protocol).')
     parser.add_argument('--arap-infer-size', type=int, default=1280,

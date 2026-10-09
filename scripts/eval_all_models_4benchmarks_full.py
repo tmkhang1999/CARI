@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PY = Path(os.environ.get('IR_PYTHON', '/home/khang/miniconda3/envs/IR/bin/python'))
+PY = Path(os.environ.get('IR_PYTHON', sys.executable))
 
 DEFAULT_CKPTS = [
     # 'v17_41=checkpoints/v17_41/checkpoint_iter_40000.pth',
@@ -33,7 +33,7 @@ DEFAULT_CKPTS = [
     'v17_33=checkpoints/v17_33/checkpoint_iter_60000.pth',
     'v17_34=checkpoints/v17_34/checkpoint_iter_60000.pth',
 ]
-DEFAULT_MID_ROOT = Path('/home/khang/datasets/MIDIntrinsics')
+DEFAULT_MID_ROOT = ROOT.parent / 'datasets' / 'MIDIntrinsics'
 DEFAULT_MAW_ROOT = ROOT / 'tests/testing_data/MAW'
 DEFAULT_ARAP_ROOT = ROOT / 'tests/testing_data/ARAP_dataset'
 DEFAULT_IIW_ROOT = ROOT / 'tests/testing_data/iiw-dataset/data'
@@ -164,7 +164,7 @@ def run_model(spec: dict, gpu: int, args: argparse.Namespace, work_root: Path) -
             '--save-json', mid_json,
         ], logs_dir / 'mid.log', gpu, args)
 
-    # ARAP runs (see BENCHMARK_PROTOCOL.md): raw-colored = thesis constancy axis (C_arap/Cast_RMS),
+    # ARAP runs (see README.md#evaluation): raw-colored = thesis constancy axis (C_arap/Cast_RMS),
     # white-balanced = standard SOTA protocol (comparable to Ordinal/CD-IID published LMSE/si-RMSE/
     # SSIM). Labels: '__wb' suffix marks the white-balanced (standard) rows.
     arap_json = result_dir / 'arap.json'
@@ -220,7 +220,7 @@ def protocol_manifest(args: argparse.Namespace, specs: list[dict]) -> dict:
         arap_splits.append('all__wb')
     return {
         'scope': 'full benchmark, no score-time visualizations or persisted predictions',
-        'protocol_doc': 'documents/evals/BENCHMARK_PROTOCOL.md',
+        'protocol_doc': 'README.md#evaluation',
         'checkpoints': [{'label': s['label'], 'path': str(s['path'])} for s in specs],
         'infer_size': {'mid': args.infer_max_size, 'iiw': args.infer_max_size,
                        'arap': args.arap_infer_size, 'maw': args.maw_infer_size},
@@ -251,7 +251,7 @@ def main() -> None:
                         help='Delay between child-evaluator retries.')
     parser.add_argument('--no-comparison-sheets', action='store_true',
                         help='Do not create the four compact post-evaluation comparison sheets.')
-    # Per-dataset inference resolution — see documents/evals/BENCHMARK_PROTOCOL.md.
+    # Per-dataset inference resolution — see README.md#evaluation.
     # MID/IIW/ARAP at 1280 (measured degradation at 512; 1280 vs 1500 measured IDENTICAL on the
     # full 52-scene ARAP set, <1% on every metric, mixed direction = noise — Ordinal's own "1500"
     # is a per-image content-adaptive R_0 CEILING, not a fixed operating resolution, so matching

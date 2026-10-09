@@ -32,9 +32,9 @@ eval JSONs by scene, which is what makes evaluate-then-discard viable.
 
 Usage:
     python tests/eval/study1_paired.py --contrast 17_62 17_63 \
-        documents/evals/study1_round1_noisefloor.json \
-        documents/evals/study1_headline_s42.json \
-        documents/evals/study1_63_s43.json
+        documents/results/study1_f3d_round1_noisefloor.json \
+        documents/results/study1_f3d_headline_s42.json \
+        documents/results/study1_f3d_63_s43.json
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 LABEL_RE = re.compile(r'v?(?P<cfg>1?7?_?\d+)_s(?P<seed>\d+)')
 
-# Guard thresholds, fixed in documents/evals/STUDY1_PREREGISTRATION.md before results.
+# Guard thresholds, fixed in the Study 1 pre-registration before any result (see
+# documents/history/DEVELOPMENT_HISTORY.md, section 5).
 GUARDS = {
     'Chroma_fid': (-0.05, 'fell below -0.05 -- DESATURATION, not constancy'),
     'low_tercile': (0.01, 'rose above +0.01 -- gain is a pivot, not an improvement'),
@@ -82,7 +83,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('runs', nargs='+', help='eval_mid_constancy --save-json outputs')
     ap.add_argument('--contrast', nargs=2, metavar=('BASE', 'TREAT'), default=['17_62', '17_63'])
-    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'evals', 'study1_paired.json'))
+    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'results', 'study1_paired.json'))
     args = ap.parse_args()
 
     runs = {}

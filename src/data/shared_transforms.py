@@ -208,8 +208,12 @@ def prepare_training_tensors(
             out['pair_valid'] = (t[15:16] > 0.5)
         else:
             out['pair_valid'] = torch.ones_like(t_loss_mask).bool()
+        # Illuminant chromaticity gap of the pair; -1 = not measured. Loaders that can
+        # measure it (MID, from its grey probes) overwrite this.
+        out['pair_gap'] = torch.tensor(-1.0, dtype=torch.float32)
     else:
         out['rgb2'] = t[0:3].clone()
         out['m_invariant'] = torch.tensor(0.0, dtype=torch.float32)
         out['pair_valid'] = t_loss_mask.bool()
+        out['pair_gap'] = torch.tensor(0.0, dtype=torch.float32)
     return out

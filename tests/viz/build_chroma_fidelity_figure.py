@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Qualitative figure for the chroma-fidelity result (Ch5, tab:mid / tab:ablation).
 
-Shows the claim the corrected metric makes numerically: the methods that score best on a
-pooled/absolute chroma-cast metric do so by DESATURATING the albedo, not by being more
-illuminant-invariant. One MID test scene under two illuminants, columns:
+Shows the desaturation failure directly: the predictions a pooled chroma-variance score would
+rank best are the visibly washed-out ones, not the more illumination-invariant ones. One MID test scene under two illuminants, columns:
 
-    Input | GT albedo | Ours (v17_34) | v17_42 (skip off) | CRefNet | Marigold-App
+    Input | GT albedo | Ours (v17_44, base CIAI) | v17_42 (colour path off) | CRefNet | Marigold-App
 
 v17_42 and CRefNet should read as visibly washed out beside the GT; ours should not.
 Each column is captioned with pseudo-GT Chroma_err and the aggregate chroma-spread
@@ -21,25 +20,26 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
 from eval_mid_constancy import AlbedoPredictor, _raw_frame, _tonemap_frame  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 
 # label, path, version, Chroma_err, ratio of aggregate predicted/pseudo-GT spread
 MODELS = [
-    ('Ours (full model)',  f'{ROOT}/checkpoints/v17_29/checkpoint_iter_60000.pth', '17', 0.121, 0.941),
+    ('Ours',               f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', '17', 0.129, 0.999),
     ('Ours, colour path OFF',   f'{ROOT}/checkpoints/v17_42/checkpoint_iter_40000.pth', '17', 0.201, 0.484),
     ('CRefNet',                 f'{ROOT}/checkpoints/CRefNet/final_real.pt', 'crefnet', 0.201, 0.484),
     ('Marigold-App',            f'{ROOT}/checkpoints/marigold-iid-appearance-v1-1',
      'marigold-appearance', 0.195, 0.728),
 ]
 
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 
 def _fnt(sz, bold=False):

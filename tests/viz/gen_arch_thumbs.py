@@ -4,15 +4,16 @@ Runs on CPU to avoid contending with the Marigold jobs on the GPUs (one small im
 through DINOv2-L on CPU is ~20 s). Outputs go to documents/thesis/images/arch/.
 """
 import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 import cv2, numpy as np, torch
-sys.path.insert(0, '/home/khang/IR-IID/tests/eval')
-os.chdir('/home/khang/IR-IID/tests/eval')
+sys.path.insert(0, f'{ROOT}/tests/eval')
+os.chdir(f'{ROOT}/tests/eval')
 from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame
 
-DST = '/home/khang/IR-IID/documents/thesis/images/arch'
+DST = f'{ROOT}/documents/thesis/images/arch'
 os.makedirs(DST, exist_ok=True)
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
 
 def srgb(x): return np.clip(x, 0, 1) ** (1/2.2)
 def norm(a, p=99.0):
@@ -26,7 +27,7 @@ def save(a, name, gamma=True, sz=340):
     print('wrote', name)
 
 dev = 'cpu'
-m = load_v17('/home/khang/IR-IID/checkpoints/v17_29/checkpoint_iter_60000.pth', dev)
+m = load_v17(f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', dev)
 sc = 'everett_dining1'
 sp = os.path.join(MID, sc)
 I = _tonemap_frame(_raw_frame(sp, 0))

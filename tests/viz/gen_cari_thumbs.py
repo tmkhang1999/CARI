@@ -2,19 +2,20 @@
 """Thumbnails for fig:cari: two illuminant conditions of one MID scene + their predicted
 albedos and shadings. CPU (no GPU contention). -> documents/thesis/images/arch/cari_*.png
 
-The point the figure makes visually: I1 and I2 differ in illuminant cast, the two predicted
-albedos A1/A2 look IDENTICAL (L_inv), and the shadings S1/S2 differ (they absorb the cast).
+I1 and I2 are two flash directions of one scene; A1/A2 are tied by L_inv and S1/S2 by the
+luminance explanation loss. The albedos agree closely in lightness and less in colour.
 """
 import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
 import cv2, numpy as np, torch
-sys.path.insert(0, '/home/khang/IR-IID/tests/eval')
-os.chdir('/home/khang/IR-IID/tests/eval')
+sys.path.insert(0, f'{ROOT}/tests/eval')
+os.chdir(f'{ROOT}/tests/eval')
 from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame
 
-DST = '/home/khang/IR-IID/documents/thesis/images/arch'
+DST = f'{ROOT}/documents/thesis/images/arch'
 os.makedirs(DST, exist_ok=True)
-MID = '/home/khang/datasets/MIDIntrinsics/test'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
 
 def srgb(x): return np.clip(x, 0, 1) ** (1/2.2)
 def norm(a, p=99.0):
@@ -25,7 +26,7 @@ def save(a, name, gamma=True, sz=300):
     im = cv2.resize(im, (sz, int(sz*a.shape[0]/a.shape[1])), interpolation=cv2.INTER_AREA)
     cv2.imwrite(f'{DST}/{name}.png', im[..., ::-1]); print('wrote', name)
 
-m = load_v17('/home/khang/IR-IID/checkpoints/v17_29/checkpoint_iter_60000.pth', 'cpu')
+m = load_v17(f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth', 'cpu')
 sp = os.path.join(MID, 'everett_dining1')
 
 # pick two illuminants with the largest chroma difference among a few candidates

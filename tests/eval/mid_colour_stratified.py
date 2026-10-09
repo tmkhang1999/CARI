@@ -2,10 +2,8 @@
 
 WHY
 ---
-Cast_rel and Chroma_fid are reported on MID, but MID's illuminants are 25 white
-flashes bounced around the room -- the code has known this all along
-(midintrinsic_dataset.py:48: "MID's 25 flashes are all WHITE and probe-WB'd").
-What colour variation survives is bounce off coloured surfaces, and it is small.
+Cast_rel is reported on MID, but MID's illuminants are one white flash bounced in 25
+directions. What colour variation survives is bounce off coloured surfaces, and it is small.
 
 Measured here from the gray probes (the direct measurement of the light):
 
@@ -42,11 +40,11 @@ import cv2  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PER_SCENE = os.path.join(ROOT, 'documents', 'thesis', 'data', 'mid_per_scene.json')
-MID_TEST = '/home/khang/datasets/MIDIntrinsics/test'
-CACHE = os.path.join(ROOT, 'documents', 'evals', 'mid_illuminant_gaps.json')
+MID_TEST = os.path.join(ROOT, '..', 'datasets', 'MIDIntrinsics', 'test')
+CACHE = os.path.join(ROOT, 'documents', 'results', 'mid_illuminant_gaps.json')
 
 # MID skips these flash indices (hard flash / saturated), matching
-# midintrinsic_dataset.py:65 `skip_list`. Using the same set keeps the measured
+# MIDIntrinsicDataset.skip_list. Using the same set keeps the measured
 # illuminant statistics consistent with what training and evaluation actually see.
 SKIP = {2, 3, 20, 21, 24}
 VALID_IDX = [i for i in range(25) if i not in SKIP]
@@ -110,7 +108,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--per-scene', default=PER_SCENE)
     ap.add_argument('--metric', default='Cast_rel')
-    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'evals',
+    ap.add_argument('--out', default=os.path.join(ROOT, 'documents', 'results',
                                                   'mid_colour_stratified.json'))
     args = ap.parse_args()
 
@@ -163,7 +161,7 @@ def main():
         '_note': ('Per-scene MID illuminant chromaticity gap measured from gray '
                   'probes; scenes split into terciles by that gap; existing '
                   'per-scene metrics re-aggregated within each tercile. No model '
-                  'inference -- reads documents/thesis/data/mid_per_scene.json.'),
+                  'inference -- reads documents/results/mid_per_scene.json.'),
         'scene_gaps': {s: per[s] for s in scenes},
         'terciles': {lbl: [scenes[i] for i in idx] for lbl, idx in zip(names, t)},
         'results': results,

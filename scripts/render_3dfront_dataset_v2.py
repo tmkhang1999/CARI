@@ -367,7 +367,7 @@ def sample_interior_cameras(rng, lo, hi, size, content_names, num_views, tries=1
     return cam, picked
 
 
-# ── randomized colored illuminants (the CARI axis) ──────────────────────────
+# ── randomized colored illuminants (the CIAI axis) ──────────────────────────
 
 def kelvin_to_rgb(k):
     # Tanner Helland blackbody approximation -> linear RGB.

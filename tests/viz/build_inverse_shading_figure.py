@@ -18,8 +18,8 @@ import h5py
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = '/home/khang/IR-IID'
-HS = '/home/khang/datasets/hypersim'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+HS = f'{ROOT}/../datasets/hypersim'
 IMG_DST = f'{ROOT}/documents/thesis/images/inverse_shading'
 DAT_DST = f'{ROOT}/documents/thesis/chapters/data'
 FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'

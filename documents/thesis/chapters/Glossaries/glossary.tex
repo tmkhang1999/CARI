@@ -47,9 +47,10 @@
   & An image processing step that neutralises the colour of the illuminant,
     making images appear as if they were lit by a pure white light.
     White balance is applied by cameras automatically or in post-processing.
-    In this work, WB is intentionally \emph{disabled} for the MID training
-    pairs because it removes the illuminant colour information that the CARI
-    training strategy relies on. \\[4pt]
+    In this work, per-frame WB is \emph{disabled} for the MID training pairs so
+    that the small illuminant colour difference between two flash directions is
+    kept; it does not change intensity, so the brightness change between frames is
+    present either way. \\[4pt]
 
 \textbf{Scale-and-shift invariance (SSI)}
   & A property of a metric or loss that makes it insensitive to global

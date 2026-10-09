@@ -1,49 +1,56 @@
 Intrinsic image decomposition (IID) tries to separate a photograph into two layers:
-the \emph{albedo}, which is the true colour of each surface, and the \emph{shading},
-which captures how light falls on those surfaces.
-Most IID models assume that light is white or achromatic.
-In real indoor scenes, however, light sources have colour: warm lamps cast orange tints,
-while windows let in cool blue daylight. This coloured illumination
-becomes entangled with the recovered albedo.
-As a result, the same painted wall looks like it has different colours depending on
-which light is on, even though the paint itself has not changed.
+the \emph{albedo}, which describes the reflectance of each surface, and the \emph{shading},
+which describes how light falls on those surfaces.
+A single photograph cannot tell a dark surface from a dimly lit one, or a warm surface
+from a white surface under warm light, so part of the lighting leaks into the recovered
+albedo. The same wall then comes out lighter or darker, and sometimes tinted, depending on
+how the room was lit, although the paint has not changed.
 
-In this work we tackle this coloured illumination problem directly.
-We propose \emph{Cross-Render Albedo Invariance} (CARI), a training strategy
-that uses pairs of images of the same scene captured under different illuminants.
-The core idea is simple: if the same surface appears in two photographs lit differently,
-its albedo must be identical in both.
-We enforce this with a loss that penalises any change in the predicted albedo
-across the two views, while requiring that the shading layer absorbs the difference.
+We train against this leakage with \emph{Cross-Illumination Albedo Invariance} (CIAI).
+Two photographs of the same scene under different illumination pass through the same
+network; an invariance loss requires their predicted albedos to agree, and an explanation
+loss requires the ratio of the two predicted shadings to match the luminance ratio of the
+two images. The idea follows Siamese representation learning and multi-view consistency in
+3D reconstruction, with positive pairs only. No dataset offers real photographs under
+several illuminations together with dense measured albedo, so we use the Multi-Illumination
+Dataset (MID), in which every scene is photographed 25 times with a flash bounced in a
+different direction, and the pseudo-ground-truth albedo that MIDIntrinsics derives for all
+25 frames. CIAI is added as a second training stage to a model with a frozen DINOv2-Large
+encoder, a DPT decoder and three-channel shading; inference remains a single image and a
+single forward pass.
 
-We implement CARI inside a model built on a frozen DINOv2-Large encoder
-and a DPT-style decoder.
-A key practical insight is that standard white-balance pre-processing, commonly
-applied to training data, removes the very illuminant colour information that
-CARI needs to function; we therefore train on raw, unprocessed image pairs.
+In matched ablations CIAI reduces the variation of a material's recovered lightness across
+illuminations ($C_{\text{mat}}$) by $28\%$ and $39\%$, and on synthetic ARAP renderings with
+their original coloured lighting it also lowers the dense albedo error by $7$--$14\%$. Our
+model is more lightness-stable than CD-IID, both Marigold variants and Ordinal Shading, level
+with CRefNet and behind RGB$\rightarrow$X, while training $18.5$M parameters.
+CIAI does not make the albedo stable in \emph{colour}. MID's flash is white: between two
+frames the light changes mainly in direction and intensity, and its chromaticity moves by a
+median of only $0.030$. The explanation loss, moreover, is defined on luminance. Under CIAI
+the scale-normalised hue drift improves by only $4$--$6\%$, and our model's hue drift still
+grows with the illuminant colour as much as that of a grey-shading method. CD-IID, which
+predicts the shading colour in a dedicated stage, leads both hue drift and chroma accuracy.
+Two follow-up studies (a chroma explanation loss on the existing shading, and rendered
+coloured-light pairs) do not change this, and we use them to argue that colour invariance needs a structural
+change: shading split into a luminance and a chroma factor, a chroma explanation loss on
+the chroma factor, and training pairs whose illuminant colour genuinely varies.
 
-Evaluating this claim turned out to require correcting the way it is measured. The
-chroma-cast score used throughout this literature, and in earlier drafts of this work,
-pools albedo chromaticity across all the materials of a scene before taking its
-variance, and therefore conflates the illuminant-induced drift it intends to measure with
-the ordinary chromatic diversity of the scene. Because that second term is computed from
-the \emph{prediction}, a model can lower the score simply by washing the colour out of its
-albedo. The metric pays models to destroy the very quantity the task exists to recover. We
-decompose it into a scale-normalised invariance term and a fidelity term anchored on
-the pseudo-ground-truth albedo, and show that the correction reverses the ranking of our
-own ablation.
+Two further findings shape the evaluation. The desaturated albedo of the base model is
+caused by the frozen-encoder architecture, not by CIAI: a colour path restores the chroma
+spread with or without CIAI. And a chroma variance pooled over all materials, which we used
+in an early draft, rewards desaturated predictions because it contains the scene's own
+colour diversity; we therefore report stability only next to accuracy against measured
+albedo (MAW) and against the MID pseudo-ground truth.
 
-We evaluate on four benchmarks spanning real and synthetic scenes: MID, IIW, MAW and ARAP.
-Under the corrected metric our model is the only one in the comparison that is
-simultaneously colour-faithful and competitively invariant: it reproduces the
-between-material chroma of the pseudo-ground-truth albedo closely (a fidelity of
-$0.941$, against $0.728$ for the strongest diffusion baseline and $0.484$ for the strongest
-feed-forward one) and attains the best material-lightness stability in the roster, while
-remaining within a fifth of the most illuminant-invariant method on hue. We do not claim
-the invariance crown: two external methods hold it, and we show that both purchase it by
-discarding roughly a quarter and a half of real albedo colour respectively. The same
-degenerate trade that our own colour-skip ablation makes, which is visible to the naked eye.
-These results are obtained with $18.5$M trained parameters and a single forward pass,
-some seventy times fewer trained weights and five times faster than the diffusion baselines.
-The remaining gap is in perceptual shading quality measured by IIW, which we analyse through
-the constancy--structure tension inherent to IID.
+\paragraph*{Note on this revised edition.}
+This edition corrects the version submitted in July 2026. That version described MID as a
+source of coloured-illuminant pairs, attributed the pooled chroma score to the literature,
+and presented the colour path as a consequence of CIAI; all three were wrong. Its headline
+model came from a refinement study that changed several regularisers and the data mix at
+once; that study is removed, and the model reported throughout is now the complete CIAI
+configuration of the matched ablation. The ARAP numbers were obtained with an evaluation
+mask that fails on ARAP's mixed ground-truth encodings and are marked provisional. Several
+qualitative figures were rendered with later checkpoints of the same architecture,
+trained for 20k further steps from the reported model (see \secref{sec:exp_setup}); they will be
+regenerated. Chapter~\ref{ch:experiments} adds the follow-up colour studies, and
+Chapter~\ref{ch:conclusion} the resulting plan.

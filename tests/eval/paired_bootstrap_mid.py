@@ -17,7 +17,7 @@ per-scene difference cancels scene difficulty. Overlap of the marginal
 per-method intervals in tab:mid is not a test of the difference -- with
 between-scene spread this large it would hide real effects.
 
-Input is documents/thesis/data/mid_per_scene.json, a tracked extract of the
+Input is documents/results/mid_per_scene.json, a tracked extract of the
 evaluator's per-scene dumps whose scene means reproduce tab:mid exactly.
 
 Usage:
@@ -33,9 +33,9 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-PER_SCENE = ROOT / 'documents/thesis/data/mid_per_scene.json'
+PER_SCENE = ROOT / 'documents/results/mid_per_scene.json'
 
-OURS = 'Ours (full)'
+OURS = 'Ours (base CARI)'   # key in mid_per_scene.json for the reported model (v17_44)
 BASELINES = ['CD-IID', 'RGB-X', 'CRefNet', 'Marigold-App',
              'Marigold-Light', 'Ordinal Shading']
 # All three are lower-is-better, so a negative difference means our model wins.

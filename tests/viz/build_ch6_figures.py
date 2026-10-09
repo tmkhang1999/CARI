@@ -2,8 +2,7 @@
 """Chapter 6 qualitative figures and an optional transfer diagnostic.
 
 Two qualitative editing demonstrations plus an optional transfer diagnostic.
-The editing figures use v17_29 explicitly: it is the pre-existing Table-B row
-without the flatness lever, not the benchmark-selected v17_34 checkpoint.
+The editing figures use the base CIAI model (v17_44 at 40k), the model reported throughout.
 
   Optional: cross-illuminant relighting transfer
          I_hat(a->b) = A(I_a) * S_d(I_b) + R(I_b)  ~=  I_b
@@ -36,25 +35,25 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = '/home/khang/IR-IID'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, os.path.join(ROOT, 'tests/eval'))
 os.chdir(os.path.join(ROOT, 'tests/eval'))
 
 from eval_mid_constancy import load_v17, _raw_frame, _tonemap_frame, _hdr_valid  # noqa: E402
 
-MID = '/home/khang/datasets/MIDIntrinsics/test'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+MID = f'{ROOT}/../datasets/MIDIntrinsics/test'
+from matplotlib import font_manager as _fm
+FONT = _fm.findfont(_fm.FontProperties(family='DejaVu Sans'))
+FONTB = _fm.findfont(_fm.FontProperties(family='DejaVu Sans', weight='bold'))
 
 MODELS = [
-    ('Ours (v17-34)',        f'{ROOT}/checkpoints/v17_34/checkpoint_iter_60000.pth'),
-    ('Ours base CARI',       f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth'),
+    ('Ours (base CIAI)',     f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth'),
     ('Ours, colour skip OFF', f'{ROOT}/checkpoints/v17_42/checkpoint_iter_40000.pth'),
-    ('No CARI',              f'{ROOT}/checkpoints/v17_41/checkpoint_iter_40000.pth'),
+    ('No CIAI',              f'{ROOT}/checkpoints/v17_41/checkpoint_iter_40000.pth'),
 ]
 
 BENCHMARK_CKPT = MODELS[0][1]
-APPLICATION_CKPT = f'{ROOT}/checkpoints/v17_29/checkpoint_iter_60000.pth'
+APPLICATION_CKPT = f'{ROOT}/checkpoints/v17_44/checkpoint_iter_40000.pth'
 
 
 def _fnt(sz, bold=False):

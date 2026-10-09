@@ -13,19 +13,10 @@ from tqdm import tqdm
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(ROOT_DIR / "src"))
-sys.path.insert(0, str(ROOT_DIR / "preprocessor"))
-sys.path.insert(0, str(ROOT_DIR / "tests" / "infer"))   # infer_wild moved here
+sys.path.insert(0, str(ROOT_DIR / "tests" / "infer"))
 
 from src.data.hypersim_dataset import _compute_tonemap_scale, _tonemap_linear
-from infer_wild import (
-    load_image,
-    get_normals_metric3d,
-    get_segmentation_nyu40,
-    resolve_device,
-    _infer_model_version,
-    _build_model
-)
-from src.models.ccr_utils import compute_ccr
+from infer_wild import load_image, resolve_device, load_model, predict
 
 # Metrics & General
 from documents.references.chrislib.chrislib.metrics import compute_whdr
@@ -42,8 +33,8 @@ except ImportError as e:
 # ── External SOTA models (Marigold / CRefNet / Ordinal Shading) ───────────────
 # Wired through the same adapters eval_maw/eval_arap use. Contract: display-linear
 # [0,1] HWC in -> linear albedo [0,1] HWC out, matching what this evaluator's WHDR
-# loop already expects for pred_ad. Passed via --model_version; the shared
-# _build_model only knows our V12/V16/V17/V20, so external versions bypass it.
+# loop already expects for pred_ad. Passed via --model_version; anything else is
+# treated as one of our checkpoints (V17 or V21) and loaded by infer_wild.load_model.
 _MARIGOLD_VERSIONS = {'marigold-appearance', 'marigold-lighting'}
 _CREFNET_VERSIONS = {'crefnet', 'crefnet-e'}
 _ORDINAL_VERSIONS = {'ordinal', 'ordinal-rendered-only'}
@@ -173,35 +164,9 @@ def eval_iiw(args):
             from ordinal_adapter import load_ordinal
             model = load_ordinal(device, variant=external_kind)
         inferred_version = external_kind
-        is_rgb_only = True  # external adapters take RGB only; no normals/seg/ccr extractors
     else:
-        # Our models — use the checkpoint's OWN config. V17/V20 are DINOv2-based and differ from
-        # the V12/V16 convnext default below; building the wrong arch silently loads near-empty weights.
-        state_dict = torch.load(args.checkpoint, map_location=device)
-        config = state_dict.get("config", {})
-        model_state = state_dict['model_state_dict'] if 'model_state_dict' in state_dict else state_dict
-        inferred_version = _infer_model_version(config, args.checkpoint, args.model_version)
-
-        model_config = config.get("model") or {
-            "z_channels": 1024,
-            "freeze_stages": [1, 2],
-            "backbone": "convnextv2_base",
-            "num_seg_classes": 41,
-            "input_size": 384,
-        }
-
-        print(f"Loading V{inferred_version} Checkpoint...")
-        model = _build_model(model_config, inferred_version, device)
-        # Shape-filtered non-strict load (heads/config drift across versions).
-        own = model.state_dict()
-        filtered = {k: v for k, v in model_state.items() if k in own and v.shape == own[k].shape}
-        if len(filtered) < len(own):
-            print(f"  [warn] loaded {len(filtered)}/{len(own)} params (rest shape/key mismatch)")
-        model.load_state_dict(filtered, strict=False)
-        model.eval()
-
-        # V17/V20 are RGB-only; V12/V16 need the normals/seg/ccr extractors below.
-        is_rgb_only = str(inferred_version).split('.')[0] in ("17", "20")
+        model, inferred_version = load_model(args.checkpoint, device)
+        print(f"Loaded V{inferred_version} checkpoint {args.checkpoint}")
 
     # 2. Get Test Split
     test_ids = get_iiw_test_split(args.dataset_dir)
@@ -279,51 +244,7 @@ def eval_iiw(args):
                 args, img_id, pred_ad, rgb_tm_orig, judgements, whdr_errors, whdr_weights)
             continue
 
-        stride = 32
-        pad_h = (stride - (H % stride)) % stride
-        pad_w = (stride - (W % stride)) % stride
-        t_rgb = torch.from_numpy(rgb_tm).permute(2, 0, 1).unsqueeze(0).float().to(device)
-
-        if is_rgb_only:
-            # V17/V20: RGB-only models — skip the V12/V16 normals/seg/ccr extractors entirely.
-            if pad_h > 0 or pad_w > 0:
-                t_rgb = torch.nn.functional.pad(t_rgb, (0, pad_w, 0, pad_h), mode="replicate")
-            with torch.no_grad():
-                preds = model(t_rgb)
-                t_ad = preds['a_d'].clamp(0.0, 1.0)
-        else:
-            normals = get_normals_metric3d(rgb_tm, device)
-            if normals.shape[:2] != (H, W):
-                normals = cv2.resize(normals.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
-
-            seg_nyu40 = get_segmentation_nyu40(img_path)
-            if seg_nyu40.shape != (H, W):
-                seg_nyu40 = cv2.resize(seg_nyu40.astype(np.int32), (W, H), interpolation=cv2.INTER_NEAREST)
-
-            t_normals = torch.from_numpy(normals).permute(2, 0, 1).unsqueeze(0).float().to(device)
-            t_seg = torch.from_numpy(seg_nyu40).unsqueeze(0).unsqueeze(0).long().to(device)
-            t_masks = torch.ones((1, 1, H, W), dtype=torch.bool).to(device)
-            t_ccr = compute_ccr(t_rgb)
-
-            if pad_h > 0 or pad_w > 0:
-                pad_spec = (0, pad_w, 0, pad_h)
-                t_rgb = torch.nn.functional.pad(t_rgb, pad_spec, mode="replicate")
-                t_normals = torch.nn.functional.pad(t_normals, pad_spec, mode="replicate")
-                t_ccr = torch.nn.functional.pad(t_ccr, pad_spec, mode="replicate")
-                t_seg = torch.nn.functional.pad(t_seg.float(), pad_spec, mode="replicate").long()
-                t_masks = torch.nn.functional.pad(t_masks.float(), pad_spec, mode="replicate").bool()
-
-            with torch.no_grad():
-                preds = model(rgb=t_rgb, normals=t_normals, seg=t_seg,
-                              valid_mask=t_masks, ccr=t_ccr)
-                t_ad = preds['a_d'].clamp(0.0, 1.0)
-
-        if pad_h > 0 or pad_w > 0:
-            t_ad = t_ad[:, :, :H, :W]
-
-        pred_ad = t_ad.squeeze(0).permute(1, 2, 0).cpu().numpy()
-        if pred_ad.shape[-1] == 1:
-            pred_ad = np.repeat(pred_ad, 3, axis=-1)
+        pred_ad = predict(model, rgb_tm, device)['albedo']
 
         if (H, W) != (H_orig, W_orig):
             pred_ad = cv2.resize(pred_ad, (W_orig, H_orig), interpolation=cv2.INTER_LINEAR)

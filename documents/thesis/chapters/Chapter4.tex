@@ -16,8 +16,8 @@ used to produce the final model.
 \label{sec:losses}
 
 Our model is trained with three families of losses: \emph{supervised anchors}
-that tie the predictions to ground-truth labels on synthetic data, \emph{CARI
-losses} that enforce illuminant invariance on real multi-illuminant pairs, and
+that tie the predictions to ground-truth labels on synthetic data, \emph{CIAI
+losses} that enforce albedo invariance on real multi-illumination pairs, and
 \emph{physics and regularisation terms} that keep the decomposition consistent.
 The total loss is a weighted sum; \tabref{tab:losses} lists every active term
 with its weight.
@@ -27,8 +27,8 @@ with its weight.
     Loss terms used in training, with the weights of the final
     configuration.
     Supervised anchors require ground-truth labels and are gated to the
-    synthetic datasets that provide them; CARI terms require multi-illuminant
-    pairs and fire only on MID batches during the CARI stage; physics terms
+    synthetic datasets that provide them; CIAI terms require multi-illuminant
+    pairs and fire only on MID batches during the CIAI stage; physics terms
     apply only where their required targets and masks exist.
     A gradient-decorrelation loss (forcing albedo and shading edges apart) was
     evaluated and \emph{rejected}: it assumes albedo and shading edges never
@@ -42,7 +42,7 @@ with its weight.
     \toprule
     Loss term & Symbol & Weight & Applies to \\
     \midrule
-    Albedo $\ell_1$              & $\mathcal{L}_{\text{a}}$        & 1.0  & Hypersim, IV, MID (pseudo-GT) \\
+    Albedo squared error         & $\mathcal{L}_{\text{a}}$        & 1.0  & Hypersim, IV, MID (pseudo-GT) \\
     Albedo DSSIM                 & $\mathcal{L}_{\text{dssim}}$    & 0.2  & same as $\mathcal{L}_{\text{a}}$ \\
     Albedo multi-scale gradient  & $\mathcal{L}_{\text{msg-a}}$    & 0.5  & same as $\mathcal{L}_{\text{a}}$ \\
     Albedo chroma direction      & $\mathcal{L}_{\text{chroma}}$   & 0.2  & same as $\mathcal{L}_{\text{a}}$ \\
@@ -52,7 +52,7 @@ with its weight.
     Reconstruction gradient      & $\mathcal{L}_{\text{msg-r}}$    & 0.25 & Hypersim \\
     Residual closure + sparsity  & $\mathcal{L}_{\text{res}}$      & 0.5 / 0.02 & Hypersim, MID \\
     Material consistency (DINO)  & $\mathcal{L}_{\text{mat}}$      & 0.05 & all datasets \\
-    Cross-render invariance      & $\mathcal{L}_{\text{inv}}$      & 0.5  & MID raw pairs \\
+    Cross-illumination invariance      & $\mathcal{L}_{\text{inv}}$      & 0.5  & MID raw pairs \\
     Shading explanation          & $\mathcal{L}_{\text{expl}}$     & 0.25 & MID raw pairs \\
     Shading sign prior           & $\mathcal{L}_{\text{sign}}$     & 0.05 & all datasets \\
     \bottomrule
@@ -64,16 +64,17 @@ with its weight.
 
 \paragraph{Albedo ($\mathcal{L}_{\text{a}}$, $\mathcal{L}_{\text{dssim}}$,
 $\mathcal{L}_{\text{msg-a}}$, $\mathcal{L}_{\text{chroma}}$)}
-The core albedo supervision is a masked $\ell_1$ loss against the ground-truth
-albedo $\mathbf{A}^*$:
+The core albedo supervision is a masked squared error against the ground-truth albedo
+$\mathbf{A}^*$, after the ground truth is scaled to the prediction by one least-squares
+factor per image (albedo is only defined up to scale):
 \begin{equation}
   \mathcal{L}_{\text{a}} =
   \frac{1}{|\Omega_m|}\sum_{p \in \Omega_m}
-  \bigl\| \mathbf{A}(p) - \mathbf{A}^*(p) \bigr\|_1
+  \bigl\| \mathbf{A}(p) - \mathbf{A}^*(p) \bigr\|_2^2
   \label{eq:l_albedo}
 \end{equation}
 where $\Omega_m$ excludes invalid pixels (missing labels, clipped regions).
-This is the dominant \emph{absolute-colour anchor} of the whole system: CARI
+This is the dominant \emph{absolute-colour anchor} of the whole system: CIAI
 constrains albedo to be equal \emph{across} illuminants but says nothing about
 what the correct colour \emph{is}; without a strong absolute anchor, the
 invariance constraint alone could be satisfied by grey.
@@ -165,7 +166,7 @@ The term is enabled only for Hypersim, where the target is the measured
 ground-truth diffuse product. It is a \emph{two-sided} coupling: both predicted
 factors must jointly explain $\mathbf{A}^*\odot\mathbf{S}^*_d$. InteriorVerse and
 MID do not activate this loss in the implemented configuration; those batches
-are supervised by their available albedo, material, residual, sign, and CARI
+are supervised by their available albedo, material, residual, sign, and CIAI
 terms instead. This masking is important: defining an input-derived target for
 datasets without measured shading would change the trained objective.
 
@@ -182,15 +183,15 @@ A small sparsity term (weight 0.02) additionally pushes $\mathbf{R} \to 0$
 inside the valid mask, so the diffuse product rather than the residual must explain
 the image.
 
-\subsection{CARI Losses}
+\subsection{CIAI Losses}
 
-The two CARI losses $\mathcal{L}_{\text{inv}}$ (weight 0.5) and
+The two CIAI losses $\mathcal{L}_{\text{inv}}$ (weight 0.5) and
 $\mathcal{L}_{\text{expl}}$ (weight 0.25) are defined in \secref{sec:cari}.
 They are computed by running the network a second time on the paired frame
 $\mathbf{I}_2$ within the same training step (a Siamese second forward with
 shared weights) and are masked by the intersection of the loss mask, the
 material-invariance mask, and the per-pair HDR validity mask.
-They fire on batches that contain MID raw pairs, i.e.\ from the CARI stage
+They fire on batches that contain MID raw pairs, i.e.\ from the CIAI stage
 onwards (\secref{sec:schedule}).
 
 \subsection{Physics and Regularisation Losses}
@@ -208,8 +209,8 @@ The sign prior penalises exactly that overshoot:
 \end{equation}
 The intuition is ``anything that brightens the image beyond the light must come
 from the material, not the shading'': the term pushes brightening texture out of
-the shading and into the albedo, complementing CARI (which pushes illuminant
-colour out of the albedo and into the shading).
+the shading and into the albedo, complementing CIAI (which pushes the change in
+illumination between two frames out of the albedo and into the shading).
 
 \paragraph{Material consistency ($\mathcal{L}_{\text{mat}}$)}
 The frozen DINOv2 tokens provide a label-free material signal: two patches with
@@ -232,12 +233,12 @@ with a fixed protocol and metric; that combination is a \emph{benchmark}. MID
 appears in both roles, but its training and test scenes are disjoint.
 Three are existing public corpora and carry the two-stage schedule of
 \secref{sec:schedule}: Hypersim and InteriorVerse supply supervised albedo, and
-MID supplies the real cross-render pairs that CARI trains on.
+MID supplies the real cross-illumination pairs that CIAI trains on.
 The fourth, 3D-Front-IID (\secref{sec:front3d}), is rendered for this thesis to
 supply the one combination none of the others offers: a large, deliberately
 coloured illuminant change \emph{and} a ground-truth albedo for the same camera.
-It enters at the refinement stage, where \secref{sec:lever_sweep} studies its
-contribution in an exploratory configuration comparison.
+It is not part of the reported model; \secref{sec:colour_axis} uses it in a follow-up
+study of the colour axis.
 
 \begin{figure}[t!]
   \centering
@@ -245,7 +246,7 @@ contribution in an exploratory configuration comparison.
   \caption[One representative frame per dataset, with its training role.]{%
     Hypersim and InteriorVerse are both synthetic and both supply supervised
     albedo; MID is real and is the only source of the paired cross-illuminant
-    observations CARI is trained on. No single dataset provides everything the
+    observations CIAI is trained on. No single dataset provides everything the
     model needs.
   }
   \label{fig:dataset_roles}
@@ -283,7 +284,7 @@ material diversity, rather than a separately measured diffuse-image target.
 
 \subsection{MID: Real Multi-Illuminant Pairs}
 
-MID \mycite{midintrinsics} provides the cross-render training signal: over
+MID \mycite{midintrinsics} provides the cross-illumination training signal: over
 1{,}000 real indoor scenes, each captured 25 times with a flash bounced in a
 different direction, pixel-aligned, with the 30 test scenes held out
 (\secref{sec:mid_dataset}).
@@ -296,22 +297,21 @@ multi-illumination stack; it is not part of the original MID release.
 The white-balanced primary frame is supervised against this pseudo-GT with the
 standard albedo losses, which anchors absolute colour on real photographs.
 
-\emph{(ii) A raw cross-render pair.}
+\emph{(ii) A raw cross-illumination pair.}
 A second frame of the same scene, under a different bounce direction, is loaded
 \emph{raw}, without white balance, together with a per-pair HDR validity mask
 that drops pixels clipped or near-black in either frame.
-The CARI losses operate on this pair.
-As established in \secref{sec:cari}, disabling white balance here is essential
-(the \texttt{mid\_raw\_color\_pair} flag): the measured 15--25\% illuminant
-chromaticity variation across bounce directions \emph{is} the training signal,
-and white balance would erase it.
-An earlier configuration approximated this signal with synthetic chromatic
-augmentation (random global tints on the pair frame); it measurably hurt
-constancy on ARAP, because the synthetic tint distribution does not match real
-illuminants, and it was replaced by the raw pairs.
+The CIAI losses operate on this pair.
+Skipping white balance here (the \texttt{mid\_raw\_color\_pair} flag,
+\secref{sec:raw_pairs}) keeps the small bounce-colour difference between the two
+frames; the brightness and shadow change, which is the main signal MID provides, is
+present either way.
+An earlier configuration added random global tints to the pair frame to create colour
+differences synthetically; it did not help in our early tests and was dropped. A later,
+calibrated version of the same idea is evaluated in \secref{sec:colour_axis}.
 \figref{fig:mid_preprocessing} summarises this preprocessing split: the
 white-balanced primary frame provides the supervised colour anchor, while the raw
-paired frames preserve the illuminant change used by CARI.
+paired frames preserve the illuminant change used by CIAI.
 
 \begin{figure}[t!]
   \centering
@@ -322,11 +322,11 @@ paired frames preserve the illuminant change used by CARI.
     The supervised path uses a white-balanced primary frame and the dataset
     pseudo-ground-truth albedo to anchor absolute material colour on real
     photographs.
-    The CARI path keeps two aligned frames raw, without white balance, and masks
+    The CIAI path keeps two aligned frames raw, without white balance, and masks
     pixels that are clipped or too dark in either exposure before applying the
-    cross-render losses.
+    cross-illumination losses.
     This split keeps the albedo target stable while preserving the illuminant
-    chromaticity change that CARI needs as supervision.
+    chromaticity change that CIAI needs as supervision.
   }
   \label{fig:mid_preprocessing}
 \end{figure}
@@ -335,14 +335,13 @@ paired frames preserve the illuminant change used by CARI.
 \label{sec:front3d}
 
 \paragraph{Motivation: the gap MID cannot close}
-MID is the only \emph{real} source of cross-render pairs available to CARI, and
+MID is the only \emph{real} source of cross-illumination pairs available to CIAI, and
 the thesis depends on it, but it constrains the method along two axes at once.
-First, MID varies the illuminant by bouncing a single flash in a different
-\emph{direction}: what changes most between two frames is the geometry and
-intensity of the light, and only incidentally its colour, whose chromaticity
-moves by roughly 15--25\% across bounce directions (\secref{sec:mid_dataset}).
-The literal claim of this thesis is about \emph{coloured} illumination, and the
-one dataset that supervises it does so only weakly and indirectly.
+First, MID varies the illuminant by bouncing a single white flash in a different
+\emph{direction}: what changes between two frames is the geometry and intensity of
+the light, and only incidentally its colour, with a median chromaticity gap of $0.030$
+between frames (\secref{sec:mid_dataset}). For colour, the one real dataset with
+pixel-aligned multi-illumination pairs supervises only weakly and indirectly.
 Second, MID has no measured dense albedo: its pseudo-ground-truth is itself
 derived from the white-balanced capture stack.
 On a MID pair the invariance loss therefore acts without an independent
@@ -351,7 +350,7 @@ two predictions from agreeing on a \emph{wrong} albedo; the anchor has to
 arrive from a different dataset, on a different image.
 The synthetic corpora have the opposite problem: Hypersim and InteriorVerse
 supply exact albedo, but each image is a single illumination, so they carry no
-cross-render signal at all.
+cross-illumination signal at all.
 
 Among the public datasets available to this project, none offered both
 properties together. We therefore rendered one.
@@ -392,14 +391,19 @@ Four design decisions define it.
 \end{itemize}
 
 The resulting corpus contains 960 rooms and 2{,}496 accepted views, yielding
-\textbf{5{,}056 cross-illuminant pairs}. The illuminant separation is wide and
-guaranteed: the median rg-chromaticity distance between the two illuminants of
-a pair is $0.23$, and no pair falls below the enforced floor of $0.055$.
+\textbf{5{,}056 cross-illuminant pairs}. The key-light separation is wide and
+guaranteed: the median rg-chromaticity distance between the two key lights of
+a pair is $0.23$, and no pair falls below the enforced floor of $0.055$. Measured as
+the effective illuminant of the rendered image (key and fill together, read from
+$\mathbf{I}/\mathbf{A}^*$, the same statistic we use for MID), the median pair gap is
+$0.153$, five times MID's, and even the weakest tenth of pairs ($0.069$) lies above MID's
+median. The corpus therefore never shows the model a subtle colour change, a gap that
+matters for transfer (\secref{sec:colour_axis}).
 \figref{fig:front3d} shows samples together with the measured illuminant gamut
 and pair-separation distribution.
 
 \paragraph{What the corpus is designed to test}
-A 3D-Front-IID sample is the only one in the mix where the cross-render pair and
+A 3D-Front-IID sample is the only one in the mix where the cross-illumination pair and
 an exact albedo target coexist \emph{on the same pixels}: the loader returns two
 lit observations, the ground-truth albedo, and a per-pair validity mask.
 Two things follow.
@@ -408,16 +412,14 @@ the degenerate solution available on an unanchored pair, in which two prediction
 drift together onto a consistent but incorrect albedo, is directly
 penalised rather than left to a different dataset to correct.
 And because the varied quantity is illuminant \emph{colour} by construction,
-CARI is supervised on the axis the thesis actually claims, instead of inferring
-it from a direction change that only partly implies it.
+CIAI is supervised on colour directly, instead of inferring it from a direction
+change that only partly implies it.
 Its shading, like InteriorVerse's, is defined only implicitly as
 $\mathbf{S}^*_d = \mathbf{I}/\mathbf{A}^*$, so 3D-Front-IID is excluded from the
-shading-ground-truth-gated losses; it contributes the albedo anchor and the CARI
+shading-ground-truth-gated losses; it contributes the albedo anchor and the CIAI
 pair, not a shading target.
-\secref{sec:lever_sweep} measures what this contributes by adding the corpus to
-the training mix as one arm of an exploratory comparison. The configurations
-differ in more than one lever, so this study motivates a conclusion about the
-combined training recipe rather than a single-cause estimate of the corpus.
+\secref{sec:colour_axis} measures what it contributes by continuing our model with
+and without the corpus in the training mix.
 
 \begin{figure}[t!]
   \centering
@@ -433,8 +435,8 @@ combined training recipe rather than a single-cause estimate of the corpus.
     not confined to the locus, so the illuminant gamut covers saturated colours
     that natural white-balanced capture never contains.
     (c) The chromaticity distance between the two illuminants of each of the
-    5{,}056 cross-render pairs. The renderer enforces a minimum separation, so
-    every pair CARI can draw carries a real illuminant-colour change; the median
+    5{,}056 cross-illumination pairs. The renderer enforces a minimum separation, so
+    every pair CIAI can draw carries a real illuminant-colour change; the median
     separation is $0.23$.
   }
   \label{fig:front3d}
@@ -473,7 +475,7 @@ Training proceeds in two stages, as illustrated in \figref{fig:curriculum}.
 
     % stage brackets
     \node[align=center] at (2.5, 2.1) {\textbf{Stage A}: synthetic warm-up};
-    \node[align=center] at (8.5, 2.1) {\textbf{Stage B}: CARI};
+    \node[align=center] at (8.5, 2.1) {\textbf{Stage B}: CIAI};
 
     % timeline axis
     \draw[-latex] (0, -0.5) -- (12.4, -0.5) node[right, font=\scriptsize] {iteration};
@@ -482,7 +484,7 @@ Training proceeds in two stages, as illustrated in \figref{fig:curriculum}.
 
     % checkpoint markers
     \draw[-latex, thick] (5, -1.7) -- (5, -1.0);
-    \node[lbl, anchor=north] at (5, -1.7) {baseline checkpoint\\(no CARI, banked)};
+    \node[lbl, anchor=north] at (5, -1.7) {baseline checkpoint\\(no CIAI, banked)};
     \draw[-latex, thick] (12, -1.7) -- (12, -1.0);
     \node[lbl, anchor=north] at (12, -1.7) {final model};
 
@@ -490,15 +492,15 @@ Training proceeds in two stages, as illustrated in \figref{fig:curriculum}.
     \draw[|-|, thick] (0, 3.2) -- (12, 3.2)
       node[midway, above, font=\scriptsize] {supervised + physics + regularisation losses};
     \draw[|-|, thick, red!70!black] (5, 2.55) -- (12, 2.55)
-      node[midway, above, font=\scriptsize] {CARI losses ($\mathcal{L}_{\text{inv}}$, $\mathcal{L}_{\text{expl}}$)};
+      node[midway, above, font=\scriptsize] {CIAI losses ($\mathcal{L}_{\text{inv}}$, $\mathcal{L}_{\text{expl}}$)};
   \end{tikzpicture}}
   \caption[Two-stage training schedule.]{%
     Two-stage training schedule.
     Stage A establishes the supervised baseline on synthetic data (Hypersim,
     later joined by InteriorVerse).
     Stage B resumes from the Stage-A checkpoint and adds MID raw pairs with the
-    CARI losses, keeping the synthetic majority as the absolute-colour anchor.
-    The Stage-A checkpoint doubles as the no-CARI baseline in the ablation
+    CIAI losses, keeping the synthetic majority as the absolute-colour anchor.
+    The Stage-A checkpoint doubles as the no-CIAI baseline in the ablation
     study (\secref{sec:ablation}).
   }
   \label{fig:curriculum}
@@ -509,21 +511,21 @@ The model first trains on Hypersim alone, after which InteriorVerse joins the
 mix.
 Only the supervised, physics, and regularisation losses are active.
 This stage gives the model absolute albedo colour and scale \emph{before} any
-invariance constraint is applied. This ordering matters because, when applied to an
-unanchored model, an invariance loss can be satisfied by collapsing towards
-grey, whereas applied to a colour-anchored model it can only be satisfied by
-moving the illuminant colour into the shading.
-The Stage-A checkpoint is banked as the no-CARI baseline used throughout
+invariance constraint is applied. The ordering matters because an invariance loss
+applied to an unanchored model can be satisfied by collapsing towards grey; on an
+anchored model the supervised losses keep penalising that collapse while the
+invariance loss acts.
+The Stage-A checkpoint is banked as the no-CIAI baseline used throughout
 \chapref{ch:experiments}.
 
-\paragraph{Stage B: CARI}
-Training resumes from the Stage-A checkpoint with the CARI configuration: the
+\paragraph{Stage B: CIAI}
+Training resumes from the Stage-A checkpoint with the CIAI configuration: the
 data mix becomes Hypersim / MID / InteriorVerse (with MID and InteriorVerse
-each roughly matching Hypersim's share), the raw cross-render pairs enter
+each roughly matching Hypersim's share), the raw cross-illumination pairs enter
 through MID, and $\mathcal{L}_{\text{inv}}$/$\mathcal{L}_{\text{expl}}$
 activate.
 The synthetic majority keeps re-anchoring absolute colour throughout,
-preventing drift while the invariance constraint reshapes the colour split.
+preventing drift while the invariance constraint acts on the MID pairs.
 The end-of-schedule checkpoint is the final model reported in
 \chapref{ch:experiments}.
 We describe the schedule here by stage rather than by a specific iteration
@@ -538,15 +540,15 @@ Batches of 4 crops at $512 \times 512$ are accumulated over 8 steps (effective
 batch size 32), with gradient-norm clipping at 1.0.
 All training runs on a single 24\,GB NVIDIA Quadro RTX 6000.
 
-\paragraph{The full-CARI configuration}
-The model reported as ``full CARI'' is this architecture trained under the
-two-stage schedule above to 50k iterations: Stage~A establishes absolute albedo
+\paragraph{The reported configuration}
+The model reported as ``Ours'' is this architecture trained under the two-stage schedule
+above to 40k iterations (Stage~A to 19k, Stage~B from 19k to 40k): Stage~A establishes absolute albedo
 colour and shading structure from Hypersim and InteriorVerse, and Stage~B adds
-the real MID raw cross-render pairs and activates the cross-render losses
+the real MID raw cross-illumination pairs and activates the cross-illumination losses
 $\mathcal{L}_{\text{inv}}$ and $\mathcal{L}_{\text{expl}}$ together with the wide
 colour skip.
-Because the cross-render terms require a \emph{second} forward pass on the paired
-frame, the CARI stage holds two graphs in memory; on the 24\,GB card this caps
+Because the cross-illumination terms require a \emph{second} forward pass on the paired
+frame, the CIAI stage holds two graphs in memory; on the 24\,GB card this caps
 the per-step crop count, which the gradient accumulation above compensates for.
 The frozen DINOv2-Large encoder (304\,M parameters) is kept in evaluation mode
 throughout, so only the $\sim$18.5\,M decoder-and-head parameters receive

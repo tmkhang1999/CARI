@@ -682,7 +682,7 @@ def run_eval(ckpt_path, label, scenes, device, version, infer_max_size=None):
 
     if predictor.is_external:
         print('  [external/zero-shot] → constancy + cast ONLY; LMSE/sat-bins BLANKED '
-              '(MID albedo is pseudo-GT, in-domain for CARI — §6.0).')
+              '(MID albedo is pseudo-GT, in-domain for CIAI — §6.0).')
 
     all_cmat, all_rg, all_bg, all_rms, all_lmse, all_sat_bins, all_valid = [], [], [], [], [], [], []
     _EXTRA = ('Cast_within', 'Cast_between', 'Cast_rel', 'GT_between',
@@ -789,7 +789,7 @@ def print_table(results):
 
     if any(r.get('is_external') for r in results):
         print('\n  * external/zero-shot — LMSE & SAT bins omitted (MID albedo is pseudo-GT, '
-              'in-domain for CARI). Compare these rows on C_mat & Cast_RMS only (§6.0).')
+              'in-domain for CIAI). Compare these rows on C_mat & Cast_RMS only (§6.0).')
 
     # ── Corrected cast: the pooled Cast_RMS above conflates across-illuminant drift with
     # between-material chroma spread, and so rewards models that collapse material colour.
@@ -855,12 +855,12 @@ def main():
                         help='N-way: space-separated "label=path" pairs (first = baseline).')
     parser.add_argument('--ckpt19k', default='checkpoints/checkpoint_v17_iter_19000.pth')
     parser.add_argument('--ckpt30k', default='checkpoints/v17_row2/checkpoint_iter_30000.pth')
-    parser.add_argument('--mid-root', default='/home/khang/datasets/MIDIntrinsics')
+    parser.add_argument('--mid-root', default=str(ROOT.parent / 'datasets' / 'MIDIntrinsics'))
     parser.add_argument('--split', default='test')
     parser.add_argument('--max-scenes', type=int, default=None)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--save-json',
-                        default='documents/evals/results/eval_mid_constancy_results.json',
+                        default='outputs/eval_mid_constancy_results.json',
                         help='Path to save results JSON (relative to repo root)')
     parser.add_argument('--save-vis',
                         help='Directory to save the multi-illuminant constancy sheet.')
@@ -927,8 +927,8 @@ def main():
             ckpt_specs.append((label, _abs(path), version))
     else:
         for label, path, version in [
-            ('V17 19k (pre-CARI baseline)', args.ckpt19k, '17'),
-            ('V17 30k (+CARI P3 11k iters)', args.ckpt30k, '17'),
+            ('V17 19k (pre-CIAI baseline)', args.ckpt19k, '17'),
+            ('V17 30k (+CIAI P3 11k iters)', args.ckpt30k, '17'),
         ]:
             rpath = _abs(path)
             if not os.path.exists(rpath):

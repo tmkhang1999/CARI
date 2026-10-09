@@ -6,173 +6,128 @@
 
 \section{Summary}
 
-This report presented an intrinsic image decomposition model trained with
-Cross-Render Albedo Invariance (CARI).
-The central problem we addressed is the leakage of coloured illumination into the
-predicted albedo: when a room is lit by a warm yellow lamp, standard IID models
-tend to predict a slightly yellow version of the wall's true colour because they
-have no mechanism to distinguish the lamp's hue from the material's hue.
+This report studied Cross-Illumination Albedo Invariance (CIAI), a training strategy for
+intrinsic image decomposition in which two photographs of the same scene under different
+illumination must yield the same albedo, and the shading must explain the change in
+brightness between them. We added it as a second training stage to a feed-forward model
+with a frozen DINOv2-Large encoder, a DPT decoder and three-channel shading, using real
+raw pairs from the Multi-Illumination Dataset and the MIDIntrinsics pseudo-ground truth.
 
-CARI attacks this problem at the training stage rather than the model stage.
-By presenting the model with pairs of images of the same scene photographed under
-different coloured lights, and penalising any change in the predicted albedo
-between the two images, we force the model to assign all the illuminant colour
-information to the shading layer.
-This approach requires two practical ingredients: a dataset with real multi-illuminant
-pairs (we use MID), and a commitment to not applying white balance to those pairs.
-White balance neutralises the illuminant colour before training, which removes the
-very signal that CARI needs to operate.
+The strategy does what its training signal supports. MID's pairs differ mainly in the
+direction and intensity of a white flash, and the explanation loss is defined on
+luminance; correspondingly, CIAI reduces the variation of recovered material lightness
+across illuminations by $28\%$ and $39\%$ in matched ablations, and it lowers the dense
+albedo error on raw, coloured-lit ARAP renderings by $7$--$14\%$, a benchmark outside its
+training data. Against other methods our model is more lightness-stable than CD-IID, both
+Marigold variants and Ordinal Shading, level with CRefNet and behind RGB$\rightarrow$X, while
+training $18.5$M parameters. It is behind CD-IID on in-domain chroma error and mid-table on
+MAW.
 
-Establishing this required repairing the instrument before we could trust the reading.
-The chroma-cast score we had inherited and used in earlier drafts of this work
-pools albedo chromaticity across all the materials of a scene before taking its variance,
-and so measures the scene's ordinary chromatic diversity alongside the illuminant-induced
-drift it is intended to isolate. That diversity term is computed from the model's own
-prediction, which makes the score reducible by a model that simply desaturates its albedo.
-The metric, in other words, paid models to destroy the quantity intrinsic decomposition
-exists to recover. It ranked the configuration of our own model whose albedo is visibly
-drained of colour as the best in the ablation, and the colour-preserving configuration as
-the worst. Decomposing the score into a scale-normalised invariance term and a calibration
-term anchored on MID pseudo-ground truth reverses that verdict and brings the
-numbers back into agreement with what the images plainly show
-(\secref{sec:mid_results}, \figref{fig:chroma_fidelity}).
+The strategy does not deliver colour stability. Hue drift improves only slightly under
+CIAI, and our model's drift grows with the illuminant colour as much as a grey-shading
+method's. Two follow-up studies bound the reason: a chroma explanation loss on the existing
+shading reduces drift only by reducing the model's own colour, and rendered pairs with
+strong colour changes are learned almost perfectly without transferring to photographs.
+The method that does show colour-independent drift, CD-IID, predicts the shading colour
+in a dedicated stage, which points to a structural rather than a loss-weighting remedy.
 
-Our experiments then compare CARI against a matched no-CARI baseline and against
-external methods across four benchmarks: MID and ARAP for colour-illuminant
-constancy, MAW for measured albedo accuracy, and IIW for perceptual shading
-quality (\chapref{ch:experiments}).
-The result is a conjunction rather than a clean sweep, and we state it as such. Our model
-is the only one in the comparison that is simultaneously colour-faithful and competitively
-invariant: it closely matches the MID pseudo-GT chroma calibration and
-holds the best material-lightness stability in the roster. It does \emph{not} hold the
-best hue-invariance score; two external methods do. The fidelity guard shows why
-that ranking is not the compliment it appears to be: both of them buy their invariance by
-discarding real albedo colour, one of them to very nearly the same degree as the ablated
-configuration of our own model that we discarded on sight. Where we trail on IIW, the
-evidence only establishes weaker sparse relative-reflectance ordering. More decisively,
-fine-tuning directly for IIW lowers WHDR by $17\%$ while worsening MID lightness constancy by
-$47\%$, MAW colour error by $30\%$, and MAW intensity error by $69\%$. The benchmark gain
-therefore hides damage to the constancy and measured-albedo properties central to this thesis.
-
-The ablation identifies the reliable causal result: real cross-illuminant pairs
-improve constancy when the colour path is held fixed. The later refinement study
-is deliberately weaker evidence because its rows do not all share an identical
-data mixture; it records useful trade-offs without claiming that every change is
-caused by one isolated factor.
+Two findings concern the model and the measurement rather than the strategy. The
+desaturated albedo of the base model is architectural and is fixed by a colour path,
+with or without CIAI. And a stability score computed on predictions alone, such as the
+pooled chroma variance of our early drafts, can be improved by discarding colour; every
+stability result here is therefore reported beside an accuracy result.
 
 
 \section{Limitations}
 
-Our approach has several limitations that future work could address.
-\figref{fig:limitations} shows two measured failure modes directly, because most other qualitative
-figure in this thesis shows the method working and that is not, on its own, evidence of
-anything.
+\paragraph{Colour}
+The main limitation is the one this report measures: the trained model does not separate
+illuminant colour from material colour reliably, and MID cannot teach it to. The real
+training pairs vary colour over a median gap of $0.030$, and the stability benchmark
+measures hue drift over the same narrow range, so the colour results are both a modelling
+result and a measurement limit.
 
-\begin{figure}[t!]
-  \centering
-  \includegraphics[width=\textwidth]{images/limitations/limitations.jpg}
-  \caption[Representative limitations: flatness and non-diffuse surfaces.]{%
-    Where the method fails. From left: the input; the ground-truth albedo; our selected
-    model; the same model with the flatness prior at full strength; and a per-pixel map of
-    how much our predicted albedo moves when only the illuminant moves.
-    \textbf{The flatness prior is not free.} At full strength (Table-B Row~5) it does not
-    merely smooth texture. It is associated with an aggregate chroma-spread ratio of
-    $1.055$, compared with $0.941$ for the selected model, and costs a quarter of a
-    $\Delta E$ unit on MAW. Because the recorded data mixtures differ, this does not
-    isolate the flatness weight causally; it documents the failure of the full Row~5
-    configuration.
-    \textbf{Non-diffuse surfaces remain unsolved.} The instability map is not uniform: it
-    concentrates on the mirrored sphere and the glossy lid. An albedo--shading product has
-    no representation for a mirror, so the residual absorbs what it can and the rest
-    surfaces as cross-illuminant drift.
-  }
-  \label{fig:limitations}
-\end{figure}
+\paragraph{One architecture, single runs}
+CIAI is presented as a training strategy, but it has been tested on one architecture, a
+frozen-encoder regression model. Whether its lightness gain holds for convolutional,
+fine-tuned transformer or diffusion models is untested. Most comparisons are single
+training runs; the seed spread we measured ($11\%$ in $C_{\text{mat}}$) is smaller than the
+CIAI effect, but it means smaller differences should not be read as effects.
 
-\paragraph{Constancy-structure trade-off}
-As described in \secref{sec:iiw_results}, the model does not simultaneously
-achieve its best constancy and its best WHDR.
-The fine-tuning diagnostic shows that the two objectives can pull in opposite directions:
-improving sparse relative-reflectance ordering damages both material-lightness stability and
-measured albedo accuracy.
-Resolving this tension likely requires an explicit model of the illuminant,
-so the network can separate material colour from illuminant colour more cleanly
-rather than just being constrained not to let them mix.
+\paragraph{Benchmarks}
+The ARAP results were computed with a mask that fails on ARAP's mixed ground-truth
+encodings and are provisional (\secref{sec:arap_results}). MID is in the training data of
+both our model and CD-IID, so no MID comparison is zero-shot, and its pseudo-ground truth
+is itself derived from the capture stack.
 
-\paragraph{Invariance cannot be optimised for on its own}
-The metric correction of \secref{sec:mid_results} is not merely a bookkeeping fix; it
-constrains what any future work on this problem may claim. A perfectly constant predictor
-(one that emits flat grey albedo regardless of its input) is \emph{perfectly}
-illuminant-invariant, and will score better on any pure drift measure than any model that
-actually recovers colour. Invariance is therefore not a quantity that can be reported, or
-optimised, in isolation: it is only meaningful paired with a fidelity term that is
-anchored on an external albedo reference rather than on the model's own output. MID
-provides a dataset-derived pseudo-reference; MAW supplies the independently measured
-check. We suspect this
-degeneracy is not peculiar to our formulation, since the pooled score we inherited exhibits
-it, and we note that two of the four external methods we evaluate lead the uncorrected
-score while measurably discarding albedo colour. A systematic audit of how colour constancy
-is scored elsewhere in the IID literature is beyond the scope of this thesis, but our
-result suggests it would be worth conducting.
+\paragraph{Single-image accuracy}
+CIAI buys stability, not single-image accuracy: on MAW it slightly worsens both measures,
+and on IIW the model trails most baselines. A stronger base model, or the cross-architecture
+study below, is needed before the strategy can be judged on accuracy.
 
-\paragraph{Achromatic ambiguity}
-Even with perfect coloured-illuminant constancy, a different fundamental ambiguity
-remains: a dark textured surface (say, a dark grey carpet with visible pile) can
-look similar to a lighter surface under a slight shadow.
-This achromatic texture-shading confusion is not resolved by CARI, which only
-deals with coloured differences between images.
-It is the fundamental ill-posedness of IID, and addressing it requires geometric
-priors or cross-image consistency beyond what CARI provides.
-
-\paragraph{Scale of multi-illuminant training data}
-MID contains approximately 1,000 scenes, but it is still much smaller and less
-varied than the synthetic corpora used for supervised IID training.
-The constancy constraint is therefore applied to a relatively limited set of
-scene-illuminant combinations, which limits how much the model can generalise.
-More multi-illuminant data, especially with a wider variety of illuminant colours
-and surface materials, would likely improve the constancy further.
-
-\paragraph{Grey shading assumption in the loss, not the representation}
-The model's shading output is three-channel (\secref{sec:physics}), so it can
-represent spatially varying illuminant colour in principle.
-What remains grey-biased in practice is the \emph{supervision}: the
-ground-truth shading available from Hypersim is achromatic, so the
-three-channel shading head is disambiguated toward colour almost entirely by
-CARI on MID pairs, which is a comparatively small and less spatially diverse
-signal.
-A scene with two differently coloured light sources active in different
-regions of the same image is not well represented in either training source,
-which limits how finely the model can localise a spatially mixed illuminant.
+\paragraph{Achromatic ambiguity and non-diffuse surfaces}
+Hard cast shadows can still be read as material, and mirrors, glass and glossy plastic are
+unstable across illuminations because an albedo--shading product has no representation for
+them; the residual absorbs only part of their appearance (\figref{fig:mid_constancy}).
 
 
 \section{Future Work}
 
-Several directions follow naturally from this work.
+The next stage of the project follows directly from the findings above. It has five parts,
+ordered so that each result is interpretable before the next is built on it.
 
-\paragraph{Stronger and more plentiful invariance signals}
-The ablation points toward the signal itself: more cross-illuminant pairs,
-covering more materials and a wider range of illuminant colours, would directly
-strengthen the constraint that does the work in our approach.
-A structured illuminant representation (for example, a small palette of
-illuminant colours with a spatial assignment map) remains an interesting
-direction for representing \emph{spatially mixed} illuminants, but our
-current evidence suggests it should be pursued as a complement to a strong
-invariance signal, not as a substitute for one.
+\paragraph{1. Show that CIAI is a training strategy, not a property of one decoder}
+Train each of three architectures with and without the CIAI stage, from the same
+supervised initialisation, on the same data and for the same number of steps, with three
+seeds per arm: a convolutional U-Net with an ImageNet-pretrained encoder; a DPT decoder on
+a \emph{fine-tuned} DINOv2 encoder; and a latent-diffusion decomposer (Marigold-IID) adapted
+to single-step deterministic inference \mycite{martingarcia25e2eft}, which makes the
+prediction a differentiable function of the input so that a paired loss can be applied to
+it. The claim to test is a consistent reduction in $C_{\text{mat}}$ without loss on MAW.
 
-\paragraph{Quantifying the enhancement application}
-\chapref{ch:practice} demonstrates that the recovered decomposition supports
-qualitative edits (residual suppression and factor-space illumination adjustment)
-without any additional training.
-A natural extension is to evaluate these edits quantitatively, for example by
-user studies on perceived realism of edited images, or downstream enhancement
-metrics, thereby turning the qualitative demonstration into
-a measured application.
+\paragraph{2. A shading model that separates luminance from chroma}
+Predict the image as
+\begin{equation}
+  \mathbf{I} = \mathbf{A} \odot \bigl(S_{\text{lum}}\,\mathbf{C}\bigr) + \mathbf{R},
+  \qquad Y(\mathbf{C}) = 1 ,
+  \label{eq:trifactor}
+\end{equation}
+with a scalar shading luminance $S_{\text{lum}}$, a unit-luminance shading chroma map
+$\mathbf{C}$ predicted by its own head with a low-frequency and a global component, and
+the albedo $\mathbf{A}$. This follows the separation that makes CD-IID colour-stable, inside
+a single network (\texttt{src/models/v21\_trifactor.py}). The colour path changes accordingly:
+the albedo head receives the illuminant-corrected image
+$\mathbf{I} / (S_{\text{lum}}\mathbf{C})$ rather than the raw input, so that material colour
+reaches it and illuminant colour does not. A three-row ablation (raw skip, corrected skip,
+no skip, each with the chroma loss on albedo) decides whether the corrected skip is better.
 
-\paragraph{Evaluation on additional coloured-illuminant benchmarks}
-The Beigpour MIID dataset \mycite{beigpour13miid} (\secref{sec:multiillum})
-provides real scenes with multiple coloured light sources and ground-truth
-illuminant annotations.
-If access becomes available, evaluating on it would test the model on a more controlled version of the
-multi-illuminant problem and provide a comparison point with multi-illuminant
-colour-constancy methods, in addition to the IID methods compared in
-\chapref{ch:experiments}.
+\paragraph{3. Losses matched to the factors}
+Keep $\mathcal{L}_{\text{inv}}$ on the albedo and apply the luminance explanation loss to
+$S_{\text{lum}}$. Add the chroma explanation loss of \eqnref{eq:lchr} on $\mathbf{C}$, where it
+can only be satisfied by moving colour into the chroma factor, and apply it only to pairs
+whose measured illuminant gap exceeds a threshold (for example $0.08$), since on near-neutral
+pairs it fits noise. Supervise $\mathbf{C}$ directly wherever ground truth exists.
+
+\paragraph{4. Training pairs whose illuminant colour actually varies}
+The second 3D-Front-IID render covers the range from near-neutral to strongly coloured pairs
+(tenth to ninetieth percentile gap $0.008$ to $0.35$) with exact albedo and shading chroma;
+its pilot fails only a hard-shadow quality gate, which should not block its use for
+colour. Real coloured pairs are the other half: the LSMI dataset \mycite{kim21lsmi}
+photographs each scene under several combinations of two or three illuminants and provides
+per-pixel illuminant chromaticity, which yields both cross-illumination pairs and a direct
+target for $\mathbf{C}$. If neither transfers, a small capture of our own with coloured
+filters on an MID-style rig would provide pixel-aligned real pairs with known colour
+changes.
+
+\paragraph{5. Evaluation on a real colour range}
+Regenerate ARAP with encoding-aware masks; report hue drift on the ARAP pairs whose
+illuminant colour changes by at least $0.15$ (26 pairs in 17 scenes), on held-out LSMI
+scenes and on held-out 3D-Front pairs, always beside MAW; and report the absolute drift
+together with the relative one, so that a reduction in drift accompanied by a loss of
+colour is visible in both.
+
+\paragraph{Applications}
+\chapref{ch:practice} demonstrated qualitative factor-space edits. Once the shading chroma
+is a separate factor, relighting and white-balance edits become direct operations on
+$\mathbf{C}$, and evaluating them quantitatively, for example by user study, becomes
+worthwhile.
