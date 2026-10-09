@@ -38,7 +38,7 @@ do not rule that out. The application chapter demonstrates controllability, not 
 ground-truth shading evaluation.
 
 \secref{sec:ablation} then isolates what CIAI itself contributes, and
-\secref{sec:colour_axis} measures why colour stability improves much less than lightness.
+\secref{sec:colour_axis} measures why colour stability improves much less than luminance.
 
 
 \section{Experimental Setup}
@@ -277,7 +277,7 @@ across frames is error by definition. Let $k = 1, \dots, N$ index the illuminant
 conditions of a scene and let $m$ index the material regions given by the scene's
 segmentation.
 
-The first score asks whether the material's \emph{lightness} holds still.
+The first score asks whether the material's \emph{luminance} holds still.
 Writing $\mu_{m,k}$ for the mean luminance of the predicted albedo over material $m$
 in frame $k$, we take the coefficient of variation across frames and average it over
 materials,
@@ -309,7 +309,7 @@ axis a coloured lamp actually attacks. We reduce each material in each frame to 
 two chromaticity ratios $r_{m,k} = \bar{A}^{R}_{m,k} / \bar{A}^{G}_{m,k}$ and
 $b_{m,k} = \bar{A}^{B}_{m,k} / \bar{A}^{G}_{m,k}$. Normalising by the green channel
 removes brightness and leaves hue, so a model that lets a warm lamp tint its albedo
-will show drift in $r_{m,k}$ and $b_{m,k}$ even if its lightness is stable.
+will show drift in $r_{m,k}$ and $b_{m,k}$ even if its luminance is stable.
 
 \paragraph{A pooled chroma spread is not a stability metric}
 \label{par:castrms_correction}
@@ -416,7 +416,7 @@ MID's capture stack, and both our model and CD-IID train on MIDIntrinsics.
 
 $C_{\text{mat}}$ and $\text{Cast}_{\text{rel}}$ are lower-is-better and both vanish for
 a perfectly illuminant-invariant prediction. They are reported separately, rather than
-combined, because they can move in opposite directions: $C_{\text{mat}}$ is a lightness
+combined, because they can move in opposite directions: $C_{\text{mat}}$ is a luminance
 score and $\text{Cast}_{\text{rel}}$ a hue score, and a configuration may stabilise one
 while disturbing the other.
 
@@ -432,7 +432,7 @@ locally evaluated models under one pipeline and makes no zero-shot claim.
   \caption[MID stability and chroma accuracy.]{%
     Stability and in-domain accuracy on the held-out MIDIntrinsics test split
     \mycite{midintrinsics}, 30 scenes; brackets are $95\%$ percentile-bootstrap intervals
-    over scenes. $C_{\text{mat}}$ (\eqnref{eq:cmat}) is lightness stability and
+    over scenes. $C_{\text{mat}}$ (\eqnref{eq:cmat}) is luminance stability and
     $\text{Cast}_{\text{rel}}$ (\eqnref{eq:castrel}) is scale-normalised hue stability;
     $\text{Chroma}_{\text{err}}$ (\eqnref{eq:chromaerr}) is the per-material chromaticity
     error against the pseudo-ground truth. Lower is better for all three. Red, orange,
@@ -472,7 +472,7 @@ It does not lead chroma accuracy either. Its $\text{Chroma}_{\text{err}}$ of $0.
 to CD-IID's $0.090$, and that gap is significant ($+0.039\,[+0.022, +0.057]$). CD-IID reaches
 better accuracy \emph{and} better hue stability while keeping its colour, so low hue drift is not only reachable by desaturating.
 
-On lightness, our model is significantly more stable than CD-IID, both Marigold variants and
+On luminance, our model is significantly more stable than CD-IID, both Marigold variants and
 Ordinal Shading, level with CRefNet ($+0.007\,[-0.004, +0.019]$), and significantly less stable
 than RGB$\rightarrow$X ($+0.030\,[+0.014, +0.047]$). This comparison across methods mixes
 architectures, training data and model size, so it does not isolate the training strategy;
@@ -530,7 +530,7 @@ high-error region; CD-IID is best on both axes.
 
 \figref{fig:mid_constancy} shows a qualitative example.
 Each column is a different flash direction for the same scene, and the variation map
-shows where the predicted lightness changes with the light.
+shows where the predicted luminance changes with the light.
 
 \begin{figure}[t!]
   \centering
@@ -538,7 +538,7 @@ shows where the predicted lightness changes with the light.
   \caption[MID albedo stability under four flash directions.]{%
     Qualitative albedo stability on one MID scene. The upper row shows four inputs
     and the pseudo-ground-truth albedo; the lower row shows the corresponding
-    predictions and a per-pixel coefficient-of-variation map of predicted lightness
+    predictions and a per-pixel coefficient-of-variation map of predicted luminance
     (red = the prediction changes with the light). The map stays cool over the table
     and most of the matte packaging, and turns red on the plastic tray, the glass jar
     and the mirror sphere, surfaces an albedo--shading product cannot represent; the
@@ -785,7 +785,7 @@ protocol, with CD-IID Table~1 as the primary external reference.
 On measured albedo our model is mid-table: its colour error ($\Delta E = 4.155$) is behind
 CD-IID, Marigold-App and CRefNet, and its relative-intensity error ($0.504$) is among the
 lowest. CIAI itself slightly worsens both MAW measures in the ablation (4.115 to 4.155 and
-0.395 to 0.504 with the colour path), so lightness stability on MID is not bought with
+0.395 to 0.504 with the colour path), so luminance stability on MID is not bought with
 better single-image accuracy; the stability gain and the accuracy cost are reported together.
 
 \figref{fig:maw} shows a representative MAW scene.
@@ -1109,7 +1109,7 @@ All rows are single training runs, so small differences should not be read as ef
 \paragraph{Effect of cross-illumination losses within each architecture}
 The clean CIAI comparisons are Row~1$\rightarrow$Row~2 and
 Row~3$\rightarrow$Row~4, the two contrasts in which only the cross-illumination losses change.
-The clear effect is on \emph{lightness} stability: cross-illumination supervision lowers
+The clear effect is on \emph{luminance} stability: cross-illumination supervision lowers
 $C_{\text{mat}}$ from 0.250 to 0.180 with the colour path off and from 0.259 to 0.157 with
 it on, corresponding to a $28\%$ and $39\%$ reduction, both well outside the scene-bootstrap intervals of
 \tabref{tab:mid}. On scale-normalised hue invariance the effect is present but small:
@@ -1118,7 +1118,7 @@ The relevant paired bootstrap, rather than overlap of marginal intervals, gives
 Row~1-minus-Row~2 $0.030$ with a $95\%$ interval $[0.011,0.049]$, and
 Row~3-minus-Row~4 $0.019$ with interval $[0.007,0.031]$. Both are modest but
 significant hue-stability gains, but in relative terms ($-6\%$ and $-4\%$) five to nine
-times smaller than the lightness gain ($-28\%$ and $-39\%$). That asymmetry is the first sign of the limit examined in
+times smaller than the luminance gain ($-28\%$ and $-39\%$). That asymmetry is the first sign of the limit examined in
 \secref{sec:colour_axis}.
 
 The pseudo-GT calibration guard supplies the necessary qualification. With the colour
@@ -1137,7 +1137,7 @@ $0.129$ and have better MAW colour, Row~3 obtaining the best $\Delta E$
 ($4.115$) and intensity score ($0.395$). This is a descriptive comparison: the bundle
 changes chroma supervision, head parameters, optimiser state and effective learning-rate
 history at once, so it does not isolate the skip from the chroma loss. Row~4 is the most
-stable of the four on both lightness and hue, measured as drift relative to the model's own
+stable of the four on both luminance and hue, measured as drift relative to the model's own
 chroma (\eqnref{eq:castrel}).
 
 \paragraph{CIAI also makes the albedo more accurate on raw input}
@@ -1192,7 +1192,7 @@ Row~3 (0.129 against 0.124) and a worse MAW score (4.155 against 4.115 $\Delta E
 \section{Colour Stability: A Limitation}
 \label{sec:colour_axis}
 
-The results so far share a pattern: CIAI improves lightness stability substantially and hue
+The results so far share a pattern: CIAI improves luminance stability substantially and hue
 stability barely. This is expected for two reasons. First, $\mathcal{L}_{\text{expl}}$ uses
 luminance only (\secref{sec:ciai}), so nothing in CIAI states where a change in illuminant
 colour must go. Second, MID's illumination changes little in colour. This section measures
@@ -1226,7 +1226,7 @@ For ARAP we read the illuminant from $\mathbf{I}/\mathbf{A}^*$ instead.
 
 $86\%$ of MID pairs fall below $0.08$, and per-scene medians span only $0.017$ to $0.086$.
 MID's flash is white; what colour change there is comes from light bounced off coloured
-surfaces. MID therefore teaches lightness well and colour weakly, and the hue stability
+surfaces. MID therefore teaches luminance well and colour weakly, and the hue stability
 measured on it is measured over a narrow range.
 
 \subsection{Does our hue drift follow the illuminant colour?}

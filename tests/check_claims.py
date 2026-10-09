@@ -35,6 +35,7 @@ BANNED = [
     (r'\bStudy[ ~]?[12]\b|follow-up stud', 'removed post-thesis studies', 'all'),
     (r'flatness prior', 'removed refinement study', 'all'),
     (r'Cast[_ ]?\{?\\?(text\{)?RMS|Cast<sub>RMS', 'pooled metric, report-only', 'public'),
+    (r'lightness', 'C_mat measures luminance; lightness is CIE L* (report keeps it only for perceptual/IIW text)', 'public'),
 ]
 # Files where a banned pattern is allowed on purpose (the revision note lists what was removed).
 ALLOW = {ABSTRACT: {'removed post-thesis studies'}}

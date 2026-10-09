@@ -3,7 +3,7 @@
 albedos and shadings. CPU (no GPU contention). -> documents/thesis/images/arch/ciai_*.png
 
 I1 and I2 are two flash directions of one scene; A1/A2 are tied by L_inv and S1/S2 by the
-luminance explanation loss. The albedos agree closely in lightness and less in colour.
+luminance explanation loss. The albedos agree closely in luminance and less in colour.
 """
 import os, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root

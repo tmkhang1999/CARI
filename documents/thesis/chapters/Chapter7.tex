@@ -15,10 +15,10 @@ raw pairs from the Multi-Illumination Dataset and the MIDIntrinsics pseudo-groun
 
 The strategy does what its training signal supports. MID's pairs differ mainly in the
 direction and intensity of a white flash, and the explanation loss is defined on
-luminance; correspondingly, CIAI reduces the variation of recovered material lightness
+luminance; correspondingly, CIAI reduces the variation of recovered material luminance
 across illuminations by $28\%$ and $39\%$ in matched ablations, and it lowers the dense
 albedo error on raw, coloured-lit ARAP renderings by $7$--$14\%$, a benchmark outside its
-training data. Against other methods our model is more lightness-stable than CD-IID, both
+training data. Against other methods our model is more luminance-stable than CD-IID, both
 Marigold variants and Ordinal Shading, level with CRefNet and behind RGB$\rightarrow$X, while
 training $18.5$M parameters. It is behind CD-IID on in-domain chroma error and mid-table on
 MAW.
@@ -46,7 +46,7 @@ measurement limit.
 
 \paragraph{One architecture, single runs}
 CIAI is presented as a training strategy, but it has been tested on one architecture, a
-frozen-encoder regression model. Whether its lightness gain holds for convolutional,
+frozen-encoder regression model. Whether its luminance gain holds for convolutional,
 fine-tuned transformer or diffusion models is untested. Most comparisons are single
 training runs, so small differences should not be read as effects.
 

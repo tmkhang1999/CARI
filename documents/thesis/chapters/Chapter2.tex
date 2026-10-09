@@ -185,7 +185,7 @@ pairs of the same scene under different illumination, and reduce it to a single 
 inference. These works use the paired constraint as the \emph{main} supervision, mostly on
 time-lapse or synthetic sequences. We use it instead as a second training stage on top of
 supervised synthetic training, on real raw multi-illumination photographs, and measure
-separately what it does to lightness and to colour. The constraint is also close in spirit
+separately what it does to luminance and to colour. The constraint is also close in spirit
 to Siamese representation learning without negatives \mycite{chen21simsiam}, where two
 views of one object must map to one representation.
 
@@ -271,7 +271,7 @@ The key property is that the albedo of each surface does not change across the 2
 frames; only the light does. MIDIntrinsics \mycite{careaga23ordinal} adds one dense
 pseudo-ground-truth albedo per scene, derived from the white-balanced capture stack and
 shared by all 25 frames. This makes it possible to measure how much a model's predicted
-albedo of each material changes across frames ($C_{\text{mat}}$ for lightness,
+albedo of each material changes across frames ($C_{\text{mat}}$ for luminance,
 $\text{Cast}_{\text{rel}}$ for hue), and how far it lies from the pseudo-ground truth.
 A perfectly illumination-invariant model would have zero variation.
 We hold out 30 scenes as a test split and report constancy on those; the training

@@ -1,6 +1,6 @@
 <div align="center">
 
-# Cross-Illumination Albedo Invariance (CIAI)<br>Lightness-Stable Intrinsic Decomposition from Real Multi-Illumination Photographs
+# Cross-Illumination Albedo Invariance (CIAI)<br>Luminance-Stable Intrinsic Decomposition from Real Multi-Illumination Photographs
 
 **Train on two photographs of one scene under different lighting, and the albedo stops changing with the light.**
 
@@ -23,12 +23,12 @@ Intrinsic image decomposition (IID) splits a photograph into the albedo of each 
 
 Our question is whether paired photographs, used only in training, can make the albedo stable under changing light while inference stays one image and one pass. To answer it, we propose **Cross-Illumination Albedo Invariance (CIAI)**. Two photographs of one scene under different lighting go through the same network,, and their predicted albedos must agree.
 
-In a matched ablation, CIAI lowers the lightness variation of a material across lighting by **28% and 39%**. In addition, it lowers the albedo error by 7-14% on ARAP renderings that keep their original coloured light, although ARAP is never used in training. However, it improves colour much less (hue drift -4 to -6%), because the explanation loss uses luminance only.
+In a matched ablation, CIAI lowers the luminance variation of a material across lighting by **28% and 39%**. In addition, it lowers the albedo error by 7-14% on ARAP renderings that keep their original coloured light, although ARAP is never used in training. However, it improves colour much less (hue drift -4 to -6%), because the explanation loss uses luminance only.
 
 ## Contributions
 
 1. A paired training strategy on real photographs: MID pairs with pseudo-ground-truth albedo, added as a second training stage.
-2. A matched ablation showing the effect on lightness stability and on albedo accuracy.
+2. A matched ablation showing the effect on luminance stability and on albedo accuracy.
 3. An evaluation that reports every stability score next to an accuracy score, because a grey, constant albedo is perfectly stable.
 
 ## Method
@@ -59,7 +59,7 @@ All numbers use the 30 held-out MID scenes with raw input. The ablation starts f
 | off | on  | 0.259 | 0.444 | **4.12** | 0.0426 |
 | on  | on  | **0.157** | **0.425** | 4.16 | **0.0396** |
 
-**Table 1.** Matched ablation. C<sub>mat</sub> is the lightness variation of a material across lighting, Cast<sub>rel</sub> the relative hue drift. The last row is our model.
+**Table 1.** Matched ablation. C<sub>mat</sub> is the luminance variation of a material across lighting, Cast<sub>rel</sub> the relative hue drift. The last row is our model.
 
 | Method | C<sub>mat</sub> &darr; | Cast<sub>rel</sub> &darr; | Chroma err &darr; | MAW &Delta;E &darr; |
 |:---|:---:|:---:|:---:|:---:|
@@ -73,7 +73,7 @@ All numbers use the 30 held-out MID scenes with raw input. The ablation starts f
 
 **Table 2.** Comparison with other methods. \* Value reported in the CD-IID paper.
 
-1. **CIAI improves lightness stability.** C<sub>mat</sub> drops by 28% and 39% in the two matched pairs. Our model is more stable than CD-IID, both Marigold variants and Ordinal Shading, level with CRefNet, and behind RGB&rarr;X.
+1. **CIAI improves luminance stability.** C<sub>mat</sub> drops by 28% and 39% in the two matched pairs. Our model is more stable than CD-IID, both Marigold variants and Ordinal Shading, level with CRefNet, and behind RGB&rarr;X.
 2. **CIAI improves accuracy where the input carries its lighting.** On raw ARAP, albedo LMSE drops by 14% and 7%.
 3. **CIAI does not improve measured colour.** MAW &Delta;E does not improve, and CD-IID is better on all colour measures.
 
@@ -139,7 +139,7 @@ CIAI follows the idea of Siamese representation learning and multi-view consiste
 
 ```bibtex
 @misc{tran2026ciai,
-  title  = {Cross-Illumination Albedo Invariance: Lightness-Stable Intrinsic
+  title  = {Cross-Illumination Albedo Invariance: Luminance-Stable Intrinsic
             Decomposition from Real Multi-Illumination Photographs},
   author = {Tran, Minh Khang},
   year   = {2026},

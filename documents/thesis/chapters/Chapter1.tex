@@ -77,7 +77,7 @@ pattern or its colour, remains baked into the estimated material.
 relies on priors to choose one factorisation. When those priors fail, part of the
 lighting is assigned to the albedo. Two forms of this leakage matter here.
 
-The first is \emph{lightness} leakage. A shadow, a soft gradient from a nearby lamp or a
+The first is \emph{luminance} leakage. A shadow, a soft gradient from a nearby lamp or a
 bright patch where light falls directly can be read as a darker or lighter material.
 The same wall then receives a different albedo depending on where the light comes from,
 even if the light is white.
@@ -104,7 +104,7 @@ photograph on its own.
     Albedo predictions on one MID scene under four flash directions.
     The upper row shows the four inputs and the dataset pseudo-ground-truth albedo;
     the lower row shows the four predictions and a per-pixel coefficient-of-variation
-    map of predicted lightness (red marks regions that change with the light).
+    map of predicted luminance (red marks regions that change with the light).
     The map stays cool over the table and most matte surfaces, and turns red on the
     plastic tray, the glass jar and the mirror sphere.
   }
@@ -142,7 +142,7 @@ albedo that MIDIntrinsics derives for all 25 frames of a scene \mycite{careaga23
 The flash is white. Between two MID frames the light therefore changes mainly in direction
 and intensity, and its colour changes only through light bounced off coloured surfaces; we
 measure a median chromaticity gap of $0.030$ between frames. MID is a strong signal for
-lightness and a weak one for colour, and this property turns out to decide what CIAI can
+luminance and a weak one for colour, and this property turns out to decide what CIAI can
 learn.
 
 We implement CIAI inside a model built on a frozen \emph{DINOv2-Large} vision encoder
@@ -158,21 +158,21 @@ The contributions of this work are:
 
 \begin{itemize}
 
-  \item \textbf{A paired training strategy for lightness stability.}
+  \item \textbf{A paired training strategy for luminance stability.}
   An albedo-invariance loss and a luminance explanation loss on raw MID pairs, used as a
   fine-tuning stage. Matched ablations show that it lowers the variation of recovered
-  material lightness across illuminations by $28\%$ and $39\%$, and lowers the dense albedo
+  material luminance across illuminations by $28\%$ and $39\%$, and lowers the dense albedo
   error on raw, coloured-lit ARAP renderings by $7$--$14\%$, a benchmark it never trained on.
   The model trains $18.5$M parameters on top of a frozen encoder.
 
   \item \textbf{A matched ablation.}
   Turning the cross-illumination losses and the colour path on and off from one shared
-  checkpoint isolates the effect of CIAI: a large gain in lightness stability, a small gain
+  checkpoint isolates the effect of CIAI: a large gain in luminance stability, a small gain
   in hue stability, and a lower albedo error on raw ARAP renderings. The colour limit follows
   from the luminance-only explanation loss and MID's white flash, and we measure it directly.
 
   \item \textbf{An evaluation that reports stability next to accuracy.}
-  Material-level lightness and hue stability on MID, always read beside accuracy against
+  Material-level luminance and hue stability on MID, always read beside accuracy against
   measured albedo (MAW) and against the MID pseudo-ground truth, because a grey, constant
   albedo is perfectly stable.
 

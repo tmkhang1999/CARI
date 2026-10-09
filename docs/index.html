@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cross-Illumination Albedo Invariance</title>
-  <meta name="description" content="Cross-Illumination Albedo Invariance (CIAI) trains an intrinsic image decomposition model on real photographs of one scene under different illumination, so the recovered albedo keeps its lightness when the light changes. Minh Khang Tran, 2026.">
+  <meta name="description" content="Cross-Illumination Albedo Invariance (CIAI) trains an intrinsic image decomposition model on real photographs of one scene under different illumination, so the recovered albedo keeps its luminance when the light changes. Minh Khang Tran, 2026.">
   <meta name="author" content="Minh Khang Tran">
   <meta property="og:title" content="Cross-Illumination Albedo Invariance">
-  <meta property="og:description" content="Lightness-stable intrinsic decomposition from real multi-illumination photographs.">
+  <meta property="og:description" content="Luminance-stable intrinsic decomposition from real multi-illumination photographs.">
   <meta property="og:image" content="https://tmkhang1999.github.io/CIAI/static/img/ciai-teaser.jpg">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232c5c7a'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23dbeafb'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -892,7 +892,7 @@
 
     <h1 class="paper-title">
       Cross-Illumination Albedo Invariance
-      <span class="paper-subtitle">Lightness-stable intrinsic decomposition from real multi-illumination photographs</span>
+      <span class="paper-subtitle">Luminance-stable intrinsic decomposition from real multi-illumination photographs</span>
     </h1>
 
     <div class="paper-authors">
@@ -963,7 +963,7 @@
         <li><strong>The idea.</strong> Two photographs of one scene under different light go through the same
           network, and their albedos must agree. The pairs are used only in training, so inference is still one
           image and one pass.</li>
-        <li><strong>The result.</strong> In a matched ablation, CIAI lowers the lightness variation of a material
+        <li><strong>The result.</strong> In a matched ablation, CIAI lowers the luminance variation of a material
           across lighting by 28&ndash;39%, and the albedo error on raw ARAP renderings by 7&ndash;14%, with 18.5M
           trainable parameters.</li>
         <li><strong>The limit.</strong> Colour improves much less, because the explanation loss uses luminance
@@ -974,7 +974,7 @@
       <ol class="contrib-numbered">
         <li><strong>A paired training strategy</strong> on real MID photographs with pseudo-ground-truth albedo,
           added as a second training stage.</li>
-        <li><strong>A matched ablation</strong> that isolates the effect of CIAI on lightness stability and on
+        <li><strong>A matched ablation</strong> that isolates the effect of CIAI on luminance stability and on
           albedo accuracy.</li>
         <li><strong>An evaluation that pairs stability with accuracy</strong>, because a grey, constant albedo is
           perfectly stable.</li>
@@ -1151,7 +1151,7 @@
         95% bootstrap intervals over scenes. MAW uses the official scorer, except CD-IID, whose value is from its paper.
       </p>
       <p class="ciai-text">
-        In paired per-scene tests, our model is more lightness-stable than CD-IID, both Marigold variants and
+        In paired per-scene tests, our model is more luminance-stable than CD-IID, both Marigold variants and
         Ordinal Shading, level with CRefNet and behind RGB&rarr;X. However, CD-IID, which predicts the shading colour
         in a separate stage, is better on all colour measures. A low drift can also come from a pale albedo, as
         CRefNet shows in Figure 5.
@@ -1205,7 +1205,7 @@
         <strong>Table 2.</strong> One shared checkpoint, same data and steps. Each arrow changes only the CIAI losses.
       </p>
       <ol class="contrib-numbered">
-        <li><strong>CIAI improves lightness stability.</strong> C<sub>mat</sub> drops by 28% and 39%, while hue drift
+        <li><strong>CIAI improves luminance stability.</strong> C<sub>mat</sub> drops by 28% and 39%, while hue drift
           (Cast<sub>rel</sub>) improves only by 6% and 4%.</li>
         <li><strong>CIAI improves accuracy where the input carries its lighting.</strong> On raw ARAP renderings,
           albedo LMSE drops by 14% and 7%; after white balance the change is small. ARAP is never used in training.</li>
@@ -1245,7 +1245,7 @@
     <!-- Next -->
     <section class="ciai-section" id="next">
       <div class="sec-eyebrow">Next steps</div>
-      <h2 class="ciai-section-title">From lightness to colour</h2>
+      <h2 class="ciai-section-title">From luminance to colour</h2>
       <p class="ciai-text">
         The next model splits the shading into a grey part and a colour part, so that a change in light colour has
         a place to go other than the albedo. It is <strong>planned and not trained yet</strong>.
@@ -1279,7 +1279,7 @@
       <div class="bibtex-block">
 <button class="copy-btn" onclick="copyBibtex(this)"><i class="far fa-copy"></i> Copy</button>
 <pre id="bibtex-src">@misc<span class="bibtex-brace">{</span><span class="bibtex-key">tran2026ciai</span>,
-  <span class="bibtex-key">title</span>  = <span class="bibtex-brace">{</span><span class="bibtex-val">Cross-Illumination Albedo Invariance: Lightness-Stable Intrinsic
+  <span class="bibtex-key">title</span>  = <span class="bibtex-brace">{</span><span class="bibtex-val">Cross-Illumination Albedo Invariance: Luminance-Stable Intrinsic
             Decomposition from Real Multi-Illumination Photographs</span><span class="bibtex-brace">}</span>,
   <span class="bibtex-key">author</span> = <span class="bibtex-brace">{</span><span class="bibtex-val">Tran, Minh Khang</span><span class="bibtex-brace">}</span>,
   <span class="bibtex-key">year</span>   = <span class="bibtex-brace">{</span><span class="bibtex-val">2026</span><span class="bibtex-brace">}</span>,

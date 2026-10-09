@@ -34,7 +34,7 @@ INK, MUTE = (17, 24, 39), (92, 100, 112)
 
 # Deck media names (ppt/media/) and what they show. None contains a prediction of our model.
 METRIC_CARDS = [
-    ('image68.png', 'C_mat', 'lightness stability'),
+    ('image68.png', 'C_mat', 'luminance stability'),
     ('image69.png', 'Cast_rel', 'hue stability'),
     ('image70.png', 'Chroma_err', 'colour accuracy'),
 ]

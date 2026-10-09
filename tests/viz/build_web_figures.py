@@ -126,7 +126,7 @@ def build_pairs(out: Path, src: Path | None = None, max_width: int = 1400):
 def build_mechanism(out: Path, tile_w: int = 300):
     """Training-time diagram: one MID pair, shared model, two albedos tied by L_inv and two
     shadings tied by L_expl. Thumbnails are our model's own outputs, so the two albedos
-    agree only approximately -- in lightness more than in colour, which is the honest picture.
+    agree only approximately -- in luminance more than in colour, which is the honest picture.
     """
     names = ['I1', 'I2', 'A1', 'A2', 'S1', 'S2']
     tiles = {}
