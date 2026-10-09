@@ -124,7 +124,7 @@ WHDR 0.264 -> 0.220 but C_mat +47%, MAW dE +30%).
 
 ## 6. Reframing and cleanup (October 8-9)
 
-- Renamed CARI -> CIAI (Cross-Illumination Albedo Invariance); repository name unchanged.
+- Renamed CARI -> CIAI (Cross-Illumination Albedo Invariance), including the repository and project page URL.
 - Claim narrowed to lightness stability; colour limits reported as findings; contributions
   rewritten; report, README, project page and portfolio corrected (revised edition).
 - Refinement study (Table B), Phase B and the IIW fine-tune removed from the report and the

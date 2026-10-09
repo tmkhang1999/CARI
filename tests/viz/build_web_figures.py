@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the figure set for the CIAI project page (tmkhang1999.github.io/CARI/, served from docs/).
+"""Build the figure set for the CIAI project page (tmkhang1999.github.io/CIAI/, served from docs/).
 
 Every image on the public page must trace to a file this repository produced. Two
 sources qualify, and nothing else is allowed in here:

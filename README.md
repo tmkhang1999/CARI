@@ -5,7 +5,7 @@
 **Minh Khang Tran**
 
 [![Report](https://img.shields.io/badge/Report-PDF-b31b1b.svg?style=for-the-badge)](documents/thesis/Main.pdf)
-[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io%2FCARI-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/CARI/)
+[![Project Page](https://img.shields.io/badge/Project%20Page-tmkhang1999.github.io%2FCIAI-38bdf8.svg?style=for-the-badge)](https://tmkhang1999.github.io/CIAI/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.3+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 
@@ -45,8 +45,8 @@ model's hue drift still grows with illuminant colour as much as a grey-shading m
 which predicts the shading colour in a dedicated stage, leads both colour measurements. The colour
 axis is the next stage of this project; see [Roadmap](#roadmap).
 
-Full write-up: **[project page](https://tmkhang1999.github.io/CARI/)** &middot;
-**[report PDF](documents/thesis/Main.pdf)**. The repository keeps its earlier name (`CARI`).
+Full write-up: **[project page](https://tmkhang1999.github.io/CIAI/)** &middot;
+**[report PDF](documents/thesis/Main.pdf)**. The repository was previously named `CARI`.
 
 ---
 
@@ -71,8 +71,8 @@ two-seed studies and are reported as nulls, not trends.
 ## Quick start
 
 ```bash
-git clone https://github.com/tmkhang1999/CARI.git
-cd CARI
+git clone https://github.com/tmkhang1999/CIAI.git
+cd CIAI
 conda create -n ciai python=3.10 -y && conda activate ciai
 pip install -r requirements.txt
 python tests/smoke_test.py          # one training step per config on random data, CPU, ~1 min
@@ -251,7 +251,7 @@ four benchmarks for our checkpoints and the baselines (adapters in `tests/eval/*
   year   = {2026},
   note   = {Project report, revised from the author's MSc thesis (Erasmus Mundus
             Joint Master in Computational Colour and Spectral Imaging, NTNU)},
-  url    = {https://github.com/tmkhang1999/CARI}
+  url    = {https://github.com/tmkhang1999/CIAI}
 }
 ```
 
